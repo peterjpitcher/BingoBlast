@@ -5,7 +5,6 @@ import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import ReactPlayer from 'react-player';
 import { cn, getContrastColor } from '@/lib/utils';
-import { BingoBall } from '@/components/ui/bingo-ball';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -331,7 +330,7 @@ export default function DisplayUI({
       <div className="h-24 px-8 flex items-center justify-between bg-black/10 backdrop-blur-sm z-10">
          <div className="flex items-center gap-4">
              <div className="relative w-64 h-24">
-                 <Image src="/Bingo Blast.png" alt="Bingo Blast" fill className="object-contain object-left" />
+                 <Image src="/BingoBlast.png" alt="Bingo Blast" fill className="object-contain object-left" />
              </div>
          </div>
          <div className="text-right" style={{ textShadow: TextShadow }}>

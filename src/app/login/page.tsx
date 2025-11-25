@@ -7,7 +7,6 @@ import { login, signup } from './actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
 
 function LoginPageContent() {
   const searchParams = useSearchParams();
@@ -46,7 +45,7 @@ function LoginPageContent() {
       <div className="mb-8 relative w-48 h-24">
         {/* Logo Placeholder - Replace with actual image path when verified */}
          <Image 
-          src="/Bingo Blast.png" 
+          src="/BingoBlast.png" 
           alt="Bingo Blast" 
           fill 
           className="object-contain"
