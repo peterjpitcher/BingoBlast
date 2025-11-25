@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import ReactPlayer from 'react-player';
 import { cn, getContrastColor } from '@/lib/utils';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
@@ -21,13 +20,6 @@ interface DisplayUIProps {
   initialPrizeText: string;
   isWaitingState: boolean;
 }
-
-const SOUNDS = {
-  start: 'https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg',
-  win: 'https://actions.google.com/sounds/v1/cartoon/clown_horn.ogg',
-  jackpot: 'https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg',
-  break: 'https://actions.google.com/sounds/v1/cartoon/pop.ogg'
-};
 
 const TextShadow = "2px 2px 4px rgba(0,0,0,0.9)";
 
@@ -49,13 +41,7 @@ export default function DisplayUI({
   const [currentNumberDelayed, setCurrentNumberDelayed] = useState<number | null>(null);
   const [delayedNumbers, setDelayedNumbers] = useState<number[]>([]);
   const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
-  const [hasInteracted, setHasInteracted] = useState(false);
   
-  // Sound State
-  
-  const [soundUrl, setSoundUrl] = useState<string | null>(null);
-  const [playingSound, setPlayingSound] = useState(false);
-
   const numberCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const currentGameStateRef = useRef<GameState | null>(currentGameState);
 
@@ -63,18 +49,12 @@ export default function DisplayUI({
     currentGameStateRef.current = currentGameState;
   }, [currentGameState]);
 
-  const playSound = (url: string) => {
-    setSoundUrl(url);
-    setPlayingSound(true);
-  };
-
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const refreshActiveGame = async (newActiveGameId: string | null) => {
       if (newActiveGameId === currentActiveGame?.id) return;
 
       if (newActiveGameId) {
         console.log("Switching to new game:", newActiveGameId);
-        playSound(SOUNDS.start); 
         
         const { data: newGame, error: gameError } = await supabase.current
           .from('games')
@@ -136,18 +116,8 @@ export default function DisplayUI({
           { event: 'UPDATE', schema: 'public', table: 'game_states', filter: `game_id=eq.${currentActiveGame.id}` },
           (payload) => {
             const newState = payload.new;
-            const oldState = currentGameStateRef.current;
             
-            if (newState.on_break && !oldState?.on_break) {
-                playSound(SOUNDS.break);
-            }
-            if (newState.display_win_type && newState.display_win_type !== oldState?.display_win_type) {
-                if (newState.display_win_type === 'snowball') {
-                    playSound(SOUNDS.jackpot);
-                } else {
-                    playSound(SOUNDS.win);
-                }
-            }
+            // No audio here anymore
 
             setCurrentGameState(newState);
             setIsGameFinishedState(newState.status === 'completed');
@@ -315,17 +285,6 @@ export default function DisplayUI({
       )}
       style={{ backgroundColor: displayBackgroundColor }}
     >
-      {soundUrl && (
-        <ReactPlayer
-          url={soundUrl}
-          playing={playingSound}
-          onEnded={() => setPlayingSound(false)}
-          width="0"
-          height="0"
-          style={{ display: 'none' }}
-        />
-      )}
-
       {/* Top Bar */}
       <div className="h-24 px-8 flex items-center justify-between bg-black/10 backdrop-blur-sm z-10">
          <div className="flex items-center gap-4">
@@ -475,18 +434,6 @@ export default function DisplayUI({
           </div>
           <p className="text-slate-900 font-bold text-sm uppercase tracking-wider">Play Along</p>
       </div>
-
-      {!hasInteracted && (
-        <div 
-            onClick={() => setHasInteracted(true)}
-            className="absolute inset-0 z-[100] bg-black/90 flex items-center justify-center cursor-pointer"
-        >
-            <div className="text-center animate-pulse">
-                <h1 className="text-white text-6xl font-black mb-4">CLICK TO START</h1>
-                <p className="text-white/50 text-xl">Enable Audio & Display</p>
-            </div>
-        </div>
-      )}
     </div>
   );
 }

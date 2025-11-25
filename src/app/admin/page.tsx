@@ -44,7 +44,14 @@ export default async function AdminPage() {
     <div className="min-h-screen-safe bg-slate-950 text-white pb-20">
       <header className="bg-slate-900 border-b border-slate-800 p-4 mb-6">
         <div className="container mx-auto flex justify-between items-center">
-          <h1 className="text-xl font-bold text-bingo-primary">Admin Dashboard</h1>
+          <div className="flex items-center gap-6">
+            <h1 className="text-xl font-bold text-bingo-primary">Admin Dashboard</h1>
+            <a href="/admin/snowball">
+              <Button variant="secondary" size="sm" className="text-indigo-300 border-indigo-500/30 hover:bg-indigo-900/20">
+                ❄️ Manage Snowballs
+              </Button>
+            </a>
+          </div>
           <div className="flex items-center gap-4">
             <span className="text-sm text-slate-400 hidden sm:inline-block">{user.email}</span>
             <form action={signout}>

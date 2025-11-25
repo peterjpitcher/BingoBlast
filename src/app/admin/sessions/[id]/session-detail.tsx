@@ -380,16 +380,30 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
               <div className="flex gap-2">
                 <input 
                     type="color" 
-                    name="background_colour"
-                    defaultValue={editingGame?.background_colour || "#ffffff"}
+                    value={editingGame?.background_colour || "#ffffff"}
+                    onChange={(e) => {
+                        setEditingGame(prev => prev ? { ...prev, background_colour: e.target.value } : null);
+                        // If creating a new game (editingGame is null), we need separate state or a way to handle this. 
+                        // However, simplistic approach:
+                        const input = document.querySelector('input[name="background_colour_text"]') as HTMLInputElement;
+                        if(input) input.value = e.target.value;
+                    }}
                     className="h-10 w-16 p-1 bg-slate-900 border border-slate-700 rounded cursor-pointer"
                 />
                 <Input 
                     type="text" 
+                    name="background_colour"
                     placeholder="#ffffff"
                     defaultValue={editingGame?.background_colour || "#ffffff"}
-                    readOnly
-                    className="w-32 font-mono"
+                    pattern="^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
+                    className="w-32 font-mono uppercase"
+                    onChange={(e) => {
+                         const val = e.target.value;
+                         if (/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(val)) {
+                             const picker = document.querySelector('input[type="color"]') as HTMLInputElement;
+                             if (picker) picker.value = val;
+                         }
+                    }}
                 />
               </div>
             </div>

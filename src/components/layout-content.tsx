@@ -1,0 +1,24 @@
+"use client";
+
+import { Header } from "@/components/header";
+import { usePathname } from 'next/navigation';
+
+export function LayoutContent({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
+
+  return (
+    <div className="flex flex-col min-h-screen">
+      {!pathname.startsWith('/display') && <Header />}
+      <main className="flex-1 flex flex-col">
+        {children}
+      </main>
+      <footer className="w-full py-4 text-center text-xs text-slate-500 bg-slate-950 border-t border-slate-800">
+        © 2025 Orange Jelly Limited. All rights reserved.
+      </footer>
+    </div>
+  );
+}

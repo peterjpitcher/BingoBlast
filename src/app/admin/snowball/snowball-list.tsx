@@ -162,7 +162,19 @@ export default function SnowballList({ pots }: SnowballListProps) {
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-xs text-slate-400">Current Max Calls</label>
+                    <div className="flex justify-between items-center">
+                        <label className="text-xs text-slate-400">Current Max Calls</label>
+                        <button 
+                            type="button"
+                            className="text-[10px] text-indigo-400 hover:text-indigo-300 underline"
+                            onClick={() => {
+                                const input = document.querySelector('input[name="current_max_calls"]') as HTMLInputElement;
+                                if (input) input.value = "90";
+                            }}
+                        >
+                            Set to Must Go (90)
+                        </button>
+                    </div>
                     <Input 
                         type="number" 
                         name="current_max_calls"
