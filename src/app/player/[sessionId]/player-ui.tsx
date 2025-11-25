@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
@@ -49,8 +49,7 @@ export default function PlayerUI({
 
   // --- Data Fetching & Subscription Logic (Shared with Display) ---
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const refreshActiveGame = async (newActiveGameId: string | null) => {
+  const refreshActiveGame = useCallback(async (newActiveGameId: string | null) => {
       if (newActiveGameId === currentActiveGame?.id) return;
 
       if (newActiveGameId) {
@@ -82,7 +81,7 @@ export default function PlayerUI({
         setCurrentActiveGame(null);
         setCurrentGameState(null);
       }
-  };
+  }, [currentActiveGame]);
 
   useEffect(() => {
     const supabaseClient = supabase.current;
