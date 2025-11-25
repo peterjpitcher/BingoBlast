@@ -7,7 +7,9 @@ import { Database } from '@/types/database';
 import { Button } from '@/components/ui/button';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
-  games: Database['public']['Tables']['games']['Row'][];
+  games: (Database['public']['Tables']['games']['Row'] & {
+    game_states: Database['public']['Tables']['game_states']['Row'] | null;
+  })[];
 };
 
 export default async function HostPage() {
@@ -23,7 +25,10 @@ export default async function HostPage() {
     .from('sessions')
     .select(`
       *,
-      games:games!games_session_id_fkey (*)
+      games:games!games_session_id_fkey (
+        *,
+        game_states:game_states (*)
+      )
     `)
     .in('status', ['ready', 'running'])
     .order('created_at', { ascending: false });

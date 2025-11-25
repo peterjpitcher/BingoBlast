@@ -383,9 +383,29 @@ export default function DisplayUI({
           )}
 
           {isGameFinishedState && (
-            <div className="text-center animate-in fade-in duration-500" style={{ textShadow: TextShadow }}>
-              <h1 className="text-8xl font-black text-green-400 mb-6">GAME OVER</h1>
-              <p className="text-4xl">Thank you for playing!</p>
+            <div className="flex flex-col items-center justify-evenly w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4 text-center">
+              
+              <div className="shrink-0">
+                  <h1 className="text-7xl font-black text-green-400 mb-4 animate-bounce" style={{ textShadow: TextShadow }}>THANKS FOR PLAYING!</h1>
+                  <p className="text-3xl text-white/90 font-medium">We hope you had a blast!</p>
+              </div>
+
+              <div className="bg-indigo-900/40 border-2 border-indigo-500/50 rounded-3xl p-8 max-w-5xl w-full backdrop-blur-sm shadow-2xl shrink-0">
+                  <h2 className="text-5xl font-black text-yellow-400 mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
+                  <p className="text-3xl text-white font-bold">Don&apos;t miss out - secure your table at the bar.</p>
+              </div>
+
+              <div className="space-y-6 max-w-4xl shrink-0">
+                  <p className="text-3xl text-slate-200 font-medium leading-relaxed">
+                      Please enjoy the remaining time that we&apos;re open.
+                      <br/>
+                      The bar is open for drinks!
+                  </p>
+                  <p className="text-2xl text-bingo-primary font-bold uppercase tracking-widest animate-pulse">
+                      Bring friends, family & neighbours next time!
+                  </p>
+              </div>
+
             </div>
           )}
 
