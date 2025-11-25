@@ -302,16 +302,83 @@ export default function DisplayUI({
       <div className="flex-1 flex items-center justify-center relative p-8">
           
           {isWaitingState && (
-            <div className="text-center animate-in fade-in duration-700" style={{ textShadow: TextShadow }}>
-              <h1 className="text-6xl font-black mb-4 opacity-90">WAITING FOR HOST...</h1>
-              <p className="text-3xl opacity-60">Grab a drink and get ready!</p>
+            <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4">
+                {/* Giant Logo */}
+                <div className="relative w-[400px] h-[150px] shrink-0">
+                    <Image 
+                        src="/BingoBlast.png" 
+                        alt="Bingo Blast" 
+                        fill 
+                        className="object-contain drop-shadow-[0_0_30px_rgba(236,72,153,0.4)]" 
+                    />
+                </div>
+
+                {/* Kitchen Info Box */}
+                <div className="bg-indigo-900/40 border-2 border-indigo-500/50 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
+                    <h2 className="text-4xl font-black text-yellow-400 mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
+                    <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
+                </div>
+
+                {/* Rules */}
+                <div className="max-w-4xl w-full bg-slate-900/60 border border-white/10 rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
+                    <h3 className="text-3xl font-bold text-bingo-primary mb-4 border-b border-white/10 pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-xl text-slate-200">
+                        <li className="flex gap-3 items-start">
+                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span>Claims must be called on the number they&apos;re won on - <span className="text-red-400 font-bold">late claims invalid</span></span>
+                        </li>
+                        <li className="flex gap-3 items-start">
+                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span>Multiple claims share the prize</span>
+                        </li>
+                        <li className="flex gap-3 items-start">
+                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span>Snowball eligibility: Players must have been here for the last three games</span>
+                        </li>
+                        <li className="flex gap-3 items-start pt-1">
+                            <span className="text-2xl">🎉</span>
+                            <span className="text-white font-bold italic">Enjoy the night and best of luck to everyone!</span>
+                        </li>
+                    </ul>
+                </div>
             </div>
           )}
 
           {showBreak && (
-            <div className="text-center animate-in zoom-in duration-500" style={{ textShadow: TextShadow }}>
-              <h1 className="text-8xl font-black text-yellow-400 mb-6 animate-pulse">BREAK TIME</h1>
-              <p className="text-4xl">We will resume shortly</p>
+            <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in zoom-in duration-500 py-4">
+                <div className="text-center shrink-0">
+                    <h1 className="text-7xl font-black text-yellow-400 animate-pulse" style={{ textShadow: TextShadow }}>BREAK TIME</h1>
+                    <p className="text-3xl text-white font-bold mt-2">We will resume shortly</p>
+                </div>
+
+                {/* Kitchen Info Box */}
+                <div className="bg-indigo-900/40 border-2 border-indigo-500/50 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
+                    <h2 className="text-4xl font-black text-yellow-400 mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
+                    <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
+                </div>
+
+                {/* Rules */}
+                <div className="max-w-4xl w-full bg-slate-900/60 border border-white/10 rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
+                    <h3 className="text-3xl font-bold text-bingo-primary mb-4 border-b border-white/10 pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-xl text-slate-200">
+                        <li className="flex gap-3 items-start">
+                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span>Claims must be called on the number they&apos;re won on - <span className="text-red-400 font-bold">late claims invalid</span></span>
+                        </li>
+                        <li className="flex gap-3 items-start">
+                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span>Multiple claims share the prize</span>
+                        </li>
+                        <li className="flex gap-3 items-start">
+                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span>Snowball eligibility: Players must have been here for the last three games</span>
+                        </li>
+                        <li className="flex gap-3 items-start pt-1">
+                            <span className="text-2xl">🎉</span>
+                            <span className="text-white font-bold italic">Enjoy the night and best of luck to everyone!</span>
+                        </li>
+                    </ul>
+                </div>
             </div>
           )}
 

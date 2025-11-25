@@ -14,7 +14,7 @@ export default function Home() {
 
       <div className="z-10 flex flex-col items-center w-full max-w-md gap-8">
         {/* Hero Logo */}
-        <div className="relative w-64 h-64 md:w-80 md:h-80 animate-in zoom-in duration-700">
+        <div className="relative w-80 h-80 md:w-96 md:h-96 animate-in zoom-in duration-700">
           <Image 
             src="/BingoBlast.png" 
             alt="Bingo Blast" 
