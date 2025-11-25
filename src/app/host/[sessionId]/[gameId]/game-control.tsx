@@ -760,14 +760,32 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
              <p className="text-slate-300">The winner has been announced. What&apos;s next?</p>
              
              <div className="flex flex-col gap-3">
-                 <Button variant="primary" size="lg" className="w-full bg-green-600 hover:bg-green-700" onClick={handleAdvanceStage}>
-                    Start Next Stage / Game
-                 </Button>
+                 {(() => {
+                     const hasNextStage = currentGameState.current_stage_index < game.stage_sequence.length - 1;
+                     const nextStageName = hasNextStage ? game.stage_sequence[currentGameState.current_stage_index + 1] : null;
+                     
+                     return hasNextStage ? (
+                        <Button variant="primary" size="lg" className="w-full bg-green-600 hover:bg-green-700" onClick={handleAdvanceStage}>
+                            Start {nextStageName}
+                        </Button>
+                     ) : (
+                        <Button variant="primary" size="lg" className="w-full bg-red-600 hover:bg-red-700" onClick={handleAdvanceStage}>
+                            End Game
+                        </Button>
+                     );
+                 })()}
                  
-                 <div className="grid grid-cols-2 gap-3">
-                    <Button variant="secondary" onClick={handleResumeAfterWin}>
-                        Resume (Same Stage)
+                 <div className="grid grid-cols-1 gap-3">
+                    <Button variant="secondary" onClick={() => {
+                        setShowPostWinModal(false);
+                        setWinnerName('');
+                        setIsSnowballEligible(false);
+                        setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
+                        setShowWinnerModal(true);
+                    }}>
+                        Record Another Winner (Split Pot)
                     </Button>
+                    
                     <Button variant="secondary" className="border-yellow-900/50 text-yellow-500 hover:bg-yellow-900/20" onClick={async () => {
                         await handleToggleBreak();
                         setShowPostWinModal(false);

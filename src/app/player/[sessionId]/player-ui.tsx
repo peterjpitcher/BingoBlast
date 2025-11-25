@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { cn } from '@/lib/utils';
+import { cn, getContrastColor } from '@/lib/utils';
 import { BingoBall } from '@/components/ui/bingo-ball';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -234,10 +234,17 @@ export default function PlayerUI({
   const isWin = !!currentGameState?.display_win_type;
 
   const backgroundColor = currentActiveGame?.background_colour || '#0F172A';
+  const contrastTextColor = useMemo(() => getContrastColor(backgroundColor), [backgroundColor]);
   const isSnowballGame = currentActiveGame?.type === 'snowball';
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 pb-8">
+    <div 
+      className={cn(
+          "min-h-screen pb-8", 
+          contrastTextColor 
+      )}
+      style={{ backgroundColor: backgroundColor }}
+    >
       {/* Header */}
       <div className="bg-slate-900 p-4 border-b border-slate-800 flex items-center justify-between sticky top-0 z-20 shadow-md">
          <div>
