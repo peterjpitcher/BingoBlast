@@ -1,66 +1,38 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+"use client";
+
+import Link from 'next/link';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 
 export default function Home() {
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.tsx file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+    <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 bg-slate-950 text-white">
+      <h1 className="mb-8 text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-bingo-primary to-bingo-secondary">
+        Anchor Bingo
+      </h1>
+      
+      <Card className="w-full max-w-md bg-slate-900 border-slate-800">
+        <CardHeader>
+          <CardTitle className="text-center text-slate-400 text-lg uppercase tracking-widest">Portal</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <Link href="/admin" className="w-full">
+            <Button variant="secondary" className="w-full h-14 text-lg justify-start pl-6 hover:border-bingo-accent transition-all">
+              🛠️ Admin Dashboard
+            </Button>
+          </Link>
+          <Link href="/host" className="w-full">
+            <Button variant="secondary" className="w-full h-14 text-lg justify-start pl-6 hover:border-bingo-primary transition-all">
+              🎤 Host Controller
+            </Button>
+          </Link>
+          <Link href="/display" className="w-full">
+            <Button variant="secondary" className="w-full h-14 text-lg justify-start pl-6 hover:border-bingo-secondary transition-all">
+              📺 Guest Display
+            </Button>
+          </Link>
+        </CardContent>
+      </Card>
     </div>
   );
 }

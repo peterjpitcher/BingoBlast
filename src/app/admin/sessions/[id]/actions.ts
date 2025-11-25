@@ -1,0 +1,243 @@
+'use server'
+
+import { createClient } from '@/utils/supabase/server'
+import { revalidatePath } from 'next/cache'
+import type { Database, GameType, WinStage } from '@/types/database'
+
+type GameInsert = Database['public']['Tables']['games']['Insert']
+
+const stageOrder: Record<WinStage, number> = {
+  'Line': 1,
+  'Two Lines': 2,
+  'Full House': 3,
+}
+
+const sortStages = (stages: WinStage[]) => stages.sort((a, b) => stageOrder[a] - stageOrder[b])
+
+export async function createGame(sessionId: string, _prevState: unknown, formData: FormData) {
+  const supabase = await createClient()
+
+  const name = formData.get('name') as string
+  const type = formData.get('type') as GameType
+  const game_index = Number.parseInt(formData.get('game_index') as string, 10)
+  const background_colour = formData.get('background_colour') as string
+  const notes = formData.get('notes') as string
+  const snowball_pot_id = (formData.get('snowball_pot_id') as string) || null
+
+  const selectedStages = formData.getAll('stages') as WinStage[]
+  const stage_sequence: WinStage[] = selectedStages.length > 0
+    ? sortStages([...selectedStages])
+    : type === 'snowball'
+      ? ['Full House']
+      : ['Line', 'Two Lines', 'Full House']
+
+  const prizes: Record<string, string> = {}
+  stage_sequence.forEach((stage) => {
+      const prize = formData.get(`prize_${stage}`) as string
+      if (prize) prizes[stage] = prize
+  })
+
+  const newGame: GameInsert = {
+    session_id: sessionId,
+    name,
+    game_index,
+    type,
+    background_colour,
+    notes,
+    stage_sequence,
+    snowball_pot_id,
+    prizes,
+  }
+
+  const { error } = await supabase
+    .from('games')
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    .insert(newGame)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath(`/admin/sessions/${sessionId}`)
+  return { success: true }
+}
+
+export async function updateGame(gameId: string, sessionId: string, _prevState: unknown, formData: FormData) {
+  const supabase = await createClient()
+
+  const name = formData.get('name') as string
+  const background_colour = formData.get('background_colour') as string
+  const notes = formData.get('notes') as string
+  const type = formData.get('type') as GameType
+  const snowball_pot_id = (formData.get('snowball_pot_id') as string) || null
+
+  const selectedStages = formData.getAll('stages') as WinStage[]
+  const stage_sequence: WinStage[] = selectedStages.length > 0
+    ? sortStages([...selectedStages])
+    : type === 'snowball'
+      ? ['Full House']
+      : ['Line', 'Two Lines', 'Full House']
+
+  const prizes: Record<string, string> = {}
+  stage_sequence.forEach((stage) => {
+      const prize = formData.get(`prize_${stage}`) as string
+      if (prize) prizes[stage] = prize
+  })
+
+  const { error } = await supabase
+    .from('games')
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    .update({
+      name,
+      background_colour,
+      notes,
+      type,
+      snowball_pot_id,
+      stage_sequence,
+      prizes,
+    })
+    .eq('id', gameId)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath(`/admin/sessions/${sessionId}`)
+  return { success: true }
+}
+
+export async function duplicateGame(gameId: string, sessionId: string) {
+  const supabase = await createClient()
+
+  // 1. Fetch the original game
+  const { data: originalGame, error: fetchError } = await supabase
+    .from('games')
+    .select('*')
+    .eq('id', gameId)
+    .single<Database['public']['Tables']['games']['Row']>()
+
+  if (fetchError || !originalGame) {
+    return { error: "Original game not found" }
+  }
+
+  // 2. Determine new index (find max index in session + 1)
+  const { data: games } = await supabase
+    .from('games')
+    .select('game_index')
+    .eq('session_id', sessionId)
+
+  const maxIndex = games?.reduce((max: number, g: { game_index: number }) => (g.game_index > max ? g.game_index : max), 0) || 0
+  const newIndex = maxIndex + 1
+
+  const newGame: GameInsert = {
+    session_id: sessionId,
+    game_index: newIndex,
+    name: `${originalGame.name} (Copy)`,
+    type: originalGame.type,
+    stage_sequence: originalGame.stage_sequence,
+    background_colour: originalGame.background_colour,
+    prizes: originalGame.prizes,
+    notes: originalGame.notes,
+    snowball_pot_id: originalGame.snowball_pot_id,
+  }
+
+  const { error: insertError } = await supabase
+    .from('games')
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    .insert(newGame)
+
+  if (insertError) {
+    return { error: insertError.message }
+  }
+
+  revalidatePath(`/admin/sessions/${sessionId}`)
+  return { success: true }
+}
+
+export async function deleteGame(gameId: string, sessionId: string) {
+  const supabase = await createClient()
+
+  const { error } = await supabase
+    .from('games')
+    .delete()
+    .eq('id', gameId)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath(`/admin/sessions/${sessionId}`)
+  return { success: true }
+}
+
+export async function updateSessionStatus(sessionId: string, status: 'ready' | 'running' | 'completed') {
+  const supabase = await createClient()
+
+  const { error } = await supabase
+    .from('sessions')
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    .update({ status })
+    .eq('id', sessionId)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath(`/admin/sessions/${sessionId}`)
+  return { success: true }
+}
+
+export async function resetSession(sessionId: string) {
+  const supabase = await createClient()
+
+  // 1. Get all game IDs for this session to clean up game_states
+  const { data: games } = await supabase
+    .from('games')
+    .select('id')
+    .eq('session_id', sessionId)
+
+  if (games && games.length > 0) {
+      const gameIds = games.map((g: { id: string }) => g.id)
+
+      // 2. Delete game_states
+      const { error: deleteStatesError } = await supabase
+        .from('game_states')
+        .delete()
+        .in('game_id', gameIds)
+
+      if (deleteStatesError) {
+          console.error("Error deleting game states:", deleteStatesError)
+          return { error: "Failed to reset game states: " + deleteStatesError.message }
+      }
+  }
+
+  // 3. Delete winners
+  const { error: deleteWinnersError } = await supabase
+    .from('winners')
+    .delete()
+    .eq('session_id', sessionId)
+
+  if (deleteWinnersError) {
+      console.error("Error deleting winners:", deleteWinnersError)
+      return { error: "Failed to reset winners: " + deleteWinnersError.message }
+  }
+
+  // 4. Reset Session Status
+  const { error: updateSessionError } = await supabase
+    .from('sessions')
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    .update({ status: 'ready', active_game_id: null })
+    .eq('id', sessionId)
+
+  if (updateSessionError) {
+      return { error: "Failed to update session status: " + updateSessionError.message }
+  }
+
+  revalidatePath(`/admin/sessions/${sessionId}`)
+  return { success: true }
+}
