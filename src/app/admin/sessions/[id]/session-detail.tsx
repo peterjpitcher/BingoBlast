@@ -367,7 +367,7 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
                                 type="text" 
                                 name={`prize_${stage}`} 
                                 defaultValue={editingGame?.prizes?.[stage] || ''} 
-                                placeholder="e.g. £10" 
+                                placeholder={selectedGameType === 'snowball' ? "e.g. £20" : "e.g. £10"}
                                 className="h-9"
                             />
                         </div>

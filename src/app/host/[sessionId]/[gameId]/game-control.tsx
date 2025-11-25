@@ -62,20 +62,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
   const [validationResult, setValidationResult] = useState<{ valid: boolean; invalidNumbers?: number[] } | null>(null);
   const [showWinnerModal, setShowWinnerModal] = useState(false);
+  const [showManualSnowballModal, setShowManualSnowballModal] = useState(false);
   const [showPostWinModal, setShowPostWinModal] = useState(false);
   const [winnerName, setWinnerName] = useState('');
   const [prizeGiven, setPrizeGiven] = useState(false);
   const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
+  const [isSnowballEligible, setIsSnowballEligible] = useState(false);
   
-  const getPlannedPrize = useCallback((stageIndex: number, pot: SnowballPot | null) => {
+  const getPlannedPrize = useCallback((stageIndex: number) => {
     const stage = game.stage_sequence[stageIndex];
-    if (game.type === 'snowball' && stage === 'Full House' && pot) {
-        return `£${pot.current_jackpot_amount} (Jackpot)`;
-    }
     return game.prizes?.[stage as keyof typeof game.prizes] || '';
   }, [game]);
 
-  const [prizeDescription, setPrizeDescription] = useState(getPlannedPrize(initialGameState.current_stage_index, null));
+  const [prizeDescription, setPrizeDescription] = useState(getPlannedPrize(initialGameState.current_stage_index));
 
   // Winners Subscription
   useEffect(() => {
@@ -150,8 +149,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index, currentSnowballPot));
-  }, [currentGameState.current_stage_index, currentSnowballPot, getPlannedPrize]);
+    setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
+  }, [currentGameState.current_stage_index, getPlannedPrize]);
 
   const currentNumber = currentGameState.called_numbers?.[currentGameState.numbers_called_count - 1] || null;
   const currentNickname = currentNumber ? NUMBER_NICKNAMES[currentNumber] : null;
@@ -314,8 +313,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
         return;
     }
     const currentStage = game.stage_sequence[currentGameState.current_stage_index];
-    const isSnowballGame = game.type === 'snowball' && currentStage === 'Full House';
-    const isJackpot = !!(isSnowballGame && currentSnowballPot && currentGameState.numbers_called_count <= currentSnowballPot.current_max_calls);
+    
+    // Use the manual eligibility flag determined in the modal
+    const isJackpot = isSnowballEligible;
 
     const result = await recordWinner(
         sessionId,
@@ -333,6 +333,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
     } else {
         setWinnerName('');
         setPrizeGiven(false);
+        setIsSnowballEligible(false);
         setShowWinnerModal(false);
         setShowPostWinModal(true);
     }
@@ -520,6 +521,24 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
          </Button>
       </div>
 
+      {/* Manual Snowball Win Button (Only for Snowball Games) */}
+      {game.type === 'snowball' && currentSnowballPot && (
+          <div className="flex justify-center mb-8">
+              <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  className="bg-indigo-900/30 border-indigo-800/50 text-indigo-400 hover:bg-indigo-900/50 hover:text-indigo-300"
+                  onClick={() => {
+                      setWinnerName('');
+                      setPrizeDescription(`£${currentSnowballPot.current_jackpot_amount} (Manual Snowball Win)`);
+                      setShowManualSnowballModal(true);
+                  }}
+              >
+                  🏆 Manual Snowball Win
+              </Button>
+          </div>
+      )}
+
       {/* Last Numbers Strip */}
       <div className="overflow-x-auto pb-4 mb-6">
         <div className="flex gap-2 justify-center min-w-max px-4">
@@ -665,6 +684,39 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
       {/* Record Winner Modal */}
       <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${game.stage_sequence[currentGameState.current_stage_index]}`}>
          <div className="space-y-4">
+            {/* Snowball Eligibility Check */}
+            {game.type === 'snowball' && 
+             game.stage_sequence[currentGameState.current_stage_index] === 'Full House' && 
+             currentSnowballPot && 
+             currentGameState.numbers_called_count <= currentSnowballPot.current_max_calls && (
+                <div className="bg-indigo-900/30 p-4 rounded-lg border border-indigo-500/50 mb-4 animate-in slide-in-from-top-2">
+                    <div className="flex items-start gap-3">
+                        <input 
+                            type="checkbox" 
+                            id="snowballEligible"
+                            checked={isSnowballEligible}
+                            onChange={(e) => {
+                                const eligible = e.target.checked;
+                                setIsSnowballEligible(eligible);
+                                const basePrize = getPlannedPrize(currentGameState.current_stage_index);
+                                if (eligible && currentSnowballPot) {
+                                    setPrizeDescription(`${basePrize} + £${currentSnowballPot.current_jackpot_amount} (Snowball)`);
+                                } else {
+                                    setPrizeDescription(basePrize);
+                                }
+                            }}
+                            className="mt-1 w-5 h-5 rounded border-indigo-400 bg-indigo-900/50 text-indigo-400 focus:ring-indigo-400 accent-indigo-500 cursor-pointer"
+                        />
+                        <div>
+                            <label htmlFor="snowballEligible" className="text-indigo-300 font-bold cursor-pointer block">
+                                Winner Eligible for Snowball (£{currentSnowballPot.current_jackpot_amount})?
+                            </label>
+                            <p className="text-xs text-indigo-400/70 mt-1">Check if attendee has attended last 3 games.</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div>
                 <label className="text-sm text-slate-400 block mb-1">Winner Name</label>
                 <Input 
@@ -725,6 +777,66 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
                     </Button>
                  </div>
              </div>
+         </div>
+      </Modal>
+
+      {/* Manual Snowball Win Modal */}
+      <Modal isOpen={showManualSnowballModal} onClose={() => setShowManualSnowballModal(false)} title="Manual Snowball Award">
+         <div className="space-y-4">
+            <div className="p-3 bg-indigo-900/20 border border-indigo-900/50 rounded text-indigo-200 text-sm">
+               This will record a Snowball Jackpot win, display the celebration, and <strong>reset the pot</strong>.
+               Use this if the automatic trigger was missed or for special circumstances.
+            </div>
+            <div>
+                <label className="text-sm text-slate-400 block mb-1">Winner Name</label>
+                <Input 
+                    value={winnerName} 
+                    onChange={(e) => setWinnerName(e.target.value)} 
+                    placeholder="e.g. Lucky Winner" 
+                    autoFocus
+                />
+            </div>
+            <div>
+                <label className="text-sm text-slate-400 block mb-1">Prize Description</label>
+                <Input 
+                    value={prizeDescription} 
+                    onChange={(e) => setPrizeDescription(e.target.value)} 
+                />
+            </div>
+         </div>
+         <div className="mt-6 flex justify-end gap-3">
+            <Button variant="secondary" onClick={() => setShowManualSnowballModal(false)}>Cancel</Button>
+            <Button 
+                variant="primary" 
+                onClick={async () => {
+                    if (!winnerName.trim()) {
+                        setActionError("Winner name required.");
+                        return;
+                    }
+                    
+                    // Force record as snowball jackpot
+                    const result = await recordWinner(
+                        sessionId,
+                        gameId,
+                        'Full House', // Assume Snowball is always FH
+                        winnerName,
+                        prizeDescription,
+                        currentGameState.numbers_called_count,
+                        true, // isJackpot = true
+                        true // Prize given immediately? Assume yes for manual award or make optional. Let's default true for "Close out".
+                    );
+
+                    if (result?.error) {
+                        setActionError(result.error);
+                    } else {
+                        setShowManualSnowballModal(false);
+                        setWinnerName('');
+                        setShowPostWinModal(true);
+                    }
+                }}
+            >
+                Confirm Snowball Win
+            </Button>
          </div>
       </Modal>
 
