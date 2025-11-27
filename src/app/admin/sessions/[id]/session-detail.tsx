@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
+import { useRouter } from 'next/navigation'; // Import useRouter
 
 type Session = Database['public']['Tables']['sessions']['Row'];
 type Game = Database['public']['Tables']['games']['Row'];
@@ -29,6 +29,8 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
   // Form State
   const [selectedGameType, setSelectedGameType] = useState<'standard' | 'snowball'>('standard');
   const [selectedStages, setSelectedStages] = useState<string[]>(['Line', 'Two Lines', 'Full House']);
+
+  const router = useRouter(); // Initialize useRouter
 
   useEffect(() => {
     setGames(initialGames);
@@ -85,28 +87,33 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
       setActionError(result.error);
     } else {
       handleClose();
+      router.refresh(); // Refresh after game changes
     }
   }
 
   async function handleDeleteGame(gameId: string) {
       if (confirm("Delete this game?")) {
           await deleteGame(gameId, session.id);
+          router.refresh(); // Refresh after deleting game
       }
   }
 
   async function handleDuplicateGame(gameId: string) {
       await duplicateGame(gameId, session.id);
+      router.refresh(); // Refresh after duplicating game
   }
 
   async function handleMarkAsReady() {
       if (confirm("Mark this session as Ready? It will be visible to hosts.")) {
           await updateSessionStatus(session.id, 'ready');
+          router.refresh(); // Refresh after status change
       }
   }
 
   async function handleStartSession() {
       if (confirm("Ready to start this session? This will open it for the Host.")) {
           await updateSessionStatus(session.id, 'running');
+          router.refresh(); // Refresh after status change
       }
   }
 
@@ -115,6 +122,8 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
           const result = await resetSession(session.id);
           if (result?.error) {
               setActionError(result.error);
+          } else {
+              router.refresh(); // Refresh after reset
           }
       }
   }

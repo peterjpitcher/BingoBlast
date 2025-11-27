@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, advanceToNextStage, toggleWinnerPrizeGiven } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, advanceToNextStage, toggleWinnerPrizeGiven, takeControl, sendHeartbeat } from '@/app/host/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
@@ -21,6 +21,7 @@ interface GameControlProps {
   gameId: string;
   game: Game;
   initialGameState: GameState;
+  currentUserId: string;
 }
 
 // Hardcoded for now (same as before)
@@ -51,7 +52,7 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
 };
 
 
-export default function GameControl({ sessionId, gameId, game, initialGameState }: GameControlProps) {
+export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId }: GameControlProps) {
   const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
   const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
   const [isCallingNumber, setIsCallingNumber] = useState(false);
@@ -67,7 +68,30 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   const [winnerName, setWinnerName] = useState('');
   const [prizeGiven, setPrizeGiven] = useState(false);
   const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
-  const [isSnowballEligible, setIsSnowballEligible] = useState(false);
+  
+  // Controller Locking Logic
+  const isController = currentGameState.controlling_host_id === currentUserId;
+  // Allow taking control if no one is controlling OR the last heartbeat was > 30s ago
+  const canTakeControl = !currentGameState.controlling_host_id || 
+    (currentGameState.controller_last_seen_at && (new Date().getTime() - new Date(currentGameState.controller_last_seen_at).getTime() > 30000));
+
+  useEffect(() => {
+      let interval: NodeJS.Timeout;
+      if (isController) {
+          interval = setInterval(async () => {
+              await sendHeartbeat(gameId);
+          }, 10000); // Send heartbeat every 10s
+      }
+      return () => clearInterval(interval);
+  }, [isController, gameId]);
+
+  const handleTakeControl = async () => {
+      setActionError(null);
+      const result = await takeControl(gameId);
+      if (result?.error) {
+          setActionError(result.error);
+      }
+  };
   
   const getPlannedPrize = useCallback((stageIndex: number) => {
     const stage = game.stage_sequence[stageIndex];
@@ -104,7 +128,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
 
   // Wake Lock
   useEffect(() => {
-    let wakeLock: any = null;
+    let wakeLock: unknown = null;
 
     const requestWakeLock = async () => {
       try {
@@ -114,8 +138,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
           wakeLock = await navigator.wakeLock.request('screen');
           console.log('Wake Lock is active!');
         }
-      } catch (err: any) {
-        console.error(`Wake Lock error: ${err.name}, ${err.message}`);
+      } catch (err: unknown) {
+        const error = err as Error;
+        console.error(`Wake Lock error: ${error.name}, ${error.message}`);
       }
     };
 
@@ -130,12 +155,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      if (wakeLock) wakeLock.release();
+      if (wakeLock && typeof (wakeLock as { release: () => void }).release === 'function') {
+         (wakeLock as { release: () => void }).release();
+      }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
   const handleTogglePrize = async (winnerId: string, currentStatus: boolean) => {
+      if (!isController) return;
       // Optimistic update
       setCurrentWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: !currentStatus } : w));
       
@@ -222,6 +250,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   }, [gameId]);
 
   const handleCallNextNumber = async () => {
+    if (!isController) return;
     setIsCallingNumber(true);
     setActionError(null);
 
@@ -248,6 +277,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   };
 
   const handleToggleBreak = async () => {
+    if (!isController) return;
     setActionError(null);
     const newOnBreakStatus = !currentGameState.on_break;
     const result = await toggleBreak(gameId, newOnBreakStatus);
@@ -257,6 +287,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   };
 
   const handleEndGame = async () => {
+      if (!isController) return;
       setShowEndGameConfirm(false);
       setActionError(null);
       const result = await endGame(gameId, sessionId);
@@ -277,6 +308,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   };
 
   const handleCheckWin = async () => {
+    if (!isController) return;
     setActionError(null);
     if (selectedNumbers.length === 0) {
         setActionError("Please select numbers to validate.");
@@ -307,6 +339,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   };
 
   const handleRecordWinner = async () => {
+    if (!isController) return;
     setActionError(null);
     if (!winnerName.trim()) {
         setActionError("Winner name cannot be empty.");
@@ -314,9 +347,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
     }
     const currentStage = game.stage_sequence[currentGameState.current_stage_index];
     
-    // Use the manual eligibility flag determined in the modal
-    const isJackpot = isSnowballEligible;
-
     const result = await recordWinner(
         sessionId,
         gameId,
@@ -324,7 +354,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
         winnerName,
         prizeDescription,
         currentGameState.numbers_called_count,
-        isJackpot,
         prizeGiven
     );
 
@@ -333,13 +362,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
     } else {
         setWinnerName('');
         setPrizeGiven(false);
-        setIsSnowballEligible(false);
         setShowWinnerModal(false);
         setShowPostWinModal(true);
     }
   };
   
   const handleAdvanceStage = async () => {
+      if (!isController) return;
       setActionError(null);
       const result = await advanceToNextStage(gameId);
       if (result?.error) {
@@ -351,19 +380,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
       }
   };
 
-  const handleResumeAfterWin = async () => {
-      setActionError(null);
-      const result = await resumeGame(gameId);
-      if (result?.error) {
-          setActionError(result.error);
-      } else {
-          setShowPostWinModal(false);
-          setShowValidationModal(false);
-          handleClearSelection();
-      }
-  };
-
   const handleSkipStage = async () => {
+    if (!isController) return;
     if (confirm("Are you sure you want to skip this stage without a winner?")) {
         setActionError(null);
         const result = await skipStage(gameId, currentGameState.current_stage_index, game.stage_sequence.length);
@@ -376,6 +394,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   };
 
   const handleVoidLastNumber = async () => {
+      if (!isController) return;
       if (!currentNumber) {
           setActionError("No numbers to void.");
           return;
@@ -390,6 +409,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   };
 
   const handleResumeGame = async () => {
+      if (!isController) return;
       setActionError(null);
       if (currentGameState.paused_for_validation) {
           const result = await resumeGame(gameId);
@@ -406,15 +426,32 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
   const isGameNotInProgress = currentGameState.status !== 'in_progress';
   const isPausedForValidation = currentGameState.paused_for_validation;
 
-  const isNextNumberDisabled = isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || currentGameState.numbers_called_count >= 90;
-  const isBreakToggleDisabled = isGameNotInProgress || isGameCompleted || isPausedForValidation;
-  const isValidateButtonDisabled = isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
-  const isEndGameDisabled = isGameNotInProgress || currentGameState.on_break || isGameCompleted || isPausedForValidation;
-  const isVoidLastNumberDisabled = currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
+  const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || currentGameState.numbers_called_count >= 90;
+  const isBreakToggleDisabled = !isController || isGameNotInProgress || isGameCompleted || isPausedForValidation;
+  const isValidateButtonDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
+  const isEndGameDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || isPausedForValidation;
+  const isVoidLastNumberDisabled = !isController || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
 
 
   return (
-    <div className="p-4 pb-32 max-w-4xl mx-auto">
+    <div className="p-4 pb-32 max-w-4xl mx-auto relative">
+      {/* Controller Locked Overlay / Banner */}
+      {!isController && (
+        <div className="absolute inset-x-0 top-0 z-50 p-4">
+            <div className="bg-red-900/90 border border-red-500 text-white p-4 rounded-lg shadow-2xl backdrop-blur-sm flex flex-col items-center gap-3 text-center">
+                <div>
+                    <h3 className="font-bold text-lg">View Only Mode</h3>
+                    <p className="text-sm text-red-200">Another host is currently controlling this game.</p>
+                </div>
+                {canTakeControl && (
+                    <Button variant="primary" className="bg-red-600 hover:bg-red-700 animate-pulse" onClick={handleTakeControl}>
+                        Take Control
+                    </Button>
+                )}
+            </div>
+        </div>
+      )}
+
       {/* Connection Status */}
       <div className="flex justify-center mb-4">
           {isConnected ? (
@@ -467,7 +504,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
       </Card>
 
       {/* Control Pad */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
+      <div className={cn("grid grid-cols-2 gap-4 mb-6", !isController && "opacity-50 pointer-events-none")}>
          <Button 
            variant="primary" 
            size="xl" 
@@ -500,7 +537,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
       </div>
 
       {/* Secondary Controls */}
-      <div className="flex justify-center gap-4 mb-8">
+      <div className={cn("flex justify-center gap-4 mb-8", !isController && "opacity-50 pointer-events-none")}>
          <Button 
              variant="ghost" 
              size="sm" 
@@ -523,7 +560,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
 
       {/* Manual Snowball Win Button (Only for Snowball Games) */}
       {game.type === 'snowball' && currentSnowballPot && (
-          <div className="flex justify-center mb-8">
+          <div className={cn("flex justify-center mb-8", !isController && "opacity-50 pointer-events-none")}>
               <Button 
                   variant="secondary" 
                   size="sm" 
@@ -570,6 +607,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
                                   winner.prize_given ? "text-green-400 border-green-900 hover:bg-green-900/20" : "bg-yellow-600 hover:bg-yellow-700 text-white"
                               )}
                               onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
+                              disabled={!isController} // Disable prize toggle if not controller
                           >
                               {winner.prize_given ? "Given ✅" : "Give Prize"}
                           </Button>
@@ -655,6 +693,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
                                     "aspect-square flex items-center justify-center text-sm sm:text-base rounded transition-all active:scale-95",
                                     buttonStyle
                                 )}
+                                disabled={!isController}
                             >
                                 {num}
                             </button>
@@ -684,39 +723,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
       {/* Record Winner Modal */}
       <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${game.stage_sequence[currentGameState.current_stage_index]}`}>
          <div className="space-y-4">
-            {/* Snowball Eligibility Check */}
-            {game.type === 'snowball' && 
-             game.stage_sequence[currentGameState.current_stage_index] === 'Full House' && 
-             currentSnowballPot && 
-             currentGameState.numbers_called_count <= currentSnowballPot.current_max_calls && (
-                <div className="bg-indigo-900/30 p-4 rounded-lg border border-indigo-500/50 mb-4 animate-in slide-in-from-top-2">
-                    <div className="flex items-start gap-3">
-                        <input 
-                            type="checkbox" 
-                            id="snowballEligible"
-                            checked={isSnowballEligible}
-                            onChange={(e) => {
-                                const eligible = e.target.checked;
-                                setIsSnowballEligible(eligible);
-                                const basePrize = getPlannedPrize(currentGameState.current_stage_index);
-                                if (eligible && currentSnowballPot) {
-                                    setPrizeDescription(`${basePrize} + £${currentSnowballPot.current_jackpot_amount} (Snowball)`);
-                                } else {
-                                    setPrizeDescription(basePrize);
-                                }
-                            }}
-                            className="mt-1 w-5 h-5 rounded border-indigo-400 bg-indigo-900/50 text-indigo-400 focus:ring-indigo-400 accent-indigo-500 cursor-pointer"
-                        />
-                        <div>
-                            <label htmlFor="snowballEligible" className="text-indigo-300 font-bold cursor-pointer block">
-                                Winner Eligible for Snowball (£{currentSnowballPot.current_jackpot_amount})?
-                            </label>
-                            <p className="text-xs text-indigo-400/70 mt-1">Check if attendee has attended last 3 games.</p>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             <div>
                 <label className="text-sm text-slate-400 block mb-1">Winner Name</label>
                 <Input 
@@ -779,7 +785,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
                     <Button variant="secondary" onClick={() => {
                         setShowPostWinModal(false);
                         setWinnerName('');
-                        setIsSnowballEligible(false);
+                        // setIsSnowballEligible(false); // No longer needed
                         setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
                         setShowWinnerModal(true);
                     }}>
@@ -840,7 +846,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState 
                         winnerName,
                         prizeDescription,
                         currentGameState.numbers_called_count,
-                        true, // isJackpot = true
+                        // true, // isJackpot = true, now determined server-side
                         true // Prize given immediately? Assume yes for manual award or make optional. Let's default true for "Close out".
                     );
 

@@ -93,11 +93,10 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                           const isCompleted = status === 'completed';
                           const isInProgress = status === 'in_progress';
                           
-                          // It is playable if it is the identified activeOrNextGame
-                          const isPlayable = activeOrNextGame?.id === game.id;
+                          const isPlayable = activeOrNextGame?.id === game.id || isCompleted;
                           
-                          // It is locked if it is NOT the active game AND not completed (i.e., future game)
-                          const isLocked = !isPlayable && !isCompleted;
+                          // It is locked if it is NOT playable (which means it's a future game)
+                          const isLocked = !isPlayable;
 
                           return (
                             <div 
@@ -105,7 +104,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                               className={cn(
                                 "flex items-center justify-between p-3 rounded-lg border transition-colors",
                                 isInProgress ? "bg-green-900/20 border-green-800/50" : 
-                                isCompleted ? "bg-slate-800/50 border-slate-700 opacity-60" : 
+                                isCompleted ? "bg-slate-800/50 border-slate-700" : 
                                 isLocked ? "bg-slate-800/30 border-slate-700/50 opacity-50" :
                                 "bg-slate-800 border-slate-700"
                               )}
@@ -118,7 +117,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                   "bg-slate-700"
                                 )}></div>
                                 <div>
-                                  <h4 className={cn("font-bold", isCompleted ? "text-slate-400 line-through decoration-slate-500" : "text-white")}>
+                                  <h4 className={cn("font-bold", isCompleted ? "text-slate-400" : "text-white")}>
                                     Game {game.game_index}: {game.name}
                                   </h4>
                                   <div className="flex gap-2 text-xs">
@@ -136,10 +135,18 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                     <Button 
                                       type="submit" 
                                       size="sm" 
-                                      variant={isInProgress ? "primary" : "secondary"}
-                                      className={isInProgress ? "bg-green-600 hover:bg-green-700 shadow-green-900/20" : ""}
+                                      variant={isInProgress ? "primary" : isCompleted ? "outline" : "secondary"}
+                                      className={
+                                        isInProgress ? "bg-green-600 hover:bg-green-700 shadow-green-900/20" : 
+                                        isCompleted ? "border-yellow-600 text-yellow-500 hover:bg-yellow-900/20" : ""
+                                      }
+                                      onClick={(e) => {
+                                          if (isCompleted && !confirm("⚠️ Are you sure you want to RE-OPEN this finished game?\n\nThis will resume calling and allow you to correct mistakes.")) {
+                                              e.preventDefault();
+                                          }
+                                      }}
                                     >
-                                      {isInProgress ? 'Resume' : 'Start'}
+                                      {isInProgress ? 'Resume' : isCompleted ? 'Re-open' : 'Start'}
                                     </Button>
                                   </form>
                                 ) : (
@@ -149,7 +156,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                     disabled 
                                     className="text-slate-500"
                                   >
-                                    {isCompleted ? 'Done' : 'Locked'}
+                                    Locked
                                   </Button>
                                 )}
                               </div>

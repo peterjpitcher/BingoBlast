@@ -3,9 +3,28 @@
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
-import { GameStatus, WinStage } from '@/types/database'
+import { GameStatus, WinStage, UserRole } from '@/types/database'
 import type { Database } from '@/types/database'
 import { SupabaseClient } from '@supabase/supabase-js'
+
+async function authorizeHost(supabase: SupabaseClient<Database>) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return { authorized: false, error: "Not authenticated" };
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single<{ role: UserRole }>();
+
+  if (profileError || !profile || (profile.role !== 'admin' && profile.role !== 'host')) {
+    return { authorized: false, error: "Unauthorized: Host or Admin access required" };
+  }
+  
+  return { authorized: true, user, role: profile.role };
+}
 
 // Helper to generate a shuffled 1-90 array
 function generateShuffledNumberSequence(): number[] {
@@ -122,6 +141,8 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
 
 export async function startGame(sessionId: string, gameId: string) {
   const supabase = await createClient()
+  const authResult = await authorizeHost(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
 
   // 1. Check if game_state already exists
   const { data: existingGameState, error: fetchGameStateError } = await supabase
@@ -176,12 +197,16 @@ export async function startGame(sessionId: string, gameId: string) {
       display_win_text: null,
       display_winner_name: null,
       paused_for_validation: false,
+      controlling_host_id: authResult.user!.id, // Set controller on re-open
+      controller_last_seen_at: new Date().toISOString(),
   } : {
       ...commonGameState,
       // Ensure we reset if it was not completed (i.e. fresh start)
       called_numbers: [],
       numbers_called_count: 0,
       current_stage_index: 0,
+      controlling_host_id: authResult.user!.id, // Set controller on start
+      controller_last_seen_at: new Date().toISOString(),
   };
 
 
@@ -233,6 +258,69 @@ export async function startGame(sessionId: string, gameId: string) {
   redirect(`/host/${sessionId}/${gameId}`);
 }
 
+export async function takeControl(gameId: string) {
+    const supabase = await createClient();
+    const authResult = await authorizeHost(supabase);
+    if (!authResult.authorized) return { error: authResult.error };
+
+    // Check current controller
+    const { data: currentState, error: fetchError } = await supabase
+        .from('game_states')
+        .select('controlling_host_id, controller_last_seen_at')
+        .eq('game_id', gameId)
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'controlling_host_id' | 'controller_last_seen_at'>>();
+
+    if (fetchError) return { error: fetchError.message };
+
+    const now = new Date();
+    const lastSeen = currentState?.controller_last_seen_at ? new Date(currentState.controller_last_seen_at) : null;
+    const heartbeatThresholdMs = 30000; // 30 seconds
+
+    // If someone else is controlling AND they have been seen recently
+    if (currentState?.controlling_host_id && 
+        currentState.controlling_host_id !== authResult.user!.id && 
+        lastSeen && 
+        (now.getTime() - lastSeen.getTime() < heartbeatThresholdMs)) {
+            return { error: "Another host is currently controlling this game." };
+    }
+
+    // Take control
+    const { error: updateError } = await supabase
+        .from('game_states')
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        .update({
+            controlling_host_id: authResult.user!.id,
+            controller_last_seen_at: now.toISOString()
+        })
+        .eq('game_id', gameId);
+
+    if (updateError) return { error: updateError.message };
+
+    revalidatePath(`/host/${gameId}`);
+    return { success: true };
+}
+
+export async function sendHeartbeat(gameId: string) {
+    const supabase = await createClient();
+    const authResult = await authorizeHost(supabase);
+    if (!authResult.authorized) return { error: authResult.error };
+
+    const { error } = await supabase
+        .from('game_states')
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        .update({
+            controller_last_seen_at: new Date().toISOString()
+        })
+        .eq('game_id', gameId)
+        .eq('controlling_host_id', authResult.user!.id); // Only update if WE are the controller
+
+    if (error) return { error: error.message };
+    
+    return { success: true };
+}
+
 export async function getCurrentGameState(gameId: string) {
     const supabase = await createClient();
 
@@ -257,6 +345,8 @@ export async function getCurrentGameState(gameId: string) {
 
 export async function callNextNumber(gameId: string) {
   const supabase = await createClient()
+  const authResult = await authorizeHost(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
 
   const { data: gameState, error: fetchError } = await supabase
     .from('game_states')
@@ -302,7 +392,9 @@ export async function callNextNumber(gameId: string) {
 }
 
 export async function toggleBreak(gameId: string, onBreak: boolean) {
-    const supabase = await createClient();
+    const supabase = await createClient()
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
@@ -342,7 +434,9 @@ export async function toggleBreak(gameId: string, onBreak: boolean) {
 }
 
 export async function pauseForValidation(gameId: string) {
-    const supabase = await createClient();
+    const supabase = await createClient()
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
     
     const { error } = await supabase
         .from('game_states')
@@ -364,7 +458,9 @@ export async function pauseForValidation(gameId: string) {
 }
 
 export async function resumeGame(gameId: string) {
-    const supabase = await createClient();
+    const supabase = await createClient()
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
     
     const { error } = await supabase
         .from('game_states')
@@ -385,7 +481,9 @@ export async function resumeGame(gameId: string) {
 }
 
 export async function endGame(gameId: string, sessionId: string) {
-    const supabase = await createClient();
+    const supabase = await createClient()
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
@@ -428,7 +526,9 @@ export async function endGame(gameId: string, sessionId: string) {
 }
 
 export async function validateClaim(gameId: string, claimedNumbers: number[]) {
-    const supabase = await createClient();
+    const supabase = await createClient()
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
@@ -594,10 +694,42 @@ export async function recordWinner(
     winnerName: string,
     prizeDescription: string | null,
     callCountAtWin: number,
-    isSnowballJackpot: boolean,
+    // isSnowballJackpot: boolean, // Removed, calculated server-side
     prizeGiven: boolean = false
 ) {
     const supabase = await createClient();
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
+
+    // Re-calculate isSnowballJackpot on the server for security
+    let actualIsSnowballJackpot = false;
+    const { data: game, error: gameError } = await supabase
+        .from('games')
+        .select('type, snowball_pot_id, stage_sequence')
+        .eq('id', gameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id' | 'stage_sequence'>>();
+    
+    if (gameError) {
+        console.error("Error fetching game for snowball check:", gameError.message);
+        // Continue, but actualIsSnowballJackpot remains false
+    }
+
+    if (game && game.type === 'snowball' && stage === 'Full House' && game.snowball_pot_id) {
+        const { data: snowballPot, error: potError } = await supabase
+            .from('snowball_pots')
+            .select('current_max_calls')
+            .eq('id', game.snowball_pot_id)
+            .single<Pick<Database['public']['Tables']['snowball_pots']['Row'], 'current_max_calls'>>();
+
+        if (potError) {
+            console.error("Error fetching snowball pot for jackpot check:", potError.message);
+            // Continue, but actualIsSnowballJackpot remains false
+        }
+
+        if (snowballPot && callCountAtWin <= snowballPot.current_max_calls) {
+            actualIsSnowballJackpot = true;
+        }
+    }
 
     // Insert winner record
     const { error: winnerInsertError } = await supabase
@@ -611,7 +743,7 @@ export async function recordWinner(
             winner_name: winnerName,
             prize_description: prizeDescription,
             call_count_at_win: callCountAtWin,
-            is_snowball_jackpot: isSnowballJackpot,
+            is_snowball_jackpot: actualIsSnowballJackpot, // Use server-calculated value
             prize_given: prizeGiven,
         });
 
@@ -623,7 +755,7 @@ export async function recordWinner(
     // Determine display win type and text
     let displayWinType: string;
     let displayWinText: string;
-    if (isSnowballJackpot) {
+    if (actualIsSnowballJackpot) {
         displayWinType = 'snowball';
         displayWinText = 'JACKPOT WIN!';
     } else {
@@ -670,6 +802,8 @@ export async function recordWinner(
 
 export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, winnerId: string, prizeGiven: boolean) {
     const supabase = await createClient();
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
     
     const { error } = await supabase
         .from('winners')
@@ -688,6 +822,8 @@ export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, 
 
 export async function skipStage(gameId: string, currentStageIndex: number, totalStages: number) {
     const supabase = await createClient();
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
 
     let newStageIndex = currentStageIndex + 1;
     let newStatus = 'in_progress' as GameStatus;
@@ -721,6 +857,8 @@ export async function skipStage(gameId: string, currentStageIndex: number, total
 
 export async function voidLastNumber(gameId: string) {
     const supabase = await createClient();
+    const authResult = await authorizeHost(supabase)
+    if (!authResult.authorized) return { error: authResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')

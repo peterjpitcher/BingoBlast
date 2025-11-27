@@ -64,7 +64,7 @@ export default function DisplayUI({
         
         if (newGame) {
           setCurrentActiveGame(newGame);
-          const { data: newGameState, error: gameStateError } = await supabase.current
+          const { data: newGameState } = await supabase.current
             .from('game_states')
             .select('*')
             .eq('game_id', newGame.id)
@@ -133,8 +133,7 @@ export default function DisplayUI({
         supabaseClient.removeChannel(gameStateChannel);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, currentActiveGame]);
+  }, [session.id, currentActiveGame, refreshActiveGame]);
 
   useEffect(() => {
       const interval = setInterval(async () => {
@@ -164,7 +163,7 @@ export default function DisplayUI({
       }, 5000);
 
       return () => clearInterval(interval);
-  }, [currentActiveGame, session.id]);
+  }, [currentActiveGame, session.id, refreshActiveGame]);
 
   useEffect(() => {
     const supabaseClient = supabase.current;
@@ -201,7 +200,6 @@ export default function DisplayUI({
     };
   }, [currentActiveGame]);
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (numberCallTimeoutRef.current) {
       clearTimeout(numberCallTimeoutRef.current);
@@ -266,7 +264,6 @@ export default function DisplayUI({
       }
     };
   }, [currentActiveGame, currentGameState, currentNumberDelayed, delayedNumbers]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const showActiveGame = currentActiveGame && currentGameState && currentGameState.status === 'in_progress' && !currentGameState.on_break && !isGameFinishedState && !currentGameState.display_win_type && !currentGameState.paused_for_validation;
   const showBreak = currentActiveGame && currentGameState?.on_break && !isGameFinishedState;

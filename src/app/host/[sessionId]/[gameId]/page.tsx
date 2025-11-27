@@ -80,6 +80,7 @@ export default async function GameControlPage({ params }: PageProps) {
         gameId={gameId}
         game={game}
         initialGameState={initialGameState as Database['public']['Tables']['game_states']['Row']}
+        currentUserId={user.id}
       />
     </div>
   );

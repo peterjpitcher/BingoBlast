@@ -126,6 +126,8 @@ export interface Database {
           display_win_type: string | null // 'line', 'two_lines', 'full_house', 'snowball'
           display_win_text: string | null // e.g., "Line Winner!"
           display_winner_name: string | null // Optional: "Dave - Table 6"
+          controlling_host_id: string | null // New: ID of the host controlling the game
+          controller_last_seen_at: string | null // New: Timestamp of last heartbeat
           started_at: string | null
           ended_at: string | null
           last_call_at: string | null
@@ -145,6 +147,8 @@ export interface Database {
           display_win_type?: string | null
           display_win_text?: string | null
           display_winner_name?: string | null
+          controlling_host_id?: string | null
+          controller_last_seen_at?: string | null
           started_at?: string | null
           ended_at?: string | null
           last_call_at?: string | null
@@ -164,6 +168,8 @@ export interface Database {
           display_win_type?: string | null
           display_win_text?: string | null
           display_winner_name?: string | null
+          controlling_host_id?: string | null
+          controller_last_seen_at?: string | null
           started_at?: string | null
           ended_at?: string | null
           last_call_at?: string | null

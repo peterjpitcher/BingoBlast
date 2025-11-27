@@ -2,18 +2,36 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
-import type { Database } from '@/types/database'
+import type { Database, SessionStatus, UserRole } from '@/types/database'
+import { SupabaseClient } from '@supabase/supabase-js'
 
 type SessionInsert = Database['public']['Tables']['sessions']['Insert']
 type GameRow = Database['public']['Tables']['games']['Row']
 type GameInsert = Database['public']['Tables']['games']['Insert']
 
+async function authorizeAdmin(supabase: SupabaseClient<Database>) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return { authorized: false, error: "Not authenticated" }
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single<{ role: UserRole }>()
+
+  if (profileError || !profile || profile.role !== 'admin') {
+    return { authorized: false, error: "Unauthorized: Admin access required" }
+  }
+  
+  return { authorized: true, user, role: profile.role }
+}
+
 export async function createSession(_prevState: unknown, formData: FormData) {
   const supabase = await createClient()
-
-  // Get current user for created_by
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Not authenticated' }
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
 
   const name = formData.get('name') as string
   const notes = formData.get('notes') as string
@@ -25,7 +43,7 @@ export async function createSession(_prevState: unknown, formData: FormData) {
     name,
     notes,
     is_test_session,
-    created_by: user.id,
+    created_by: authResult.user!.id,
     status: 'draft',
   }
 
@@ -47,6 +65,19 @@ export async function createSession(_prevState: unknown, formData: FormData) {
 
 export async function deleteSession(sessionId: string) {
   const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
+
+  // Check if session is running
+  const { data: session } = await supabase
+    .from('sessions')
+    .select('status')
+    .eq('id', sessionId)
+    .single<{ status: SessionStatus }>()
+
+  if (session?.status === 'running') {
+    return { error: "Cannot delete a running session. Please end the session first." }
+  }
 
   const { error } = await supabase
     .from('sessions')
@@ -63,8 +94,8 @@ export async function deleteSession(sessionId: string) {
 
 export async function duplicateSession(sessionId: string) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Not authenticated' }
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
 
   // 1. Fetch original session
   const { data: originalSession, error: sessionError } = await supabase
@@ -90,7 +121,7 @@ export async function duplicateSession(sessionId: string) {
       notes: originalSession.notes,
       status: 'draft',
       is_test_session: originalSession.is_test_session,
-      created_by: user.id,
+      created_by: authResult.user!.id,
     } satisfies SessionInsert)
     .select()
     .single()

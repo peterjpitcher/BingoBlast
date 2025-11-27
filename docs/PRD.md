@@ -295,13 +295,8 @@ Admin view to list pots, manually adjust values (logged), and reset to base.
 **FR‑28 – Multiple displays**
 *   Support multiple synced clients via Supabase Realtime.
 
-**FR‑29 – Display states & Sound Effects**
+**FR‑29 – Display states**
 *   **States:** Waiting, Active Game, Break, Paused (Validation), WIN!, JACKPOT, Game Finished.
-*   **Sound Effects (SFX):**
-    *   Game Start (Attention chime).
-    *   Line / Full House Win (Celebration).
-    *   False Alarm (Sad sound - optional).
-    *   Break start.
 
 **FR‑30 – Display content details**
 *   Top: Logo, Session/Game Name.

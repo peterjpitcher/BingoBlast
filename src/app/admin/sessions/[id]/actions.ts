@@ -2,7 +2,8 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
-import type { Database, GameType, WinStage } from '@/types/database'
+import type { Database, GameType, WinStage, GameStatus, SessionStatus, UserRole } from '@/types/database'
+import { SupabaseClient } from '@supabase/supabase-js'
 
 type GameInsert = Database['public']['Tables']['games']['Insert']
 
@@ -14,8 +15,29 @@ const stageOrder: Record<WinStage, number> = {
 
 const sortStages = (stages: WinStage[]) => stages.sort((a, b) => stageOrder[a] - stageOrder[b])
 
+async function authorizeAdmin(supabase: SupabaseClient<Database>) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return { authorized: false, error: "Not authenticated" }
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single<{ role: UserRole }>()
+
+  if (profileError || !profile || profile.role !== 'admin') {
+    return { authorized: false, error: "Unauthorized: Admin access required" }
+  }
+  
+  return { authorized: true, user, role: profile.role }
+}
+
 export async function createGame(sessionId: string, _prevState: unknown, formData: FormData) {
   const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
 
   const name = formData.get('name') as string
   const type = formData.get('type') as GameType
@@ -65,6 +87,29 @@ export async function createGame(sessionId: string, _prevState: unknown, formDat
 
 export async function updateGame(gameId: string, sessionId: string, _prevState: unknown, formData: FormData) {
   const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
+
+  // 1. Fetch original game and session status
+  const { data: originalGame, error: fetchGameError } = await supabase
+    .from('games')
+    .select('type, snowball_pot_id, stage_sequence')
+    .eq('id', gameId)
+    .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id' | 'stage_sequence'>>()
+
+  if (fetchGameError || !originalGame) {
+    return { error: fetchGameError?.message || "Original game not found." }
+  }
+
+  const { data: session, error: fetchSessionError } = await supabase
+    .from('sessions')
+    .select('status')
+    .eq('id', sessionId)
+    .single<{ status: SessionStatus }>()
+
+  if (fetchSessionError || !session) {
+    return { error: fetchSessionError?.message || "Session not found." }
+  }
 
   const name = formData.get('name') as string
   const background_colour = formData.get('background_colour') as string
@@ -78,6 +123,20 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
     : type === 'snowball'
       ? ['Full House']
       : ['Line', 'Two Lines', 'Full House']
+
+  // 2. Enforce rules if session is running
+  if (session.status === 'running') {
+    if (type !== originalGame.type) {
+      return { error: "Cannot change game type while session is running." }
+    }
+    if (snowball_pot_id !== originalGame.snowball_pot_id) {
+      return { error: "Cannot change snowball pot while session is running." }
+    }
+    // Compare stage_sequence as JSON strings or deep equality
+    if (JSON.stringify(stage_sequence) !== JSON.stringify(originalGame.stage_sequence)) {
+      return { error: "Cannot change stage sequence while session is running." }
+    }
+  }
 
   const prizes: Record<string, string> = {}
   stage_sequence.forEach((stage) => {
@@ -93,9 +152,9 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
       name,
       background_colour,
       notes,
-      type,
-      snowball_pot_id,
-      stage_sequence,
+      type, // Will be same as original if running
+      snowball_pot_id, // Will be same as original if running
+      stage_sequence, // Will be same as original if running
       prizes,
     })
     .eq('id', gameId)
@@ -110,6 +169,8 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
 
 export async function duplicateGame(gameId: string, sessionId: string) {
   const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
 
   // 1. Fetch the original game
   const { data: originalGame, error: fetchError } = await supabase
@@ -159,6 +220,19 @@ export async function duplicateGame(gameId: string, sessionId: string) {
 
 export async function deleteGame(gameId: string, sessionId: string) {
   const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
+
+  // Check if game is in progress
+  const { data: gameState } = await supabase
+    .from('game_states')
+    .select('status')
+    .eq('game_id', gameId)
+    .single<{ status: GameStatus }>()
+
+  if (gameState?.status === 'in_progress') {
+    return { error: "Cannot delete a game that is currently in progress." }
+  }
 
   const { error } = await supabase
     .from('games')
@@ -175,6 +249,8 @@ export async function deleteGame(gameId: string, sessionId: string) {
 
 export async function updateSessionStatus(sessionId: string, status: 'ready' | 'running' | 'completed') {
   const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
 
   const { error } = await supabase
     .from('sessions')
@@ -193,6 +269,19 @@ export async function updateSessionStatus(sessionId: string, status: 'ready' | '
 
 export async function resetSession(sessionId: string) {
   const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { error: authResult.error }
+
+  // Check if session is running
+  const { data: session } = await supabase
+    .from('sessions')
+    .select('status')
+    .eq('id', sessionId)
+    .single<{ status: SessionStatus }>()
+  
+  if (session?.status === 'running') {
+    return { error: "Cannot reset a running session. Please end the session first." }
+  }
 
   // 1. Get all game IDs for this session to clean up game_states
   const { data: games } = await supabase

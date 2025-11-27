@@ -14,6 +14,7 @@ export default async function DisplayPage() {
     .from('sessions')
     .select('id, name, status, start_date')
     .in('status', ['ready', 'running'])
+    .eq('is_test_session', false) // Exclude test sessions from display
     .order('created_at', { ascending: false })
     .returns<Pick<Database['public']['Tables']['sessions']['Row'], 'id' | 'name' | 'status' | 'start_date'>[]>();
 

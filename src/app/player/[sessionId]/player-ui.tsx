@@ -49,7 +49,7 @@ export default function PlayerUI({
 
   // Wake Lock
   useEffect(() => {
-    let wakeLock: any = null;
+    let wakeLock: unknown = null;
 
     const requestWakeLock = async () => {
       try {
@@ -59,8 +59,9 @@ export default function PlayerUI({
           wakeLock = await navigator.wakeLock.request('screen');
           console.log('Wake Lock is active!');
         }
-      } catch (err: any) {
-        console.error(`Wake Lock error: ${err.name}, ${err.message}`);
+      } catch (err: unknown) {
+        const error = err as Error;
+        console.error(`Wake Lock error: ${error.name}, ${error.message}`);
       }
     };
 
@@ -75,7 +76,9 @@ export default function PlayerUI({
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      if (wakeLock) wakeLock.release();
+      if (wakeLock && typeof (wakeLock as { release: () => void }).release === 'function') {
+         (wakeLock as { release: () => void }).release();
+      }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);

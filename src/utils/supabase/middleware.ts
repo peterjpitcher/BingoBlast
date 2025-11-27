@@ -37,12 +37,37 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  // Fetch user role if logged in
+  let userRole: string | null = null
+  if (user) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+    userRole = profile?.role || null
+  }
+
   // Protected routes
-  if (request.nextUrl.pathname.startsWith('/admin') || request.nextUrl.pathname.startsWith('/host')) {
+  if (request.nextUrl.pathname.startsWith('/admin')) {
+    if (!user || userRole !== 'admin') {
+      const url = request.nextUrl.clone()
+      if (user) {
+        // User is logged in but not admin -> redirect to host dashboard
+        url.pathname = '/host'
+      } else {
+        // User is not logged in -> redirect to login
+        url.pathname = '/login'
+        url.searchParams.set('next', request.nextUrl.pathname)
+      }
+      return NextResponse.redirect(url)
+    }
+  }
+
+  if (request.nextUrl.pathname.startsWith('/host')) {
     if (!user) {
       const url = request.nextUrl.clone()
       url.pathname = '/login'
-      // Optional: Add ?next=... param to redirect back after login
       url.searchParams.set('next', request.nextUrl.pathname)
       return NextResponse.redirect(url)
     }

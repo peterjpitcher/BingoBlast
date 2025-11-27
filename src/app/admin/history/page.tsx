@@ -5,7 +5,6 @@ import { signout } from '@/app/login/actions';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
 import type { Database } from '@/types/database';
 
 type WinnerWithRelations = Database['public']['Tables']['winners']['Row'] & {
