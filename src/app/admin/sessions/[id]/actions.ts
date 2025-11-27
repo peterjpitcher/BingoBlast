@@ -279,9 +279,7 @@ export async function resetSession(sessionId: string) {
     .eq('id', sessionId)
     .single<{ status: SessionStatus }>()
   
-  if (session?.status === 'running') {
-    return { error: "Cannot reset a running session. Please end the session first." }
-  }
+  // Removed blocking check for running session to allow "Unlock" functionality
 
   // 1. Get all game IDs for this session to clean up game_states
   const { data: games } = await supabase
