@@ -110,6 +110,8 @@ create table public.game_states (
   display_win_type text default null, -- 'line', 'two_lines', 'full_house', 'snowball'
   display_win_text text default null, -- e.g., "Line Winner!"
   display_winner_name text default null, -- Optional: "Dave - Table 6"
+  controlling_host_id uuid references auth.users(id), -- New: ID of the host controlling the game
+  controller_last_seen_at timestamptz, -- New: Timestamp of last heartbeat
   started_at timestamptz,
   ended_at timestamptz,
   last_call_at timestamptz,

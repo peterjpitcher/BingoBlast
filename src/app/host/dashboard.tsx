@@ -151,7 +151,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                             }
                                         } catch (err) {
                                             console.error(err);
-                                            alert("An unexpected error occurred.");
+                                            alert("An unexpected error occurred: " + (err instanceof Error ? err.message : String(err)));
                                         }
                                     }}
                                   >

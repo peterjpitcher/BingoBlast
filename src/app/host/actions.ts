@@ -156,122 +156,117 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
 }
 
 export async function startGame(sessionId: string, gameId: string) {
-  const supabase = await createClient()
-  const authResult = await authorizeHost(supabase)
-  if (!authResult.authorized) return { error: authResult.error }
+  try {
+      const supabase = await createClient()
+      const authResult = await authorizeHost(supabase)
+      if (!authResult.authorized) return { error: authResult.error }
 
-  const dbClient = getServiceRoleClient() || supabase;
+      const dbClient = getServiceRoleClient() || supabase;
 
-  // 1. Check if game_state already exists
-  const { data: existingGameState, error: fetchGameStateError } = await dbClient
-    .from('game_states')
-    .select('id, status, number_sequence, called_numbers, numbers_called_count, current_stage_index') // Select all needed fields
-    .eq('game_id', gameId)
-    .single<Pick<Database['public']['Tables']['game_states']['Row'], 'id' | 'status' | 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'current_stage_index'>>()
+      // 1. Check if game_state already exists
+      const { data: existingGameState, error: fetchGameStateError } = await dbClient
+        .from('game_states')
+        .select('id, status, number_sequence, called_numbers, numbers_called_count, current_stage_index')
+        .eq('game_id', gameId)
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'id' | 'status' | 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'current_stage_index'>>()
 
-  if (fetchGameStateError && fetchGameStateError.code !== 'PGRST116') { // PGRST116 means 'no rows found'
-    console.error("Error fetching existing game state:", fetchGameStateError);
-    return { error: fetchGameStateError.message };
+      if (fetchGameStateError && fetchGameStateError.code !== 'PGRST116') {
+        console.error("Error fetching existing game state:", fetchGameStateError);
+        return { error: fetchGameStateError.message };
+      }
+
+      // 2. Generate new sequence if not already in_progress or completed
+      let sequence = existingGameState?.number_sequence;
+      if (!existingGameState || existingGameState.status === 'not_started') {
+          sequence = generateShuffledNumberSequence();
+      }
+
+      // 3. Insert or update game_state
+      const commonGameState = {
+        number_sequence: sequence,
+        called_numbers: existingGameState?.status === 'completed' ? existingGameState.called_numbers : [],
+        numbers_called_count: existingGameState?.status === 'completed' ? existingGameState.numbers_called_count : 0,
+        current_stage_index: existingGameState?.status === 'completed' ? existingGameState.current_stage_index : 0,
+        status: 'in_progress' as GameStatus,
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        last_call_at: null,
+        on_break: false,
+        paused_for_validation: false,
+        call_delay_seconds: 3,
+        display_win_type: null,
+        display_win_text: null,
+        display_winner_name: null,
+      };
+
+      const isReopening = existingGameState?.status === 'completed';
+      
+      const stateToUpsert = isReopening ? {
+          status: 'in_progress' as GameStatus,
+          ended_at: null,
+          display_win_type: null,
+          display_win_text: null,
+          display_winner_name: null,
+          paused_for_validation: false,
+          controlling_host_id: authResult.user!.id,
+          controller_last_seen_at: new Date().toISOString(),
+      } : {
+          ...commonGameState,
+          called_numbers: [],
+          numbers_called_count: 0,
+          current_stage_index: 0,
+          controlling_host_id: authResult.user!.id,
+          controller_last_seen_at: new Date().toISOString(),
+      };
+
+      const { error: upsertError } = await dbClient
+        .from('game_states')
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        .upsert({
+          game_id: gameId,
+          number_sequence: sequence,
+          ...stateToUpsert,
+        }, { onConflict: 'game_id' }); 
+
+      if (upsertError) {
+        console.error("Error upserting game state:", upsertError);
+        return { error: upsertError.message };
+      }
+
+      // 4. Update session status to 'running' and set active_game_id
+      const { data: session, error: fetchSessionError } = await dbClient
+        .from('sessions')
+        .select('status, active_game_id')
+        .eq('id', sessionId)
+        .single<Pick<Database['public']['Tables']['sessions']['Row'], 'status' | 'active_game_id'>>()
+
+      if (fetchSessionError || !session) {
+        console.error("Error fetching session to update status:", fetchSessionError);
+        return { error: fetchSessionError?.message || "Session not found" };
+      }
+
+      if (session.status !== 'running' || session.active_game_id !== gameId) {
+        const { error: updateSessionError } = await dbClient
+          .from('sessions')
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          .update({ status: 'running', active_game_id: gameId })
+          .eq('id', sessionId)
+        
+        if (updateSessionError) {
+          console.error("Error updating session status and active_game_id:", updateSessionError);
+          return { error: updateSessionError.message };
+        }
+      }
+
+      revalidatePath(`/host`);
+      revalidatePath(`/host/${sessionId}/${gameId}`);
+
+  } catch (e) {
+      console.error("Server Error in startGame:", e);
+      return { error: "Server Error: " + (e instanceof Error ? e.message : String(e)) };
   }
-
-  // 2. Generate new sequence if not already in_progress or completed
-  let sequence = existingGameState?.number_sequence;
-  if (!existingGameState || existingGameState.status === 'not_started') {
-      sequence = generateShuffledNumberSequence();
-  }
-  // Keep existing sequence if status is 'completed' (Re-opening) or 'in_progress'
-
-
-  // 3. Insert or update game_state
-  const commonGameState = {
-    number_sequence: sequence,
-    called_numbers: existingGameState?.status === 'completed' ? existingGameState.called_numbers : [], // Keep calls if re-opening? PRD says "Allows host to resume calling", implies keeping calls.
-    numbers_called_count: existingGameState?.status === 'completed' ? existingGameState.numbers_called_count : 0,
-    current_stage_index: existingGameState?.status === 'completed' ? existingGameState.current_stage_index : 0,
-    status: 'in_progress' as GameStatus,
-    started_at: new Date().toISOString(),
-    ended_at: null,
-    last_call_at: null,
-    on_break: false,
-    paused_for_validation: false,
-    call_delay_seconds: 3, // Default, can be configurable
-    display_win_type: null, // Reset display flags
-    display_win_text: null,
-    display_winner_name: null,
-  };
-
-  // Actually, if re-opening, we shouldn't reset 'called_numbers' to [] if we want to resume.
-  // But if it is a fresh start, we want [].
-  // Let's refine:
-  // If existingGameState.status === 'completed', we are Re-opening.
-  // We should keep 'called_numbers', 'numbers_called_count', 'current_stage_index'.
-  
-  const isReopening = existingGameState?.status === 'completed';
-  
-  const stateToUpsert = isReopening ? {
-      status: 'in_progress' as GameStatus,
-      ended_at: null,
-      display_win_type: null,
-      display_win_text: null,
-      display_winner_name: null,
-      paused_for_validation: false,
-      controlling_host_id: authResult.user!.id, // Set controller on re-open
-      controller_last_seen_at: new Date().toISOString(),
-  } : {
-      ...commonGameState,
-      // Ensure we reset if it was not completed (i.e. fresh start)
-      called_numbers: [],
-      numbers_called_count: 0,
-      current_stage_index: 0,
-      controlling_host_id: authResult.user!.id, // Set controller on start
-      controller_last_seen_at: new Date().toISOString(),
-  };
-
-
-  const { error: upsertError } = await dbClient
-    .from('game_states')
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    .upsert({
-      game_id: gameId,
-      number_sequence: sequence, // Always ensure sequence is set
-      ...stateToUpsert,
-    }, { onConflict: 'game_id' }); 
-
-  if (upsertError) {
-    console.error("Error upserting game state:", upsertError);
-    return { error: upsertError.message };
-  }
-
-  // 4. Update session status to 'running' and set active_game_id
-  const { data: session, error: fetchSessionError } = await dbClient
-    .from('sessions')
-    .select('status, active_game_id') // Select active_game_id too
-    .eq('id', sessionId)
-    .single<Pick<Database['public']['Tables']['sessions']['Row'], 'status' | 'active_game_id'>>()
-
-  if (fetchSessionError || !session) {
-    console.error("Error fetching session to update status:", fetchSessionError);
-    return { error: fetchSessionError?.message || "Session not found" };
-  }
-
-  // Update only if status is not already running or active_game_id is different
-  if (session.status !== 'running' || session.active_game_id !== gameId) {
-    const { error: updateSessionError } = await dbClient
-      .from('sessions')
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      .update({ status: 'running', active_game_id: gameId })
-      .eq('id', sessionId)
-    
-    if (updateSessionError) {
-      console.error("Error updating session status and active_game_id:", updateSessionError);
-      return { error: updateSessionError.message };
-    }
-  }
-
-  revalidatePath(`/host`); // Revalidate host page to show updated status
-  revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the game control page
 
   redirect(`/host/${sessionId}/${gameId}`);
 }
