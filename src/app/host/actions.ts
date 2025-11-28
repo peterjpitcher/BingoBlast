@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { GameStatus, WinStage, UserRole } from '@/types/database'
 import type { Database } from '@/types/database'
-import { SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient, createClient as createSupabaseClient } from '@supabase/supabase-js'
 
 async function authorizeHost(supabase: SupabaseClient<Database>) {
   const { data: { user } } = await supabase.auth.getUser()
@@ -24,6 +24,22 @@ async function authorizeHost(supabase: SupabaseClient<Database>) {
   }
   
   return { authorized: true, user, role: profile.role };
+}
+
+function getServiceRoleClient() {
+    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        return createSupabaseClient<Database>(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY,
+            {
+                auth: {
+                    autoRefreshToken: false,
+                    persistSession: false
+                }
+            }
+        );
+    }
+    return null;
 }
 
 // Helper to generate a shuffled 1-90 array
@@ -144,8 +160,10 @@ export async function startGame(sessionId: string, gameId: string) {
   const authResult = await authorizeHost(supabase)
   if (!authResult.authorized) return { error: authResult.error }
 
+  const dbClient = getServiceRoleClient() || supabase;
+
   // 1. Check if game_state already exists
-  const { data: existingGameState, error: fetchGameStateError } = await supabase
+  const { data: existingGameState, error: fetchGameStateError } = await dbClient
     .from('game_states')
     .select('id, status, number_sequence, called_numbers, numbers_called_count, current_stage_index') // Select all needed fields
     .eq('game_id', gameId)
@@ -210,7 +228,7 @@ export async function startGame(sessionId: string, gameId: string) {
   };
 
 
-  const { error: upsertError } = await supabase
+  const { error: upsertError } = await dbClient
     .from('game_states')
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
@@ -226,7 +244,7 @@ export async function startGame(sessionId: string, gameId: string) {
   }
 
   // 4. Update session status to 'running' and set active_game_id
-  const { data: session, error: fetchSessionError } = await supabase
+  const { data: session, error: fetchSessionError } = await dbClient
     .from('sessions')
     .select('status, active_game_id') // Select active_game_id too
     .eq('id', sessionId)
@@ -239,7 +257,7 @@ export async function startGame(sessionId: string, gameId: string) {
 
   // Update only if status is not already running or active_game_id is different
   if (session.status !== 'running' || session.active_game_id !== gameId) {
-    const { error: updateSessionError } = await supabase
+    const { error: updateSessionError } = await dbClient
       .from('sessions')
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore

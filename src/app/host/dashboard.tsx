@@ -131,24 +131,32 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                               
                               <div>
                                 {isPlayable ? (
-                                  <form action={async () => { await startGame(session.id, game.id); }}>
-                                    <Button 
-                                      type="submit" 
-                                      size="sm" 
-                                      variant={isInProgress ? "primary" : isCompleted ? "outline" : "secondary"}
-                                      className={
-                                        isInProgress ? "bg-green-600 hover:bg-green-700 shadow-green-900/20" : 
-                                        isCompleted ? "border-yellow-600 text-yellow-500 hover:bg-yellow-900/20" : ""
-                                      }
-                                      onClick={(e) => {
-                                          if (isCompleted && !confirm("⚠️ Are you sure you want to RE-OPEN this finished game?\n\nThis will resume calling and allow you to correct mistakes.")) {
-                                              e.preventDefault();
-                                          }
-                                      }}
-                                    >
-                                      {isInProgress ? 'Resume' : isCompleted ? 'Re-open' : 'Start'}
-                                    </Button>
-                                  </form>
+                                  <Button 
+                                    size="sm" 
+                                    variant={isInProgress ? "primary" : isCompleted ? "outline" : "secondary"}
+                                    className={
+                                      isInProgress ? "bg-green-600 hover:bg-green-700 shadow-green-900/20" : 
+                                      isCompleted ? "border-yellow-600 text-yellow-500 hover:bg-yellow-900/20" : ""
+                                    }
+                                    onClick={async (e) => {
+                                        e.preventDefault();
+                                        if (isCompleted && !confirm("⚠️ Are you sure you want to RE-OPEN this finished game?\n\nThis will resume calling and allow you to correct mistakes.")) {
+                                            return;
+                                        }
+                                        
+                                        try {
+                                            const result = await startGame(session.id, game.id);
+                                            if (result?.error) {
+                                                alert("Error starting game: " + result.error);
+                                            }
+                                        } catch (err) {
+                                            console.error(err);
+                                            alert("An unexpected error occurred.");
+                                        }
+                                    }}
+                                  >
+                                    {isInProgress ? 'Resume' : isCompleted ? 'Re-open' : 'Start'}
+                                  </Button>
                                 ) : (
                                   <Button 
                                     size="sm" 
