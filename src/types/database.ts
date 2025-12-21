@@ -34,6 +34,14 @@ export interface Database {
           role?: UserRole
           created_at?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: 'profiles_id_fkey'
+            columns: ['id']
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+        ]
       }
       sessions: {
         Row: {
@@ -69,6 +77,20 @@ export interface Database {
           active_game_id?: string | null // New
           created_at?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: 'sessions_created_by_fkey'
+            columns: ['created_by']
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'sessions_active_game_id_fkey'
+            columns: ['active_game_id']
+            referencedRelation: 'games'
+            referencedColumns: ['id']
+          },
+        ]
       }
       games: {
         Row: {
@@ -110,6 +132,20 @@ export interface Database {
           snowball_pot_id?: string | null
           created_at?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: 'games_session_id_fkey'
+            columns: ['session_id']
+            referencedRelation: 'sessions'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'games_snowball_pot_id_fkey'
+            columns: ['snowball_pot_id']
+            referencedRelation: 'snowball_pots'
+            referencedColumns: ['id']
+          },
+        ]
       }
       game_states: {
         Row: {
@@ -175,6 +211,83 @@ export interface Database {
           last_call_at?: string | null
           updated_at?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: 'game_states_game_id_fkey'
+            columns: ['game_id']
+            referencedRelation: 'games'
+            referencedColumns: ['id']
+            isOneToOne: true
+          },
+          {
+            foreignKeyName: 'game_states_controlling_host_id_fkey'
+            columns: ['controlling_host_id']
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      game_states_public: {
+        Row: {
+          game_id: string
+          called_numbers: number[]
+          numbers_called_count: number
+          current_stage_index: number
+          status: GameStatus
+          call_delay_seconds: number
+          on_break: boolean
+          paused_for_validation: boolean
+          display_win_type: string | null
+          display_win_text: string | null
+          display_winner_name: string | null
+          started_at: string | null
+          ended_at: string | null
+          last_call_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          game_id: string
+          called_numbers?: number[]
+          numbers_called_count?: number
+          current_stage_index?: number
+          status?: GameStatus
+          call_delay_seconds?: number
+          on_break?: boolean
+          paused_for_validation?: boolean
+          display_win_type?: string | null
+          display_win_text?: string | null
+          display_winner_name?: string | null
+          started_at?: string | null
+          ended_at?: string | null
+          last_call_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          game_id?: string
+          called_numbers?: number[]
+          numbers_called_count?: number
+          current_stage_index?: number
+          status?: GameStatus
+          call_delay_seconds?: number
+          on_break?: boolean
+          paused_for_validation?: boolean
+          display_win_type?: string | null
+          display_win_text?: string | null
+          display_winner_name?: string | null
+          started_at?: string | null
+          ended_at?: string | null
+          last_call_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'game_states_public_game_id_fkey'
+            columns: ['game_id']
+            referencedRelation: 'games'
+            referencedColumns: ['id']
+            isOneToOne: true
+          },
+        ]
       }
       winners: {
         Row: {
@@ -219,6 +332,20 @@ export interface Database {
           void_reason?: string | null
           created_at?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: 'winners_session_id_fkey'
+            columns: ['session_id']
+            referencedRelation: 'sessions'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'winners_game_id_fkey'
+            columns: ['game_id']
+            referencedRelation: 'games'
+            referencedColumns: ['id']
+          },
+        ]
       }
       snowball_pots: {
         Row: {
@@ -257,6 +384,7 @@ export interface Database {
           last_awarded_at?: string | null
           created_at?: string
         }
+        Relationships: []
       }
       snowball_pot_history: {
         Row: {
@@ -292,6 +420,20 @@ export interface Database {
           changed_by?: string | null
           created_at?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: 'snowball_pot_history_snowball_pot_id_fkey'
+            columns: ['snowball_pot_id']
+            referencedRelation: 'snowball_pots'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'snowball_pot_history_changed_by_fkey'
+            columns: ['changed_by']
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
     }
     Views: {

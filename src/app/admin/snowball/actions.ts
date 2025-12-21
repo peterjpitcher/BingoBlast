@@ -3,8 +3,9 @@
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { Database, UserRole } from '@/types/database'
+import type { ActionResult } from '@/types/actions'
 
 const SnowballPotSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -16,7 +17,13 @@ const SnowballPotSchema = z.object({
   current_jackpot_amount: z.coerce.number().min(0),
 })
 
-async function authorizeAdmin(supabase: SupabaseClient<Database>) {
+type AdminAuthResult =
+  | { authorized: false; error: string }
+  | { authorized: true; user: User; role: UserRole }
+
+async function authorizeAdmin(
+  supabase: SupabaseClient<Database>
+): Promise<AdminAuthResult> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
     return { authorized: false, error: "Not authenticated" }
@@ -35,10 +42,10 @@ async function authorizeAdmin(supabase: SupabaseClient<Database>) {
   return { authorized: true, user, role: profile.role }
 }
 
-export async function createSnowballPot(_prevState: unknown, formData: FormData) {
+export async function createSnowballPot(_prevState: unknown, formData: FormData): Promise<ActionResult> {
   const supabase = await createClient()
   const authResult = await authorizeAdmin(supabase)
-  if (!authResult.authorized) return { error: authResult.error }
+  if (!authResult.authorized) return { success: false, error: authResult.error }
   
   const parsed = SnowballPotSchema.safeParse({
     name: formData.get('name'),
@@ -51,27 +58,25 @@ export async function createSnowballPot(_prevState: unknown, formData: FormData)
   })
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0].message }
+    return { success: false, error: parsed.error.issues[0].message }
   }
 
   const { error } = await supabase
     .from('snowball_pots')
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     .insert(parsed.data)
 
   if (error) {
-    return { error: error.message }
+    return { success: false, error: error.message }
   }
 
   revalidatePath('/admin/snowball')
   return { success: true }
 }
 
-export async function updateSnowballPot(id: string, _prevState: unknown, formData: FormData) {
+export async function updateSnowballPot(id: string, _prevState: unknown, formData: FormData): Promise<ActionResult> {
     const supabase = await createClient()
     const authResult = await authorizeAdmin(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    if (!authResult.authorized) return { success: false, error: authResult.error }
     
     const parsed = SnowballPotSchema.safeParse({
         name: formData.get('name'),
@@ -84,7 +89,7 @@ export async function updateSnowballPot(id: string, _prevState: unknown, formDat
     })
   
     if (!parsed.success) {
-      return { error: parsed.error.issues[0].message }
+      return { success: false, error: parsed.error.issues[0].message }
     }
   
     // Fetch old pot data for audit trail
@@ -95,23 +100,19 @@ export async function updateSnowballPot(id: string, _prevState: unknown, formDat
         .single<{ current_max_calls: number; current_jackpot_amount: number }>()
 
     if (fetchOldPotError || !oldPot) {
-        return { error: fetchOldPotError?.message || "Pot not found for audit." }
+        return { success: false, error: fetchOldPotError?.message || "Pot not found for audit." }
     }
     
     const { error } = await supabase
       .from('snowball_pots')
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
       .update(parsed.data)
       .eq('id', id)
   
     if (error) {
-      return { error: error.message }
+      return { success: false, error: error.message }
     }
 
     // Insert audit record
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     const { error: auditError } = await supabase.from('snowball_pot_history').insert({
         snowball_pot_id: id,
         change_type: 'manual_update',
@@ -130,10 +131,10 @@ export async function updateSnowballPot(id: string, _prevState: unknown, formDat
     return { success: true }
 }
 
-export async function deleteSnowballPot(id: string) {
+export async function deleteSnowballPot(id: string): Promise<ActionResult> {
     const supabase = await createClient()
     const authResult = await authorizeAdmin(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    if (!authResult.authorized) return { success: false, error: authResult.error }
 
     // Check if linked to any in_progress games
     const { data: activeGames } = await supabase
@@ -143,7 +144,7 @@ export async function deleteSnowballPot(id: string) {
         .eq('game_states.status', 'in_progress')
     
     if (activeGames && activeGames.length > 0) {
-        return { error: "Cannot delete pot: It is currently in use by an active game." }
+        return { success: false, error: "Cannot delete pot: It is currently in use by an active game." }
     }
     
     const { error } = await supabase
@@ -152,17 +153,17 @@ export async function deleteSnowballPot(id: string) {
       .eq('id', id)
   
     if (error) {
-      return { error: error.message }
+      return { success: false, error: error.message }
     }
   
     revalidatePath('/admin/snowball')
     return { success: true }
 }
 
-export async function resetSnowballPot(id: string) {
+export async function resetSnowballPot(id: string): Promise<ActionResult> {
     const supabase = await createClient()
     const authResult = await authorizeAdmin(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    if (!authResult.authorized) return { success: false, error: authResult.error }
 
     // Check if linked to any in_progress games
     const { data: activeGames } = await supabase
@@ -172,7 +173,7 @@ export async function resetSnowballPot(id: string) {
         .eq('game_states.status', 'in_progress')
     
     if (activeGames && activeGames.length > 0) {
-        return { error: "Cannot reset pot: It is currently in use by an active game." }
+        return { success: false, error: "Cannot reset pot: It is currently in use by an active game." }
     }
 
     // Fetch old pot data for audit trail
@@ -183,7 +184,7 @@ export async function resetSnowballPot(id: string) {
         .single<{ base_max_calls: number; base_jackpot_amount: number, current_max_calls: number; current_jackpot_amount: number }>()
     
     if (fetchOldPotError || !oldPot) {
-        return { error: fetchOldPotError?.message || "Pot not found for audit." }
+        return { success: false, error: fetchOldPotError?.message || "Pot not found for audit." }
     }
 
     // Fetch base values
@@ -194,13 +195,11 @@ export async function resetSnowballPot(id: string) {
         .single<{ base_max_calls: number; base_jackpot_amount: number }>()
     
     if (fetchError || !pot) {
-        return { error: "Pot not found" }
+        return { success: false, error: "Pot not found" }
     }
 
     const { error } = await supabase
         .from('snowball_pots')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
         .update({
             current_max_calls: pot.base_max_calls,
             current_jackpot_amount: pot.base_jackpot_amount,
@@ -209,12 +208,10 @@ export async function resetSnowballPot(id: string) {
         .eq('id', id)
 
     if (error) {
-        return { error: error.message }
+        return { success: false, error: error.message }
     }
 
     // Insert audit record
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     const { error: auditError } = await supabase.from('snowball_pot_history').insert({
         snowball_pot_id: id,
         change_type: 'manual_reset',

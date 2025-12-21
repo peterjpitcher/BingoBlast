@@ -3,13 +3,20 @@
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
 import type { Database, SessionStatus, UserRole } from '@/types/database'
-import { SupabaseClient } from '@supabase/supabase-js'
+import type { ActionResult } from '@/types/actions'
+import type { SupabaseClient, User } from '@supabase/supabase-js'
 
 type SessionInsert = Database['public']['Tables']['sessions']['Insert']
 type GameRow = Database['public']['Tables']['games']['Row']
 type GameInsert = Database['public']['Tables']['games']['Insert']
 
-async function authorizeAdmin(supabase: SupabaseClient<Database>) {
+type AdminAuthResult =
+  | { authorized: false; error: string }
+  | { authorized: true; user: User; role: UserRole }
+
+async function authorizeAdmin(
+  supabase: SupabaseClient<Database>
+): Promise<AdminAuthResult> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
     return { authorized: false, error: "Not authenticated" }
@@ -28,16 +35,16 @@ async function authorizeAdmin(supabase: SupabaseClient<Database>) {
   return { authorized: true, user, role: profile.role }
 }
 
-export async function createSession(_prevState: unknown, formData: FormData) {
+export async function createSession(_prevState: unknown, formData: FormData): Promise<ActionResult> {
   const supabase = await createClient()
   const authResult = await authorizeAdmin(supabase)
-  if (!authResult.authorized) return { error: authResult.error }
+  if (!authResult.authorized) return { success: false, error: authResult.error }
 
   const name = formData.get('name') as string
   const notes = formData.get('notes') as string
   const is_test_session = formData.get('is_test_session') === 'on'
 
-  if (!name) return { error: 'Session name is required' }
+  if (!name) return { success: false, error: 'Session name is required' }
 
   const newSession: SessionInsert = {
     name,
@@ -47,26 +54,22 @@ export async function createSession(_prevState: unknown, formData: FormData) {
     status: 'draft',
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore - Supabase types fail to infer with local Database definition
   const { error } = await supabase
     .from('sessions')
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    .insert<SessionInsert>(newSession)
+    .insert(newSession)
 
   if (error) {
-    return { error: error.message }
+    return { success: false, error: error.message }
   }
 
   revalidatePath('/admin')
   return { success: true, redirectTo: '/admin' }
 }
 
-export async function deleteSession(sessionId: string) {
+export async function deleteSession(sessionId: string): Promise<ActionResult> {
   const supabase = await createClient()
   const authResult = await authorizeAdmin(supabase)
-  if (!authResult.authorized) return { error: authResult.error }
+  if (!authResult.authorized) return { success: false, error: authResult.error }
 
   // Check if session is running
   const { data: session } = await supabase
@@ -76,7 +79,7 @@ export async function deleteSession(sessionId: string) {
     .single<{ status: SessionStatus }>()
 
   if (session?.status === 'running') {
-    return { error: "Cannot delete a running session. Please end the session first." }
+    return { success: false, error: "Cannot delete a running session. Please end the session first." }
   }
 
   const { error } = await supabase
@@ -85,17 +88,17 @@ export async function deleteSession(sessionId: string) {
     .eq('id', sessionId)
 
   if (error) {
-    return { error: error.message }
+    return { success: false, error: error.message }
   }
 
   revalidatePath('/admin')
   return { success: true, redirectTo: '/admin' }
 }
 
-export async function duplicateSession(sessionId: string) {
+export async function duplicateSession(sessionId: string): Promise<ActionResult> {
   const supabase = await createClient()
   const authResult = await authorizeAdmin(supabase)
-  if (!authResult.authorized) return { error: authResult.error }
+  if (!authResult.authorized) return { success: false, error: authResult.error }
 
   // 1. Fetch original session
   const { data: originalSession, error: sessionError } = await supabase
@@ -105,17 +108,13 @@ export async function duplicateSession(sessionId: string) {
     .single<Database['public']['Tables']['sessions']['Row']>()
 
   if (sessionError || !originalSession) {
-    return { error: "Session not found" }
+    return { success: false, error: "Session not found" }
   }
 
   // 2. Create new session
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore - Supabase types fail to infer with local Database definition
   const { data: newSessionData, error: createError } = await supabase
     .from('sessions')
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    .insert<SessionInsert>({
+    .insert({
       name: `${originalSession.name} (Copy)`,
       start_date: new Date().toISOString().split('T')[0],
       notes: originalSession.notes,
@@ -129,7 +128,7 @@ export async function duplicateSession(sessionId: string) {
   const newSession = newSessionData as Database['public']['Tables']['sessions']['Row'] | null
 
   if (createError || !newSession) {
-    return { error: createError?.message ?? 'Session not created' }
+    return { success: false, error: createError?.message ?? 'Session not created' }
   }
 
   // 3. Fetch games from original session
@@ -153,12 +152,10 @@ export async function duplicateSession(sessionId: string) {
 
     const { error: gamesInsertError } = await supabase
       .from('games')
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
       .insert(newGames)
 
     if (gamesInsertError) {
-      return { error: "Session created but games failed to copy: " + gamesInsertError.message }
+      return { success: false, error: "Session created but games failed to copy: " + gamesInsertError.message }
     }
   }
 

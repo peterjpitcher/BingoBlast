@@ -2,12 +2,19 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
 import { GameStatus, WinStage, UserRole } from '@/types/database'
 import type { Database } from '@/types/database'
-import { SupabaseClient, createClient as createSupabaseClient } from '@supabase/supabase-js'
+import type { ActionResult } from '@/types/actions'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient, User } from '@supabase/supabase-js'
 
-async function authorizeHost(supabase: SupabaseClient<Database>) {
+type HostAuthResult =
+  | { authorized: false; error: string }
+  | { authorized: true; user: User; role: UserRole }
+
+async function authorizeHost(
+  supabase: SupabaseClient<Database>
+): Promise<HostAuthResult> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
     return { authorized: false, error: "Not authenticated" };
@@ -24,6 +31,32 @@ async function authorizeHost(supabase: SupabaseClient<Database>) {
   }
   
   return { authorized: true, user, role: profile.role };
+}
+
+async function requireController(
+  supabase: SupabaseClient<Database>,
+  gameId: string
+): Promise<HostAuthResult> {
+  const authResult = await authorizeHost(supabase)
+  if (!authResult.authorized) {
+    return { authorized: false, error: authResult.error }
+  }
+
+  const { data: gameState, error: gameStateError } = await supabase
+    .from('game_states')
+    .select('controlling_host_id')
+    .eq('game_id', gameId)
+    .single<Pick<Database['public']['Tables']['game_states']['Row'], 'controlling_host_id'>>()
+
+  if (gameStateError || !gameState) {
+    return { authorized: false, error: gameStateError?.message || "Game state not found." }
+  }
+
+  if (!gameState.controlling_host_id || gameState.controlling_host_id !== authResult.user!.id) {
+    return { authorized: false, error: "Another host is currently controlling this game." }
+  }
+
+  return { authorized: true, user: authResult.user!, role: authResult.role }
 }
 
 function getServiceRoleClient() {
@@ -99,29 +132,28 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
     if (jackpotWon) {
         // Reset Pot (if needed)
          if (potData.current_jackpot_amount > potData.base_jackpot_amount || potData.current_max_calls > potData.base_max_calls) {
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
-            const { error: potError } = await supabase.from('snowball_pots').update({
+            const resetUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
                 current_max_calls: potData.base_max_calls,
                 current_jackpot_amount: potData.base_jackpot_amount,
                 last_awarded_at: new Date().toISOString()
-            }).eq('id', potData.id);
+            };
+            const { error: potError } = await supabase
+              .from('snowball_pots')
+              .update(resetUpdate)
+              .eq('id', potData.id);
 
              if (potError) {
                 console.error("Failed to reset snowball pot:", potError);
             } else {
-                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-                // @ts-ignore
-                await supabase.from('snowball_pot_history').insert({
-                    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-                    // @ts-ignore
+                const jackpotHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
                     snowball_pot_id: potData.id,
                     change_type: 'jackpot_won',
                     old_val_max: potData.current_max_calls,
                     new_val_max: potData.base_max_calls,
                     old_val_jackpot: potData.current_jackpot_amount,
                     new_val_jackpot: potData.base_jackpot_amount,
-                });
+                };
+                await supabase.from('snowball_pot_history').insert(jackpotHistory);
             }
          }
     } else {
@@ -129,37 +161,36 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
         const newMaxCalls = potData.current_max_calls + potData.calls_increment;
         const newJackpot = Number(potData.current_jackpot_amount) + Number(potData.jackpot_increment);
 
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        const { error: potError } = await supabase.from('snowball_pots').update({
+        const rolloverUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
             current_max_calls: newMaxCalls,
             current_jackpot_amount: newJackpot
-        }).eq('id', potData.id);
+        };
+        const { error: potError } = await supabase
+          .from('snowball_pots')
+          .update(rolloverUpdate)
+          .eq('id', potData.id);
 
         if (potError) {
              console.error("Failed to rollover snowball pot:", potError);
         } else {
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
-            await supabase.from('snowball_pot_history').insert({
-                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-                // @ts-ignore
+            const rolloverHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
                 snowball_pot_id: potData.id,
                 change_type: 'rollover',
                 old_val_max: potData.current_max_calls,
                 new_val_max: newMaxCalls,
                 old_val_jackpot: potData.current_jackpot_amount,
                 new_val_jackpot: newJackpot,
-            });
+            };
+            await supabase.from('snowball_pot_history').insert(rolloverHistory);
         }
     }
 }
 
-export async function startGame(sessionId: string, gameId: string) {
+export async function startGame(sessionId: string, gameId: string): Promise<ActionResult> {
   try {
       const supabase = await createClient()
       const authResult = await authorizeHost(supabase)
-      if (!authResult.authorized) return { error: authResult.error }
+      if (!authResult.authorized) return { success: false, error: authResult.error }
 
       const dbClient = getServiceRoleClient() || supabase;
 
@@ -172,7 +203,7 @@ export async function startGame(sessionId: string, gameId: string) {
 
       if (fetchGameStateError && fetchGameStateError.code !== 'PGRST116') {
         console.error("Error fetching existing game state:", fetchGameStateError);
-        return { error: fetchGameStateError.message };
+        return { success: false, error: fetchGameStateError.message };
       }
 
       // 2. Generate new sequence if not already in_progress or completed
@@ -219,19 +250,19 @@ export async function startGame(sessionId: string, gameId: string) {
           controller_last_seen_at: new Date().toISOString(),
       };
 
+      const upsertData: Database['public']['Tables']['game_states']['Insert'] = {
+        game_id: gameId,
+        number_sequence: sequence,
+        ...stateToUpsert,
+      };
+
       const { error: upsertError } = await dbClient
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .upsert({
-          game_id: gameId,
-          number_sequence: sequence,
-          ...stateToUpsert,
-        }, { onConflict: 'game_id' }); 
+        .upsert(upsertData, { onConflict: 'game_id' }); 
 
       if (upsertError) {
         console.error("Error upserting game state:", upsertError);
-        return { error: upsertError.message };
+        return { success: false, error: upsertError.message };
       }
 
       // 4. Update session status to 'running' and set active_game_id
@@ -243,20 +274,22 @@ export async function startGame(sessionId: string, gameId: string) {
 
       if (fetchSessionError || !session) {
         console.error("Error fetching session to update status:", fetchSessionError);
-        return { error: fetchSessionError?.message || "Session not found" };
+        return { success: false, error: fetchSessionError?.message || "Session not found" };
       }
 
       if (session.status !== 'running' || session.active_game_id !== gameId) {
+        const sessionUpdate: Database['public']['Tables']['sessions']['Update'] = {
+          status: 'running',
+          active_game_id: gameId,
+        };
         const { error: updateSessionError } = await dbClient
           .from('sessions')
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-ignore
-          .update({ status: 'running', active_game_id: gameId })
+          .update(sessionUpdate)
           .eq('id', sessionId)
         
         if (updateSessionError) {
           console.error("Error updating session status and active_game_id:", updateSessionError);
-          return { error: updateSessionError.message };
+          return { success: false, error: updateSessionError.message };
         }
       }
 
@@ -265,16 +298,16 @@ export async function startGame(sessionId: string, gameId: string) {
 
   } catch (e) {
       console.error("Server Error in startGame:", e);
-      return { error: "Server Error: " + (e instanceof Error ? e.message : String(e)) };
+      return { success: false, error: "Server Error: " + (e instanceof Error ? e.message : String(e)) };
   }
 
-  redirect(`/host/${sessionId}/${gameId}`);
+  return { success: true, redirectTo: `/host/${sessionId}/${gameId}` };
 }
 
-export async function takeControl(gameId: string) {
+export async function takeControl(gameId: string): Promise<ActionResult> {
     const supabase = await createClient();
     const authResult = await authorizeHost(supabase);
-    if (!authResult.authorized) return { error: authResult.error };
+    if (!authResult.authorized) return { success: false, error: authResult.error };
 
     // Check current controller
     const { data: currentState, error: fetchError } = await supabase
@@ -283,7 +316,7 @@ export async function takeControl(gameId: string) {
         .eq('game_id', gameId)
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'controlling_host_id' | 'controller_last_seen_at'>>();
 
-    if (fetchError) return { error: fetchError.message };
+    if (fetchError) return { success: false, error: fetchError.message };
 
     const now = new Date();
     const lastSeen = currentState?.controller_last_seen_at ? new Date(currentState.controller_last_seen_at) : null;
@@ -294,48 +327,48 @@ export async function takeControl(gameId: string) {
         currentState.controlling_host_id !== authResult.user!.id && 
         lastSeen && 
         (now.getTime() - lastSeen.getTime() < heartbeatThresholdMs)) {
-            return { error: "Another host is currently controlling this game." };
+            return { success: false, error: "Another host is currently controlling this game." };
     }
 
     // Take control
+    const controlUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        controlling_host_id: authResult.user!.id,
+        controller_last_seen_at: now.toISOString()
+    };
     const { error: updateError } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            controlling_host_id: authResult.user!.id,
-            controller_last_seen_at: now.toISOString()
-        })
+        .update(controlUpdate)
         .eq('game_id', gameId);
 
-    if (updateError) return { error: updateError.message };
+    if (updateError) return { success: false, error: updateError.message };
 
     revalidatePath(`/host/${gameId}`);
     return { success: true };
 }
 
-export async function sendHeartbeat(gameId: string) {
+export async function sendHeartbeat(gameId: string): Promise<ActionResult> {
     const supabase = await createClient();
-    const authResult = await authorizeHost(supabase);
-    if (!authResult.authorized) return { error: authResult.error };
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
+    const heartbeatUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        controller_last_seen_at: new Date().toISOString()
+    };
     const { error } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            controller_last_seen_at: new Date().toISOString()
-        })
+        .update(heartbeatUpdate)
         .eq('game_id', gameId)
-        .eq('controlling_host_id', authResult.user!.id); // Only update if WE are the controller
+        .eq('controlling_host_id', controlResult.user!.id); // Only update if WE are the controller
 
-    if (error) return { error: error.message };
+    if (error) return { success: false, error: error.message };
     
     return { success: true };
 }
 
-export async function getCurrentGameState(gameId: string) {
+export async function getCurrentGameState(gameId: string): Promise<ActionResult<Database['public']['Tables']['game_states']['Row']>> {
     const supabase = await createClient();
+    const authResult = await authorizeHost(supabase);
+    if (!authResult.authorized) return { success: false, error: authResult.error };
 
     const { data: gameState, error } = await supabase
         .from('game_states')
@@ -345,21 +378,21 @@ export async function getCurrentGameState(gameId: string) {
 
     if (error && error.code !== 'PGRST116') { // PGRST116 means 'no rows found'
         console.error("Error fetching game state:", error.message);
-        return { error: error.message };
+        return { success: false, error: error.message };
     }
 
     // If no game state found, return null or a default
     if (!gameState) {
-        return { error: "No game state found for this game." };
+        return { success: false, error: "No game state found for this game." };
     }
 
-    return { data: gameState };
+    return { success: true, data: gameState };
 }
 
-export async function callNextNumber(gameId: string) {
+export async function callNextNumber(gameId: string): Promise<ActionResult<{ nextNumber: number }>> {
   const supabase = await createClient()
-  const authResult = await authorizeHost(supabase)
-  if (!authResult.authorized) return { error: authResult.error }
+  const controlResult = await requireController(supabase, gameId)
+  if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
   const { data: gameState, error: fetchError } = await supabase
     .from('game_states')
@@ -369,45 +402,45 @@ export async function callNextNumber(gameId: string) {
 
   if (fetchError || !gameState) {
     console.error("Error fetching game state for next number:", fetchError?.message);
-    return { error: fetchError?.message || "Game state not found." };
+    return { success: false, error: fetchError?.message || "Game state not found." };
   }
 
   if (gameState.status !== 'in_progress') {
-    return { error: "Game is not in progress." };
+    return { success: false, error: "Game is not in progress." };
   }
 
   if (!gameState.number_sequence || gameState.numbers_called_count >= gameState.number_sequence.length) {
-    return { error: "No more numbers to call." };
+    return { success: false, error: "No more numbers to call." };
   }
 
   const nextNumber = gameState.number_sequence[gameState.numbers_called_count];
   const newCalledNumbers = [...(gameState.called_numbers as number[]), nextNumber];
   const newNumbersCalledCount = gameState.numbers_called_count + 1;
 
+  const callUpdate: Database['public']['Tables']['game_states']['Update'] = {
+    called_numbers: newCalledNumbers,
+    numbers_called_count: newNumbersCalledCount,
+    last_call_at: new Date().toISOString(),
+  };
+
   const { error: updateError } = await supabase
     .from('game_states')
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    .update({
-      called_numbers: newCalledNumbers,
-      numbers_called_count: newNumbersCalledCount,
-      last_call_at: new Date().toISOString(),
-    })
+    .update(callUpdate)
     .eq('game_id', gameId);
 
   if (updateError) {
     console.error("Error updating game state after call:", updateError.message);
-    return { error: updateError.message };
+    return { success: false, error: updateError.message };
   }
 
   revalidatePath(`/host/${gameId}`); // Revalidate the game control page
-  return { success: true, nextNumber };
+  return { success: true, data: { nextNumber } };
 }
 
-export async function toggleBreak(gameId: string, onBreak: boolean) {
+export async function toggleBreak(gameId: string, onBreak: boolean): Promise<ActionResult> {
     const supabase = await createClient()
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
@@ -417,86 +450,83 @@ export async function toggleBreak(gameId: string, onBreak: boolean) {
     
     if (fetchError || !gameState) {
         console.error("Error fetching game state for toggleBreak:", fetchError?.message);
-        return { error: fetchError?.message || "Game state not found." };
+        return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
     if (gameState.status !== 'in_progress') {
-        return { error: "Cannot toggle break for a game not in progress." };
+        return { success: false, error: "Cannot toggle break for a game not in progress." };
     }
 
+    const breakUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        on_break: onBreak,
+        last_call_at: new Date().toISOString(), // Update timestamp to reflect activity
+        paused_for_validation: false, // Ensure we unpause if coming from validation
+        display_win_type: null, // Clear any win display so "Break" shows
+        display_win_text: null,
+        display_winner_name: null,
+    };
     const { error: updateError } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            on_break: onBreak,
-            last_call_at: new Date().toISOString(), // Update timestamp to reflect activity
-            paused_for_validation: false, // Ensure we unpause if coming from validation
-            display_win_type: null, // Clear any win display so "Break" shows
-            display_win_text: null,
-            display_winner_name: null,
-        })
+        .update(breakUpdate)
         .eq('game_id', gameId);
 
     if (updateError) {
         console.error("Error updating break status:", updateError.message);
-        return { error: updateError.message };
+        return { success: false, error: updateError.message };
     }
     revalidatePath(`/host/${gameId}`);
     return { success: true };
 }
 
-export async function pauseForValidation(gameId: string) {
+export async function pauseForValidation(gameId: string): Promise<ActionResult> {
     const supabase = await createClient()
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
     
+    const validationUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        paused_for_validation: true,
+        display_win_type: null, // Clear old win display if any
+    };
     const { error } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            paused_for_validation: true,
-            display_win_type: null, // Clear old win display if any
-        })
+        .update(validationUpdate)
         .eq('game_id', gameId);
 
     if (error) {
         console.error("Error pausing for validation:", error.message);
-        return { error: error.message };
+        return { success: false, error: error.message };
     }
     
     revalidatePath(`/host/${gameId}`);
     return { success: true };
 }
 
-export async function resumeGame(gameId: string) {
+export async function resumeGame(gameId: string): Promise<ActionResult> {
     const supabase = await createClient()
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
     
+    const resumeUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        paused_for_validation: false,
+    };
     const { error } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            paused_for_validation: false,
-        })
+        .update(resumeUpdate)
         .eq('game_id', gameId);
 
     if (error) {
         console.error("Error resuming game:", error.message);
-        return { error: error.message };
+        return { success: false, error: error.message };
     }
     
     revalidatePath(`/host/${gameId}`);
     return { success: true };
 }
 
-export async function endGame(gameId: string, sessionId: string) {
+export async function endGame(gameId: string, sessionId: string): Promise<ActionResult> {
     const supabase = await createClient()
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
@@ -506,31 +536,28 @@ export async function endGame(gameId: string, sessionId: string) {
     
     if (fetchError || !gameState) {
         console.error("Error fetching game state for endGame:", fetchError?.message);
-        return { error: fetchError?.message || "Game state not found." };
+        return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
     if (gameState.status !== 'in_progress') {
-        return { error: "Game is not in progress." };
+        return { success: false, error: "Game is not in progress." };
     }
 
+    const endUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+    };
     const { error: updateError } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            status: 'completed',
-            ended_at: new Date().toISOString(),
-        })
+        .update(endUpdate)
         .eq('game_id', gameId);
 
     if (updateError) {
         console.error("Error updating game status to completed:", updateError.message);
-        return { error: updateError.message };
+        return { success: false, error: updateError.message };
     }
 
     // Use the shared helper for Snowball Logic
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     await handleSnowballPotUpdate(supabase, sessionId, gameId);
 
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the specific game page
@@ -538,10 +565,10 @@ export async function endGame(gameId: string, sessionId: string) {
     return { success: true };
 }
 
-export async function validateClaim(gameId: string, claimedNumbers: number[]) {
+export async function validateClaim(gameId: string, claimedNumbers: number[]): Promise<ActionResult<{ valid: boolean; invalidNumbers?: number[] }>> {
     const supabase = await createClient()
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
@@ -550,7 +577,7 @@ export async function validateClaim(gameId: string, claimedNumbers: number[]) {
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'called_numbers' | 'current_stage_index'>>();
 
     if (fetchError || !gameState) {
-        return { error: fetchError?.message || "Game state not found." };
+        return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
     const calledNumbersSet = new Set(gameState.called_numbers as number[]);
@@ -563,14 +590,16 @@ export async function validateClaim(gameId: string, claimedNumbers: number[]) {
     }
 
     if (invalidNumbers.length > 0) {
-        return { valid: false, invalidNumbers };
+        return { success: true, data: { valid: false, invalidNumbers } };
     } else {
-        return { valid: true };
+        return { success: true, data: { valid: true } };
     }
 }
 
-export async function announceWin(gameId: string, stage: WinStage | 'snowball') {
+export async function announceWin(gameId: string, stage: WinStage | 'snowball'): Promise<ActionResult> {
     const supabase = await createClient();
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     let displayWinText: string;
     let displayWinType: string;
@@ -598,29 +627,30 @@ export async function announceWin(gameId: string, stage: WinStage | 'snowball') 
         }
     }
 
+    const winUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        display_win_type: displayWinType,
+        display_win_text: displayWinText,
+        // Keep paused_for_validation true or ensure it is treated as such
+        paused_for_validation: true 
+    };
     const { error } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            display_win_type: displayWinType,
-            display_win_text: displayWinText,
-            // Keep paused_for_validation true or ensure it is treated as such
-            paused_for_validation: true 
-        })
+        .update(winUpdate)
         .eq('game_id', gameId);
 
     if (error) {
         console.error("Error announcing win:", error.message);
-        return { error: error.message };
+        return { success: false, error: error.message };
     }
     
     revalidatePath(`/host/${gameId}`);
     return { success: true };
 }
 
-export async function advanceToNextStage(gameId: string) {
+export async function advanceToNextStage(gameId: string): Promise<ActionResult> {
     const supabase = await createClient();
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     const { data: currentGameState, error: fetchError } = await supabase
         .from('game_states')
@@ -629,7 +659,7 @@ export async function advanceToNextStage(gameId: string) {
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'current_stage_index'>>();
 
     if (fetchError || !currentGameState) {
-         return { error: fetchError?.message || "Game state not found." };
+         return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
     const { data: gameDetails } = await supabase
@@ -639,7 +669,7 @@ export async function advanceToNextStage(gameId: string) {
         .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'type' | 'snowball_pot_id' | 'stage_sequence'>>();
 
     if (!gameDetails) {
-        return { error: "Game details not found." };
+        return { success: false, error: "Game details not found." };
     }
 
     let newStageIndex = currentGameState.current_stage_index + 1;
@@ -650,28 +680,25 @@ export async function advanceToNextStage(gameId: string) {
         newGameStatus = 'completed';
     }
 
+    const stageUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        current_stage_index: newStageIndex,
+        status: newGameStatus,
+        paused_for_validation: false,
+        display_win_type: null,
+        display_win_text: null,
+        display_winner_name: null,
+    };
     const { error: updateError } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            current_stage_index: newStageIndex,
-            status: newGameStatus,
-            paused_for_validation: false,
-            display_win_type: null,
-            display_win_text: null,
-            display_winner_name: null,
-        })
+        .update(stageUpdate)
         .eq('game_id', gameId);
 
     if (updateError) {
-        return { error: updateError.message };
+        return { success: false, error: updateError.message };
     }
 
     // If the game is now completed, check Snowball logic (Rollover vs Reset)
     if (newGameStatus === 'completed') {
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
         await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
     } else {
         // If NOT completed, but we just finished a stage, do we check for Jackpot win reset?
@@ -709,10 +736,10 @@ export async function recordWinner(
     callCountAtWin: number,
     // isSnowballJackpot: boolean, // Removed, calculated server-side
     prizeGiven: boolean = false
-) {
+): Promise<ActionResult> {
     const supabase = await createClient();
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     // Re-calculate isSnowballJackpot on the server for security
     let actualIsSnowballJackpot = false;
@@ -745,24 +772,23 @@ export async function recordWinner(
     }
 
     // Insert winner record
+    const winnerInsert: Database['public']['Tables']['winners']['Insert'] = {
+        session_id: sessionId,
+        game_id: gameId,
+        stage,
+        winner_name: winnerName,
+        prize_description: prizeDescription,
+        call_count_at_win: callCountAtWin,
+        is_snowball_jackpot: actualIsSnowballJackpot, // Use server-calculated value
+        prize_given: prizeGiven,
+    };
     const { error: winnerInsertError } = await supabase
         .from('winners')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .insert({
-            session_id: sessionId,
-            game_id: gameId,
-            stage,
-            winner_name: winnerName,
-            prize_description: prizeDescription,
-            call_count_at_win: callCountAtWin,
-            is_snowball_jackpot: actualIsSnowballJackpot, // Use server-calculated value
-            prize_given: prizeGiven,
-        });
+        .insert(winnerInsert);
 
     if (winnerInsertError) {
         console.error("Error recording winner:", winnerInsertError.message);
-        return { error: winnerInsertError.message };
+        return { success: false, error: winnerInsertError.message };
     }
 
     // Determine display win type and text
@@ -792,51 +818,48 @@ export async function recordWinner(
     }
 
     // Just update the display to show the winner name. Do NOT advance stage yet.
+    const winnerDisplayUpdate: Database['public']['Tables']['game_states']['Update'] = {
+        // paused_for_validation: true, // Should already be true, keep it so
+        display_win_type: displayWinType,
+        display_win_text: displayWinText,
+        display_winner_name: winnerName,
+    };
     const { error: gameStateUpdateError } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({
-            // paused_for_validation: true, // Should already be true, keep it so
-            display_win_type: displayWinType,
-            display_win_text: displayWinText,
-            display_winner_name: winnerName,
-        })
+        .update(winnerDisplayUpdate)
         .eq('game_id', gameId);
 
     if (gameStateUpdateError) {
         console.error("Error updating game state after winner record:", gameStateUpdateError.message);
-        return { error: gameStateUpdateError.message };
+        return { success: false, error: gameStateUpdateError.message };
     }
 
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate to show updated winner info if needed
     return { success: true };
 }
 
-export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, winnerId: string, prizeGiven: boolean) {
+export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, winnerId: string, prizeGiven: boolean): Promise<ActionResult> {
     const supabase = await createClient();
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
     
     const { error } = await supabase
         .from('winners')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        .update({ prize_given: prizeGiven })
+        .update({ prize_given: prizeGiven } satisfies Database['public']['Tables']['winners']['Update'])
         .eq('id', winnerId);
 
     if (error) {
-        return { error: error.message };
+        return { success: false, error: error.message };
     }
     
     revalidatePath(`/host/${sessionId}/${gameId}`);
     return { success: true };
 }
 
-export async function skipStage(gameId: string, currentStageIndex: number, totalStages: number) {
+export async function skipStage(gameId: string, currentStageIndex: number, totalStages: number): Promise<ActionResult> {
     const supabase = await createClient();
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     let newStageIndex = currentStageIndex + 1;
     let newStatus = 'in_progress' as GameStatus;
@@ -848,8 +871,6 @@ export async function skipStage(gameId: string, currentStageIndex: number, total
     
     const { error } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
         .update({
             current_stage_index: newStageIndex,
             status: newStatus,
@@ -857,21 +878,21 @@ export async function skipStage(gameId: string, currentStageIndex: number, total
             display_win_type: null, // Clear any win display
             display_win_text: null,
             display_winner_name: null,
-        })
+        } satisfies Database['public']['Tables']['game_states']['Update'])
         .eq('game_id', gameId);
 
     if (error) {
-        return { error: "Error updating game state to skip stage: " + error.message };
+        return { success: false, error: "Error updating game state to skip stage: " + error.message };
     }
 
     revalidatePath(`/host/${gameId}`);
     return { success: true };
 }
 
-export async function voidLastNumber(gameId: string) {
+export async function voidLastNumber(gameId: string): Promise<ActionResult> {
     const supabase = await createClient();
-    const authResult = await authorizeHost(supabase)
-    if (!authResult.authorized) return { error: authResult.error }
+    const controlResult = await requireController(supabase, gameId)
+    if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
@@ -880,14 +901,14 @@ export async function voidLastNumber(gameId: string) {
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'called_numbers' | 'numbers_called_count' | 'status'>>();
 
     if (fetchError || !gameState) {
-        return { error: fetchError?.message || "Game state not found." };
+        return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
     if (gameState.status !== 'in_progress') {
-        return { error: "Cannot void number for a game not in progress." };
+        return { success: false, error: "Cannot void number for a game not in progress." };
     }
     if (gameState.numbers_called_count === 0 || !(gameState.called_numbers as number[]).length) {
-        return { error: "No numbers have been called to void." };
+        return { success: false, error: "No numbers have been called to void." };
     }
 
     // Check if a winner was recorded on this number
@@ -899,11 +920,11 @@ export async function voidLastNumber(gameId: string) {
 
     if (winnerCheckError) {
         console.error("Error checking winners for void:", winnerCheckError.message);
-        return { error: "Failed to verify winner status." };
+        return { success: false, error: "Failed to verify winner status." };
     }
 
     if (winnerCount && winnerCount > 0) {
-        return { error: "Cannot undo: A winner was recorded on this number. Please delete the winner record first." };
+        return { success: false, error: "Cannot undo: A winner was recorded on this number. Please delete the winner record first." };
     }
 
     const newCalledNumbers = (gameState.called_numbers as number[]).slice(0, -1); // Remove last number
@@ -911,8 +932,6 @@ export async function voidLastNumber(gameId: string) {
 
     const { error: updateError } = await supabase
         .from('game_states')
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
         .update({
             called_numbers: newCalledNumbers,
             numbers_called_count: newNumbersCalledCount,
@@ -921,12 +940,12 @@ export async function voidLastNumber(gameId: string) {
             display_win_type: null, 
             display_win_text: null,
             display_winner_name: null,
-        })
+        } satisfies Database['public']['Tables']['game_states']['Update'])
         .eq('game_id', gameId);
 
     if (updateError) {
         console.error("Error voiding last number:", updateError.message);
-        return { error: updateError.message };
+        return { success: false, error: updateError.message };
     }
 
     revalidatePath(`/host/${gameId}`);
