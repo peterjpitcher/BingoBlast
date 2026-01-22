@@ -21,6 +21,16 @@ export default async function SessionDetailPage({ params }: PageProps) {
     redirect('/login');
   }
 
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+
+  if (profile?.role !== 'admin') {
+    redirect('/host');
+  }
+
   // Fetch Session
   const { data: session, error: sessionError } = await supabase
     .from('sessions')

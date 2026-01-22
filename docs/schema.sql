@@ -74,6 +74,9 @@ create policy "Read access for all" on public.sessions for select using (true);
 create policy "Admins can manage sessions" on public.sessions for all using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
+create policy "Hosts can update sessions" on public.sessions for update using (
+  exists (select 1 from public.profiles where id = auth.uid() and role = 'host')
+);
 
 -- 5. GAMES
 create table public.games (
@@ -118,16 +121,114 @@ create table public.game_states (
   updated_at timestamptz default now()
 );
 alter table public.game_states enable row level security;
-create policy "Read access for all" on public.game_states for select using (true);
+create policy "Hosts/Admins can read game state" on public.game_states for select using (
+  exists (select 1 from public.profiles where id = auth.uid() and (role = 'admin' or role = 'host'))
+);
 create policy "Hosts/Admins can update game state" on public.game_states for update using (
   exists (select 1 from public.profiles where id = auth.uid() and (role = 'admin' or role = 'host'))
 );
-create policy "Admins can insert/delete game state" on public.game_states for all using (
+create policy "Hosts/Admins can insert game state" on public.game_states for insert with check (
+  exists (select 1 from public.profiles where id = auth.uid() and (role = 'admin' or role = 'host'))
+);
+create policy "Admins can delete game state" on public.game_states for delete using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
 
 -- Enable Realtime for game_states (Crucial for Display/Host sync)
 alter publication supabase_realtime add table public.game_states;
+
+-- 6b. GAME STATE PUBLIC (No number_sequence, safe for public display/player)
+create table public.game_states_public (
+  game_id uuid references public.games(id) on delete cascade primary key,
+  called_numbers jsonb default '[]'::jsonb,
+  numbers_called_count int default 0,
+  current_stage_index int default 0,
+  status game_status default 'not_started'::game_status,
+  call_delay_seconds int default 8,
+  on_break boolean default false,
+  paused_for_validation boolean default false,
+  display_win_type text default null,
+  display_win_text text default null,
+  display_winner_name text default null,
+  started_at timestamptz,
+  ended_at timestamptz,
+  last_call_at timestamptz,
+  updated_at timestamptz default now()
+);
+alter table public.game_states_public enable row level security;
+create policy "Read access for all" on public.game_states_public for select using (true);
+
+create or replace function public.sync_game_states_public()
+returns trigger as $$
+begin
+  if (tg_op = 'DELETE') then
+    delete from public.game_states_public where game_id = old.game_id;
+    return old;
+  end if;
+
+  insert into public.game_states_public (
+    game_id,
+    called_numbers,
+    numbers_called_count,
+    current_stage_index,
+    status,
+    call_delay_seconds,
+    on_break,
+    paused_for_validation,
+    display_win_type,
+    display_win_text,
+    display_winner_name,
+    started_at,
+    ended_at,
+    last_call_at,
+    updated_at
+  ) values (
+    new.game_id,
+    new.called_numbers,
+    new.numbers_called_count,
+    new.current_stage_index,
+    new.status,
+    new.call_delay_seconds,
+    new.on_break,
+    new.paused_for_validation,
+    new.display_win_type,
+    new.display_win_text,
+    new.display_winner_name,
+    new.started_at,
+    new.ended_at,
+    new.last_call_at,
+    new.updated_at
+  )
+  on conflict (game_id) do update set
+    called_numbers = excluded.called_numbers,
+    numbers_called_count = excluded.numbers_called_count,
+    current_stage_index = excluded.current_stage_index,
+    status = excluded.status,
+    call_delay_seconds = excluded.call_delay_seconds,
+    on_break = excluded.on_break,
+    paused_for_validation = excluded.paused_for_validation,
+    display_win_type = excluded.display_win_type,
+    display_win_text = excluded.display_win_text,
+    display_winner_name = excluded.display_winner_name,
+    started_at = excluded.started_at,
+    ended_at = excluded.ended_at,
+    last_call_at = excluded.last_call_at,
+    updated_at = excluded.updated_at;
+
+  return new;
+end;
+$$ language plpgsql security definer;
+
+create trigger on_game_states_upsert
+after insert or update on public.game_states
+for each row execute procedure public.sync_game_states_public();
+
+create trigger on_game_states_delete
+after delete on public.game_states
+for each row execute procedure public.sync_game_states_public();
+
+-- Enable Realtime for game_states_public (public display/player sync)
+alter publication supabase_realtime add table public.game_states_public;
 
 
 -- 7. WINNERS
@@ -170,4 +271,3 @@ alter table public.snowball_pot_history enable row level security;
 create policy "Admins view history" on public.snowball_pot_history for select using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
-

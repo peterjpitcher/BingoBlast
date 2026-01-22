@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { cn, getContrastColor } from '@/lib/utils';
@@ -10,7 +10,7 @@ import { QRCodeSVG } from 'qrcode.react';
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
 type Game = Database['public']['Tables']['games']['Row'];
-type GameState = Database['public']['Tables']['game_states']['Row'];
+type GameState = Database['public']['Tables']['game_states_public']['Row'];
 type SnowballPot = Database['public']['Tables']['snowball_pots']['Row'];
 
 interface DisplayUIProps {
@@ -49,8 +49,7 @@ export default function DisplayUI({
     currentGameStateRef.current = currentGameState;
   }, [currentGameState]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const refreshActiveGame = async (newActiveGameId: string | null) => {
+  const refreshActiveGame = useCallback(async (newActiveGameId: string | null) => {
       if (newActiveGameId === currentActiveGame?.id) return;
 
       if (newActiveGameId) {
@@ -65,10 +64,10 @@ export default function DisplayUI({
         if (newGame) {
           setCurrentActiveGame(newGame);
           const { data: newGameState } = await supabase.current
-            .from('game_states')
+            .from('game_states_public')
             .select('*')
             .eq('game_id', newGame.id)
-            .single<Database['public']['Tables']['game_states']['Row']>();
+            .single<Database['public']['Tables']['game_states_public']['Row']>();
           
           if (newGameState) {
             setCurrentGameState(newGameState);
@@ -89,7 +88,7 @@ export default function DisplayUI({
         setIsGameFinishedState(false);
       }
       setIsWaitingState(!newActiveGameId);
-  };
+  }, [currentActiveGame?.id]);
 
   useEffect(() => {
     const supabaseClient = supabase.current;
@@ -110,10 +109,10 @@ export default function DisplayUI({
     let gameStateChannel: ReturnType<typeof supabaseClient.channel> | null = null;
     if (currentActiveGame?.id) {
       gameStateChannel = supabaseClient
-        .channel(`game_state_updates:${currentActiveGame.id}`)
+        .channel(`game_state_public_updates:${currentActiveGame.id}`)
         .on<GameState>(
           'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'game_states', filter: `game_id=eq.${currentActiveGame.id}` },
+          { event: 'UPDATE', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${currentActiveGame.id}` },
           (payload) => {
             const newState = payload.new;
             
@@ -149,10 +148,10 @@ export default function DisplayUI({
               } else if (currentActiveGame?.id) {
                   // Poll game state to ensure sync
                   const { data: freshState } = await supabase.current
-                    .from('game_states')
+                    .from('game_states_public')
                     .select('*')
                     .eq('game_id', currentActiveGame.id)
-                    .single<Database['public']['Tables']['game_states']['Row']>();
+                    .single<Database['public']['Tables']['game_states_public']['Row']>();
                   
                   if (freshState) {
                       setCurrentGameState(freshState);
@@ -203,64 +202,82 @@ export default function DisplayUI({
   useEffect(() => {
     if (numberCallTimeoutRef.current) {
       clearTimeout(numberCallTimeoutRef.current);
+      numberCallTimeoutRef.current = null;
     }
 
-    if (currentActiveGame && currentGameState) {
-      const serverCalledNumbers = currentGameState.called_numbers as number[];
-      
-      // Force immediate sync if paused or completed (FR-34: Fast-forward)
-      if (currentGameState.paused_for_validation || currentGameState.status === 'completed') {
-          setDelayedNumbers(serverCalledNumbers);
-          const newLastNumber = serverCalledNumbers.length > 0 ? serverCalledNumbers[serverCalledNumbers.length - 1] : null;
-          setCurrentNumberDelayed(newLastNumber);
-          return;
-      }
-      
-      if (serverCalledNumbers.length < delayedNumbers.length) {
-          setDelayedNumbers(serverCalledNumbers);
-          const newLastNumber = serverCalledNumbers.length > 0 ? serverCalledNumbers[serverCalledNumbers.length - 1] : null;
-          setCurrentNumberDelayed(newLastNumber);
-          return;
-      }
+    const scheduleUpdate = (callback: () => void, delayMs: number) => {
+      numberCallTimeoutRef.current = setTimeout(callback, delayMs);
+    };
 
-      if (currentGameState.numbers_called_count > 0) {
-        const lastCalledNumber = serverCalledNumbers[currentGameState.numbers_called_count - 1];
-        const lastCallTimestamp = currentGameState.last_call_at ? new Date(currentGameState.last_call_at).getTime() : 0;
-        const callDelay = currentGameState.call_delay_seconds * 1000;
+    if (!currentActiveGame || !currentGameState) {
+      scheduleUpdate(() => {
+        setCurrentNumberDelayed(null);
+        setDelayedNumbers([]);
+      }, 0);
+    } else {
+      const serverCalledNumbers = currentGameState.called_numbers as number[];
+      const lastServerNumber =
+        serverCalledNumbers.length > 0
+          ? serverCalledNumbers[serverCalledNumbers.length - 1]
+          : null;
+
+      // Force immediate sync if paused or completed (FR-34: Fast-forward)
+      if (
+        currentGameState.paused_for_validation ||
+        currentGameState.status === 'completed'
+      ) {
+        scheduleUpdate(() => {
+          setDelayedNumbers(serverCalledNumbers);
+          setCurrentNumberDelayed(lastServerNumber);
+        }, 0);
+      } else if (serverCalledNumbers.length < delayedNumbers.length) {
+        scheduleUpdate(() => {
+          setDelayedNumbers(serverCalledNumbers);
+          setCurrentNumberDelayed(lastServerNumber);
+        }, 0);
+      } else if (currentGameState.numbers_called_count > 0) {
+        const lastCalledNumber =
+          serverCalledNumbers[currentGameState.numbers_called_count - 1];
+        const lastCallTimestamp = currentGameState.last_call_at
+          ? new Date(currentGameState.last_call_at).getTime()
+          : 0;
+        const callDelayMs = currentGameState.call_delay_seconds * 1000;
 
         const now = Date.now();
         const timeSinceLastCall = now - lastCallTimestamp;
 
         if (currentNumberDelayed === lastCalledNumber) {
-            if (delayedNumbers.length !== serverCalledNumbers.length) {
-                 if (!delayedNumbers.includes(lastCalledNumber)) {
-                     setDelayedNumbers(prev => [...prev, lastCalledNumber]);
-                 }
-            }
-            return; 
-        }
-        
-        if (timeSinceLastCall >= callDelay) {
-            setCurrentNumberDelayed(lastCalledNumber);
-            setDelayedNumbers(serverCalledNumbers);
+          if (
+            delayedNumbers.length !== serverCalledNumbers.length &&
+            !delayedNumbers.includes(lastCalledNumber)
+          ) {
+            scheduleUpdate(() => {
+              setDelayedNumbers((prev) =>
+                prev.includes(lastCalledNumber)
+                  ? prev
+                  : [...prev, lastCalledNumber]
+              );
+            }, 0);
+          }
         } else {
-            numberCallTimeoutRef.current = setTimeout(() => {
+          const delayMs = Math.max(0, callDelayMs - timeSinceLastCall);
+          scheduleUpdate(() => {
             setCurrentNumberDelayed(lastCalledNumber);
             setDelayedNumbers(serverCalledNumbers);
-            }, callDelay - timeSinceLastCall);
+          }, delayMs);
         }
       } else {
-        setCurrentNumberDelayed(null);
-        setDelayedNumbers([]);
+        scheduleUpdate(() => {
+          setCurrentNumberDelayed(null);
+          setDelayedNumbers([]);
+        }, 0);
       }
-    } else {
-      setCurrentNumberDelayed(null);
-      setDelayedNumbers([]);
     }
 
     return () => {
       if (numberCallTimeoutRef.current) {
         clearTimeout(numberCallTimeoutRef.current);
+        numberCallTimeoutRef.current = null;
       }
     };
   }, [currentActiveGame, currentGameState, currentNumberDelayed, delayedNumbers]);

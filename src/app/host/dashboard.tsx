@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { startGame } from './actions';
 import { Card, CardContent } from '@/components/ui/card';
@@ -18,6 +19,7 @@ interface HostDashboardProps {
 }
 
 export default function HostDashboard({ sessions }: HostDashboardProps) {
+  const router = useRouter();
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   const toggleSession = (sessionId: string) => {
@@ -146,8 +148,10 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                         
                                         try {
                                             const result = await startGame(session.id, game.id);
-                                            if (result?.error) {
-                                                alert("Error starting game: " + result.error);
+                                            if (!result?.success) {
+                                                alert("Error starting game: " + (result?.error || "Unknown error"));
+                                            } else if (result.redirectTo) {
+                                                router.push(result.redirectTo);
                                             }
                                         } catch (err) {
                                             console.error(err);

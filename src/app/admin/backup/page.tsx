@@ -1,7 +1,7 @@
 // src/app/admin/backup/page.tsx
 import { createClient } from '@/utils/supabase/server';
 import { Database } from '@/types/database';
-// No need for signout or Button here for a simple list view.
+import { redirect } from 'next/navigation';
 
 type GameWithGameState = Database['public']['Tables']['games']['Row'] & {
   game_states: Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence'> | null;
@@ -10,6 +10,21 @@ type GameWithGameState = Database['public']['Tables']['games']['Row'] & {
 
 export default async function AdminBackupPage() {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect('/login');
+  }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+
+  if (profile?.role !== 'admin') {
+    redirect('/host');
+  }
 
   // Fetch all games with their number sequence and associated session name
   const { data: games, error } = await supabase

@@ -48,8 +48,8 @@ export default function SnowballList({ pots }: SnowballListProps) {
 
     setIsSubmitting(false);
 
-    if (result?.error) {
-      setActionError(result.error);
+    if (!result?.success) {
+      setActionError(result?.error || "Failed to save snowball pot.");
     } else {
       handleClose();
     }

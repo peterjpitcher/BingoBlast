@@ -25,7 +25,7 @@ export default async function DisplayPage({ params }: PageProps) {
   }
 
   let activeGame: Database['public']['Tables']['games']['Row'] | null = null;
-  let initialGameState: Database['public']['Tables']['game_states']['Row'] | null = null;
+  let initialGameState: Database['public']['Tables']['game_states_public']['Row'] | null = null;
   let prizeText: string = ''; // To pass to display
 
   if (session.active_game_id) {
@@ -43,10 +43,10 @@ export default async function DisplayPage({ params }: PageProps) {
       activeGame = game;
       // Fetch the initial game state for the active game
       const { data: gameState, error: gameStateError } = await supabase
-        .from('game_states')
+        .from('game_states_public')
         .select('*')
         .eq('game_id', game.id)
-        .single<Database['public']['Tables']['game_states']['Row']>();
+        .single<Database['public']['Tables']['game_states_public']['Row']>();
 
       if (gameStateError || !gameState) {
         console.warn("No game state found for active game:", gameStateError?.message);

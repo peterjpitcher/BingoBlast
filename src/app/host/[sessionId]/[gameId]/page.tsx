@@ -47,9 +47,9 @@ export default async function GameControlPage({ params }: PageProps) {
   }
 
   // Fetch initial game state
-  const { data: initialGameState, error: gameStateError } = await getCurrentGameState(gameId);
+  const gameStateResult = await getCurrentGameState(gameId);
 
-  if (gameStateError || !initialGameState) {
+  if (!gameStateResult.success || !gameStateResult.data) {
     console.warn(`Game ${gameId} in session ${sessionId} has no initial game state. Redirecting to host dashboard.`);
     redirect('/host'); 
   }
@@ -79,7 +79,7 @@ export default async function GameControlPage({ params }: PageProps) {
         sessionId={sessionId}
         gameId={gameId}
         game={game}
-        initialGameState={initialGameState as Database['public']['Tables']['game_states']['Row']}
+        initialGameState={gameStateResult.data}
         currentUserId={user.id}
       />
     </div>

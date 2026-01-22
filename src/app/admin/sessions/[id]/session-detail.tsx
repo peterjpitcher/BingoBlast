@@ -25,6 +25,7 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
   const [editingGame, setEditingGame] = useState<Game | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [backgroundColor, setBackgroundColor] = useState<string>('#ffffff');
   
   // Form State
   const [selectedGameType, setSelectedGameType] = useState<'standard' | 'snowball'>('standard');
@@ -36,6 +37,10 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
     setGames(initialGames);
   }, [initialGames]);
 
+  useEffect(() => {
+    setBackgroundColor(editingGame?.background_colour || '#ffffff');
+  }, [editingGame]);
+
   const nextIndex = games.length > 0 ? Math.max(...games.map(g => g.game_index)) + 1 : 1;
 
 
@@ -45,12 +50,14 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
     setActionError(null);
     setSelectedGameType('standard');
     setSelectedStages(['Line', 'Two Lines', 'Full House']);
+    setBackgroundColor('#ffffff');
   };
 
   const handleShowAdd = () => {
       setEditingGame(null);
       setSelectedGameType('standard');
       setSelectedStages(['Line', 'Two Lines', 'Full House']);
+      setBackgroundColor('#ffffff');
       setShowGameModal(true);
   };
 
@@ -58,6 +65,7 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
       setEditingGame(game);
       setSelectedGameType(game.type);
       setSelectedStages(game.stage_sequence);
+      setBackgroundColor(game.background_colour || '#ffffff');
       setShowGameModal(true);
   };
 
@@ -83,8 +91,8 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
 
     setIsSubmitting(false);
 
-    if (result?.error) {
-      setActionError(result.error);
+    if (!result?.success) {
+      setActionError(result?.error || "Failed to save game.");
     } else {
       handleClose();
       router.refresh(); // Refresh after game changes
@@ -120,8 +128,8 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
   async function handleResetSession() {
       if (confirm("Reset session to Ready? This will WIPE ALL HISTORY (winners, calls) for this session. Use with caution!")) {
           const result = await resetSession(session.id);
-          if (result?.error) {
-              setActionError(result.error);
+          if (!result?.success) {
+              setActionError(result?.error || "Failed to reset session.");
           } else {
               router.refresh(); // Refresh after reset
           }
@@ -389,30 +397,18 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
               <div className="flex gap-2">
                 <input 
                     type="color" 
-                    value={editingGame?.background_colour || "#ffffff"}
-                    onChange={(e) => {
-                        setEditingGame(prev => prev ? { ...prev, background_colour: e.target.value } : null);
-                        // If creating a new game (editingGame is null), we need separate state or a way to handle this. 
-                        // However, simplistic approach:
-                        const input = document.querySelector('input[name="background_colour_text"]') as HTMLInputElement;
-                        if(input) input.value = e.target.value;
-                    }}
+                    value={backgroundColor}
+                    onChange={(e) => setBackgroundColor(e.target.value)}
                     className="h-10 w-16 p-1 bg-slate-900 border border-slate-700 rounded cursor-pointer"
                 />
                 <Input 
                     type="text" 
                     name="background_colour"
                     placeholder="#ffffff"
-                    defaultValue={editingGame?.background_colour || "#ffffff"}
+                    value={backgroundColor}
                     pattern="^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
                     className="w-32 font-mono uppercase"
-                    onChange={(e) => {
-                         const val = e.target.value;
-                         if (/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(val)) {
-                             const picker = document.querySelector('input[type="color"]') as HTMLInputElement;
-                             if (picker) picker.value = val;
-                         }
-                    }}
+                    onChange={(e) => setBackgroundColor(e.target.value)}
                 />
               </div>
             </div>

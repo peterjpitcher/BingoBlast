@@ -41,8 +41,8 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
 
     setIsSubmitting(false);
 
-    if (result?.error) {
-      setActionError(result.error);
+    if (!result?.success) {
+      setActionError(result?.error || "Failed to create session.");
     } else {
       handleClose();
     }
@@ -51,8 +51,8 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
   async function handleDelete(id: string) {
     if (confirm('Are you sure you want to delete this session? This cannot be undone.')) {
         const result = await deleteSession(id);
-        if (result?.error) {
-            setActionError(result.error);
+        if (!result?.success) {
+            setActionError(result?.error || "Failed to delete session.");
         } else {
             router.refresh();
         }
@@ -62,8 +62,8 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
   async function handleDuplicate(id: string) {
       if (confirm('Duplicate this session?')) {
           const result = await duplicateSession(id);
-          if (result?.error) {
-              setActionError(result.error);
+          if (!result?.success) {
+              setActionError(result?.error || "Failed to duplicate session.");
           } else {
               router.refresh();
           }

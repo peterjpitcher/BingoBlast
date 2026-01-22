@@ -32,9 +32,9 @@ function LoginPageContent() {
     startTransition(async () => {
       const action = mode === 'login' ? login : signup;
       const result = await action(formData);
-      if (result?.error) {
-        setError(result.error);
-      } else if (result?.redirectTo) {
+      if (!result?.success) {
+        setError(result?.error || "Authentication failed. Please try again.");
+      } else if (result.redirectTo) {
         router.push(result.redirectTo);
       }
     });

@@ -4,8 +4,9 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 
 import { createClient } from '@/utils/supabase/server'
+import type { ActionResult } from '@/types/actions'
 
-export async function login(formData: FormData) {
+export async function login(formData: FormData): Promise<ActionResult> {
   const supabase = await createClient()
 
   const email = formData.get('email') as string
@@ -19,14 +20,14 @@ export async function login(formData: FormData) {
 
   if (error) {
     console.error("Login Error:", error.message)
-    return { error: error.message }
+    return { success: false, error: error.message }
   }
 
   revalidatePath('/', 'layout')
   return { success: true, redirectTo: nextUrl }
 }
 
-export async function signup(formData: FormData) {
+export async function signup(formData: FormData): Promise<ActionResult> {
     const supabase = await createClient()
   
     const email = formData.get('email') as string
@@ -40,7 +41,7 @@ export async function signup(formData: FormData) {
   
     if (error) {
       console.error("Signup Error:", error.message)
-      return { error: error.message }
+      return { success: false, error: error.message }
     }
   
     revalidatePath('/', 'layout')
