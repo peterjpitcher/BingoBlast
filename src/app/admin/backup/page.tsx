@@ -36,8 +36,8 @@ export default async function AdminBackupPage() {
       game_states:game_states (number_sequence),
       sessions:sessions (name, start_date)
     `)
-    .order('game_index', { ascending: true }) // Order by game index within a session
-    .order('sessions.start_date', { ascending: false }); // Order by session date (latest first)
+    .order('start_date', { ascending: false, foreignTable: 'sessions' }) // Order by session date (latest first)
+    .order('game_index', { ascending: true }); // Order by game index within a session
 
 
   if (error) {

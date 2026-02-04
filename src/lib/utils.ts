@@ -8,11 +8,17 @@ export function cn(...inputs: ClassValue[]) {
 export function getContrastColor(hexColor: string): 'text-white' | 'text-slate-900' {
   // Default to white if invalid
   if (!hexColor || !hexColor.startsWith('#')) return 'text-white';
+
+  let normalized = hexColor.trim();
+  if (/^#[0-9a-fA-F]{3}$/.test(normalized)) {
+    normalized = `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`;
+  }
+  if (!/^#[0-9a-fA-F]{6}$/.test(normalized)) return 'text-white';
   
   // Convert hex to RGB
-  const r = parseInt(hexColor.substr(1, 2), 16);
-  const g = parseInt(hexColor.substr(3, 2), 16);
-  const b = parseInt(hexColor.substr(5, 2), 16);
+  const r = parseInt(normalized.substr(1, 2), 16);
+  const g = parseInt(normalized.substr(3, 2), 16);
+  const b = parseInt(normalized.substr(5, 2), 16);
   
   if (isNaN(r) || isNaN(g) || isNaN(b)) return 'text-white';
 

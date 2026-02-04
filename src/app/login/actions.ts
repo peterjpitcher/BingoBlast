@@ -6,12 +6,19 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/utils/supabase/server'
 import type { ActionResult } from '@/types/actions'
 
+function sanitizeNextUrl(rawNext: string | null) {
+  const nextUrl = rawNext || '/'
+  if (!nextUrl.startsWith('/')) return '/'
+  if (nextUrl.startsWith('//')) return '/'
+  return nextUrl
+}
+
 export async function login(formData: FormData): Promise<ActionResult> {
   const supabase = await createClient()
 
   const email = formData.get('email') as string
   const password = formData.get('password') as string
-  const nextUrl = formData.get('next') as string || '/'
+  const nextUrl = sanitizeNextUrl(formData.get('next') as string | null)
 
   const { error } = await supabase.auth.signInWithPassword({
     email,
@@ -32,7 +39,7 @@ export async function signup(formData: FormData): Promise<ActionResult> {
   
     const email = formData.get('email') as string
     const password = formData.get('password') as string
-    const nextUrl = formData.get('next') as string || '/'
+    const nextUrl = sanitizeNextUrl(formData.get('next') as string | null)
   
     const { error } = await supabase.auth.signUp({
       email,

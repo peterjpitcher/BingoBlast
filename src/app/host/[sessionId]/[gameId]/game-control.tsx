@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Database } from '@/types/database';
+import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, advanceToNextStage, toggleWinnerPrizeGiven, takeControl, sendHeartbeat } from '@/app/host/actions';
 import { Button } from '@/components/ui/button';
@@ -23,17 +23,8 @@ interface GameControlProps {
     game: Game;
     initialGameState: GameState;
     currentUserId: string;
+    currentUserRole: UserRole;
 }
-
-// Broadcast helper
-const sendBroadcast = async (supabase: ReturnType<typeof createClient>, gameId: string, event: string, payload: object = {}) => {
-    await supabase.channel(`game_updates:${gameId}`).send({
-        type: 'broadcast',
-        event,
-        payload,
-    });
-};
-
 
 // Hardcoded for now (same as before)
 const NUMBER_NICKNAMES: { [key: number]: string } = {
@@ -63,7 +54,7 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
 };
 
 
-export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId }: GameControlProps) {
+export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole }: GameControlProps) {
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
     const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
     const [isCallingNumber, setIsCallingNumber] = useState(false);
@@ -84,6 +75,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
     // Controller Locking Logic
     const isController = currentGameState.controlling_host_id === currentUserId;
+    const canTogglePrize = isController && currentUserRole === 'admin';
     // Allow taking control if no one is controlling OR the last heartbeat was > 30s ago
     const canTakeControl = !currentGameState.controlling_host_id ||
         (currentGameState.controller_last_seen_at && (new Date().getTime() - new Date(currentGameState.controller_last_seen_at).getTime() > 30000));
@@ -140,7 +132,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     }, [gameId]);
 
     const handleTogglePrize = async (winnerId: string, currentStatus: boolean) => {
-        if (!isController) return;
+        if (!canTogglePrize) return;
         // Optimistic update
         setCurrentWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: !currentStatus } : w));
 
@@ -249,10 +241,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         if (!result?.success) {
             setActionError(result?.error || "Failed to call next number.");
             setCurrentGameState(previousState);
-        } else {
-            // Broadcast update
-            const supabase = createClient();
-            await sendBroadcast(supabase, gameId, 'game_update');
         }
         setIsCallingNumber(false);
     };
@@ -264,9 +252,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         const result = await toggleBreak(gameId, newOnBreakStatus);
         if (!result?.success) {
             setActionError(result?.error || "Failed to toggle break.");
-        } else {
-            const supabase = createClient();
-            await sendBroadcast(supabase, gameId, 'game_update');
         }
     };
 
@@ -277,9 +262,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         const result = await endGame(gameId, sessionId);
         if (!result?.success) {
             setActionError(result?.error || "Failed to end game.");
-        } else {
-            const supabase = createClient();
-            await sendBroadcast(supabase, gameId, 'game_update');
         }
     };
 
@@ -306,9 +288,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         if (!pauseResult?.success) {
             setActionError("Failed to pause for validation: " + (pauseResult?.error || "Unknown error"));
             return;
-        } else {
-            const supabase = createClient();
-            await sendBroadcast(supabase, gameId, 'game_update');
         }
 
         const result = await validateClaim(gameId, selectedNumbers);
@@ -329,8 +308,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 setActionError(announceResult?.error || "Failed to announce win.");
                 return;
             }
-            const supabase = createClient();
-            await sendBroadcast(supabase, gameId, 'game_update');
             setShowWinnerModal(true);
         }
     }
@@ -374,8 +351,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setShowPostWinModal(false);
             setShowValidationModal(false);
             handleClearSelection();
-            const supabase = createClient();
-            await sendBroadcast(supabase, gameId, 'game_update');
         }
     };
 
@@ -388,8 +363,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 setActionError(result?.error || "Failed to skip stage.");
             } else {
                 setShowValidationModal(false);
-                const supabase = createClient();
-                await sendBroadcast(supabase, gameId, 'game_update');
             }
         }
     };
@@ -406,8 +379,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             if (!result?.success) {
                 setActionError(result?.error || "Failed to void last number.");
             } else {
-                const supabase = createClient();
-                await sendBroadcast(supabase, gameId, 'game_update');
             }
         }
     };
@@ -421,8 +392,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 setActionError("Failed to resume game: " + (result?.error || "Unknown error"));
                 return;
             }
-            const supabase = createClient();
-            await sendBroadcast(supabase, gameId, 'game_update');
         }
         setShowValidationModal(false);
         handleClearSelection();
@@ -613,7 +582,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                         winner.prize_given ? "text-green-400 border-green-900 hover:bg-green-900/20" : "bg-yellow-600 hover:bg-yellow-700 text-white"
                                     )}
                                     onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
-                                    disabled={!isController} // Disable prize toggle if not controller
+                                    disabled={!canTogglePrize}
                                 >
                                     {winner.prize_given ? "Given ✅" : "Give Prize"}
                                 </Button>

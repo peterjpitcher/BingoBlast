@@ -107,7 +107,7 @@ export default function PlayerUI({
 
     let gameStateChannel: ReturnType<typeof supabaseClient.channel> | null = null;
     if (currentActiveGame?.id) {
-      // Listen for BOTH broadcast events from Host AND direct table changes (backup)
+      // Listen for game state changes
       gameStateChannel = supabaseClient
         .channel(`game_state_public_updates_player:${currentActiveGame.id}`)
         .on<GameState>(
@@ -117,24 +117,6 @@ export default function PlayerUI({
             const newState = payload.new;
             setCurrentGameState(newState);
             setCurrentPrizeText(currentActiveGame?.prizes?.[currentActiveGame.stage_sequence[newState.current_stage_index] as keyof typeof currentActiveGame.prizes] || '');
-          }
-        )
-        // Add Broadcast Listener
-        .on(
-          'broadcast',
-          { event: 'game_update' },
-          async () => {
-            // Re-fetch game state on broadcast signal
-            const { data: newGameState } = await supabaseClient
-              .from('game_states_public')
-              .select('*')
-              .eq('game_id', currentActiveGame.id)
-              .single<Database['public']['Tables']['game_states_public']['Row']>();
-
-            if (newGameState) {
-              setCurrentGameState(newGameState);
-              setCurrentPrizeText(currentActiveGame?.prizes?.[currentActiveGame.stage_sequence[newGameState.current_stage_index] as keyof typeof currentActiveGame.prizes] || '');
-            }
           }
         )
         .subscribe();

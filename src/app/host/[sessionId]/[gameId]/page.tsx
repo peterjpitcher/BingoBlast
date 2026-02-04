@@ -22,6 +22,12 @@ export default async function GameControlPage({ params }: PageProps) {
     redirect('/login');
   }
 
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+
   // Fetch game details
   const { data: game, error: gameError } = await supabase
     .from('games')
@@ -81,6 +87,7 @@ export default async function GameControlPage({ params }: PageProps) {
         game={game}
         initialGameState={gameStateResult.data}
         currentUserId={user.id}
+        currentUserRole={profile?.role || 'host'}
       />
     </div>
   );

@@ -136,6 +136,9 @@ export default function DisplayUI({
 
   useEffect(() => {
       const interval = setInterval(async () => {
+          if (document.visibilityState !== 'visible') {
+              return;
+          }
           const { data: freshSession } = await supabase.current
               .from('sessions')
               .select('active_game_id, status') 
@@ -159,7 +162,7 @@ export default function DisplayUI({
                   }
               }
           }
-      }, 5000);
+      }, 10000);
 
       return () => clearInterval(interval);
   }, [currentActiveGame, session.id, refreshActiveGame]);

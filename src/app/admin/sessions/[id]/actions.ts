@@ -53,6 +53,10 @@ export async function createGame(sessionId: string, _prevState: unknown, formDat
   const notes = formData.get('notes') as string
   const snowball_pot_id = (formData.get('snowball_pot_id') as string) || null
 
+  if (!Number.isFinite(game_index) || game_index < 1) {
+    return { success: false, error: 'Game order must be a positive number.' }
+  }
+
   const selectedStages = formData.getAll('stages') as WinStage[]
   const stage_sequence: WinStage[] = selectedStages.length > 0
     ? sortStages([...selectedStages])
@@ -117,10 +121,15 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
   }
 
   const name = formData.get('name') as string
+  const game_index = Number.parseInt(formData.get('game_index') as string, 10)
   const background_colour = formData.get('background_colour') as string
   const notes = formData.get('notes') as string
   const type = formData.get('type') as GameType
   const snowball_pot_id = (formData.get('snowball_pot_id') as string) || null
+
+  if (!Number.isFinite(game_index) || game_index < 1) {
+    return { success: false, error: 'Game order must be a positive number.' }
+  }
 
   const selectedStages = formData.getAll('stages') as WinStage[]
   const stage_sequence: WinStage[] = selectedStages.length > 0
@@ -153,6 +162,7 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
     .from('games')
     .update({
       name,
+      game_index,
       background_colour,
       notes,
       type, // Will be same as original if running

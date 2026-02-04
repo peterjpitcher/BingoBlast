@@ -3,15 +3,40 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { Database } from '@/types/database'
 
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams
-  const email = searchParams.get('email')
-  const secret = searchParams.get('secret')
+type SetupPayload = {
+  email?: string
+}
 
-  if (secret !== 'superadmin123') {
+function getSetupSecret() {
+  return process.env.SETUP_SECRET
+}
+
+export async function GET() {
+  return NextResponse.json(
+    { error: 'Method not allowed. Use POST.' },
+    { status: 405 }
+  )
+}
+
+export async function POST(request: NextRequest) {
+  const setupSecret = getSetupSecret()
+  if (!setupSecret) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  const providedSecret = request.headers.get('x-setup-secret')
+  if (!providedSecret || providedSecret !== setupSecret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  let payload: SetupPayload = {}
+  try {
+    payload = (await request.json()) as SetupPayload
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  const email = payload.email?.trim()
   if (!email) {
     return NextResponse.json({ error: 'Email required' }, { status: 400 })
   }
@@ -33,7 +58,10 @@ export async function GET(request: NextRequest) {
     },
   })
 
-  const { data, error: userError } = await supabase.auth.admin.listUsers()
+  const { data, error: userError } = await supabase.auth.admin.listUsers({
+    page: 1,
+    perPage: 1000,
+  })
 
   if (userError || !data.users) {
     return NextResponse.json(

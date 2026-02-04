@@ -186,6 +186,36 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
     }
 }
 
+async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionId: string) {
+    const { data: games, error } = await supabase
+        .from('games')
+        .select('id, game_states:game_states(status)')
+        .eq('session_id', sessionId)
+
+    if (error) {
+        console.error("Error checking session completion:", error.message);
+        return;
+    }
+
+    if (!games || games.length === 0) return;
+
+    const hasIncompleteGame = games.some((game) => {
+        const state = (game as { game_states?: { status: GameStatus } | null }).game_states
+        return !state || state.status !== 'completed'
+    });
+
+    if (!hasIncompleteGame) {
+        const { error: updateError } = await supabase
+            .from('sessions')
+            .update({ status: 'completed', active_game_id: null })
+            .eq('id', sessionId)
+
+        if (updateError) {
+            console.error("Error marking session completed:", updateError.message);
+        }
+    }
+}
+
 export async function startGame(sessionId: string, gameId: string): Promise<ActionResult> {
   try {
       const supabase = await createClient()
@@ -197,72 +227,106 @@ export async function startGame(sessionId: string, gameId: string): Promise<Acti
       // 1. Check if game_state already exists
       const { data: existingGameState, error: fetchGameStateError } = await dbClient
         .from('game_states')
-        .select('id, status, number_sequence, called_numbers, numbers_called_count, current_stage_index')
+        .select('id, status, number_sequence, called_numbers, numbers_called_count, current_stage_index, controlling_host_id, controller_last_seen_at, call_delay_seconds')
         .eq('game_id', gameId)
-        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'id' | 'status' | 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'current_stage_index'>>()
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'id' | 'status' | 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'current_stage_index' | 'controlling_host_id' | 'controller_last_seen_at' | 'call_delay_seconds'>>()
 
       if (fetchGameStateError && fetchGameStateError.code !== 'PGRST116') {
         console.error("Error fetching existing game state:", fetchGameStateError);
         return { success: false, error: fetchGameStateError.message };
       }
 
-      // 2. Generate new sequence if not already in_progress or completed
-      let sequence = existingGameState?.number_sequence;
-      if (!existingGameState || existingGameState.status === 'not_started') {
-          sequence = generateShuffledNumberSequence();
-      }
+      const nowIso = new Date().toISOString();
+      const heartbeatThresholdMs = 30000;
 
-      // 3. Insert or update game_state
-      const commonGameState = {
-        number_sequence: sequence,
-        called_numbers: existingGameState?.status === 'completed' ? existingGameState.called_numbers : [],
-        numbers_called_count: existingGameState?.status === 'completed' ? existingGameState.numbers_called_count : 0,
-        current_stage_index: existingGameState?.status === 'completed' ? existingGameState.current_stage_index : 0,
-        status: 'in_progress' as GameStatus,
-        started_at: new Date().toISOString(),
-        ended_at: null,
-        last_call_at: null,
-        on_break: false,
-        paused_for_validation: false,
-        call_delay_seconds: 3,
-        display_win_type: null,
-        display_win_text: null,
-        display_winner_name: null,
-      };
+      if (existingGameState?.status === 'in_progress') {
+        const lastSeen = existingGameState.controller_last_seen_at
+          ? new Date(existingGameState.controller_last_seen_at)
+          : null;
+        if (
+          existingGameState.controlling_host_id &&
+          existingGameState.controlling_host_id !== authResult.user!.id &&
+          lastSeen &&
+          (Date.now() - lastSeen.getTime() < heartbeatThresholdMs)
+        ) {
+          return { success: false, error: "Another host is currently controlling this game." };
+        }
 
-      const isReopening = existingGameState?.status === 'completed';
-      
-      const stateToUpsert = isReopening ? {
-          status: 'in_progress' as GameStatus,
-          ended_at: null,
-          display_win_type: null,
-          display_win_text: null,
-          display_winner_name: null,
-          paused_for_validation: false,
-          controlling_host_id: authResult.user!.id,
-          controller_last_seen_at: new Date().toISOString(),
-      } : {
-          ...commonGameState,
+        const { error: updateError } = await dbClient
+          .from('game_states')
+          .update({
+            controlling_host_id: authResult.user!.id,
+            controller_last_seen_at: nowIso,
+          } satisfies Database['public']['Tables']['game_states']['Update'])
+          .eq('game_id', gameId)
+
+        if (updateError) {
+          console.error("Error updating controller on in-progress game:", updateError);
+          return { success: false, error: updateError.message };
+        }
+      } else if (existingGameState?.status === 'completed') {
+        const { error: updateError } = await dbClient
+          .from('game_states')
+          .update({
+            status: 'in_progress',
+            ended_at: null,
+            paused_for_validation: false,
+            display_win_type: null,
+            display_win_text: null,
+            display_winner_name: null,
+            controlling_host_id: authResult.user!.id,
+            controller_last_seen_at: nowIso,
+          } satisfies Database['public']['Tables']['game_states']['Update'])
+          .eq('game_id', gameId)
+
+        if (updateError) {
+          console.error("Error reopening completed game:", updateError);
+          return { success: false, error: updateError.message };
+        }
+      } else {
+        const sequence = existingGameState?.number_sequence ?? generateShuffledNumberSequence();
+        const callDelaySeconds = existingGameState?.call_delay_seconds ?? 3;
+
+        const freshState: Database['public']['Tables']['game_states']['Insert'] = {
+          game_id: gameId,
+          number_sequence: sequence,
           called_numbers: [],
           numbers_called_count: 0,
           current_stage_index: 0,
+          status: 'in_progress',
+          started_at: nowIso,
+          ended_at: null,
+          last_call_at: null,
+          on_break: false,
+          paused_for_validation: false,
+          call_delay_seconds: callDelaySeconds,
+          display_win_type: null,
+          display_win_text: null,
+          display_winner_name: null,
           controlling_host_id: authResult.user!.id,
-          controller_last_seen_at: new Date().toISOString(),
-      };
+          controller_last_seen_at: nowIso,
+        };
 
-      const upsertData: Database['public']['Tables']['game_states']['Insert'] = {
-        game_id: gameId,
-        number_sequence: sequence,
-        ...stateToUpsert,
-      };
+        if (existingGameState) {
+          const { error: updateError } = await dbClient
+            .from('game_states')
+            .update(freshState)
+            .eq('game_id', gameId)
 
-      const { error: upsertError } = await dbClient
-        .from('game_states')
-        .upsert(upsertData, { onConflict: 'game_id' }); 
+          if (updateError) {
+            console.error("Error starting game from not_started state:", updateError);
+            return { success: false, error: updateError.message };
+          }
+        } else {
+          const { error: insertError } = await dbClient
+            .from('game_states')
+            .insert(freshState);
 
-      if (upsertError) {
-        console.error("Error upserting game state:", upsertError);
-        return { success: false, error: upsertError.message };
+          if (insertError) {
+            console.error("Error inserting game state:", insertError);
+            return { success: false, error: insertError.message };
+          }
+        }
       }
 
       // 4. Update session status to 'running' and set active_game_id
@@ -423,14 +487,19 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
     last_call_at: new Date().toISOString(),
   };
 
-  const { error: updateError } = await supabase
+  const { data: updatedRows, error: updateError } = await supabase
     .from('game_states')
     .update(callUpdate)
-    .eq('game_id', gameId);
+    .eq('game_id', gameId)
+    .eq('numbers_called_count', gameState.numbers_called_count)
+    .select('numbers_called_count');
 
   if (updateError) {
     console.error("Error updating game state after call:", updateError.message);
     return { success: false, error: updateError.message };
+  }
+  if (!updatedRows || updatedRows.length === 0) {
+    return { success: false, error: "Game state changed. Please try again." };
   }
 
   revalidatePath(`/host/${gameId}`); // Revalidate the game control page
@@ -559,6 +628,7 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
 
     // Use the shared helper for Snowball Logic
     await handleSnowballPotUpdate(supabase, sessionId, gameId);
+    await maybeCompleteSession(supabase, sessionId);
 
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the specific game page
     revalidatePath(`/host`); // Revalidate the host dashboard
@@ -700,6 +770,7 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult> 
     // If the game is now completed, check Snowball logic (Rollover vs Reset)
     if (newGameStatus === 'completed') {
         await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
+        await maybeCompleteSession(supabase, gameDetails.session_id);
     } else {
         // If NOT completed, but we just finished a stage, do we check for Jackpot win reset?
         // handleSnowballPotUpdate handles "Reset if Won".
@@ -842,6 +913,9 @@ export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, 
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
+    if (controlResult.role !== 'admin') {
+        return { success: false, error: "Admin access required to update prize status." }
+    }
     
     const { error } = await supabase
         .from('winners')
@@ -860,6 +934,16 @@ export async function skipStage(gameId: string, currentStageIndex: number, total
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
+
+    const { data: gameDetails, error: gameDetailsError } = await supabase
+        .from('games')
+        .select('session_id')
+        .eq('id', gameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id'>>();
+
+    if (gameDetailsError || !gameDetails) {
+        return { success: false, error: gameDetailsError?.message || "Game details not found." };
+    }
 
     let newStageIndex = currentStageIndex + 1;
     let newStatus = 'in_progress' as GameStatus;
@@ -883,6 +967,11 @@ export async function skipStage(gameId: string, currentStageIndex: number, total
 
     if (error) {
         return { success: false, error: "Error updating game state to skip stage: " + error.message };
+    }
+
+    if (newStatus === 'completed') {
+        await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
+        await maybeCompleteSession(supabase, gameDetails.session_id);
     }
 
     revalidatePath(`/host/${gameId}`);
