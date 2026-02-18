@@ -125,7 +125,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                   <div className="flex gap-2 text-xs">
                                     <span className="text-white/80 uppercase tracking-wider">{game.type}</span>
                                     {status === 'not_started' && <span className="text-white/70">Not Started</span>}
-                                    {status === 'in_progress' && <span className="text-[#f3d59d] font-bold">In Progress</span>}
+                                    {status === 'in_progress' && <span className="text-white font-bold">In Progress</span>}
                                     {status === 'completed' && <span className="text-white/70">Completed</span>}
                                   </div>
                                 </div>
@@ -137,8 +137,8 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                     size="sm" 
                                     variant={isInProgress ? "primary" : isCompleted ? "outline" : "secondary"}
                                     className={
-                                      isInProgress ? "bg-green-600 hover:bg-green-700 shadow-green-900/20" : 
-                                      isCompleted ? "border-yellow-600 text-yellow-500 hover:bg-yellow-900/20" : ""
+                                      isInProgress ? "bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white" :
+                                      isCompleted ? "border-[#a57626] text-white hover:bg-[#a57626]/20" : ""
                                     }
                                     onClick={async (e) => {
                                         e.preventDefault();

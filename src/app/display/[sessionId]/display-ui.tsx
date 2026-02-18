@@ -372,30 +372,32 @@ export default function DisplayUI({
           )}
 
           {showBreak && (
-            <div className="w-full max-w-5xl mx-auto flex flex-col items-center gap-7 animate-in zoom-in duration-500 py-8">
-                <div className="text-center">
-                    <h1 className="text-[clamp(3.2rem,8vw,7rem)] font-black text-white tracking-[0.08em] uppercase">Break Time</h1>
-                    <p className="text-[clamp(1.5rem,3vw,2.6rem)] text-white font-semibold mt-2">We will resume shortly</p>
+            <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in zoom-in duration-500 py-4 items-center">
+                <div className="col-span-12 xl:col-span-7 flex flex-col gap-5">
+                    <div className="text-center xl:text-left">
+                        <h1 className="text-[clamp(2.4rem,5.8vw,5.4rem)] font-black text-white tracking-[0.07em] uppercase">Break Time</h1>
+                        <p className="text-[clamp(1.2rem,2.2vw,2rem)] text-white font-semibold mt-1">We will resume shortly</p>
+                    </div>
+
+                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
+                        <h2 className="text-[clamp(1.8rem,3vw,3rem)] font-black uppercase tracking-[0.08em] text-white">Kitchen Open Until 9pm</h2>
+                        <p className="text-[clamp(1rem,1.7vw,1.45rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
+                    </div>
                 </div>
 
-                <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-6 text-center backdrop-blur-sm">
-                    <h2 className={panelTitleClass}>Kitchen Open Until 9pm</h2>
-                    <p className={cn(panelBodyClass, "mt-2 font-medium")}>Get your drinks and order food at the bar!</p>
-                </div>
-
-                <div className="w-full bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md">
-                    <h3 className="text-[clamp(1.8rem,3.2vw,2.8rem)] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-3 text-[clamp(1.05rem,1.8vw,1.65rem)] text-white">
+                <div className="col-span-12 xl:col-span-5 bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-left backdrop-blur-md">
+                    <h3 className="text-[clamp(1.5rem,2.3vw,2.2rem)] font-bold text-white mb-3 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-[clamp(0.95rem,1.35vw,1.2rem)] text-white">
                         <li className="flex gap-3 items-start">
-                            <span className="text-white mt-1">➤</span>
+                            <span className="text-white mt-0.5">➤</span>
                             <span>Claims must be called on the number they&apos;re won on - <span className="font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-white mt-1">➤</span>
+                            <span className="text-white mt-0.5">➤</span>
                             <span>Multiple claims share the prize</span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-white mt-1">➤</span>
+                            <span className="text-white mt-0.5">➤</span>
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                     </ul>

@@ -57,6 +57,8 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
     89: "All But One", 90: "Top Of The Shop"
 };
 
+const DISPLAY_SYNC_BUFFER_MS = 200;
+
 
 export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole }: GameControlProps) {
     const router = useRouter();
@@ -72,6 +74,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [showManualSnowballModal, setShowManualSnowballModal] = useState(false);
     const [showPostWinModal, setShowPostWinModal] = useState(false);
     const [showSessionWinnersModal, setShowSessionWinnersModal] = useState(false);
+    const [displaySyncRemainingMs, setDisplaySyncRemainingMs] = useState(0);
     const [winnerName, setWinnerName] = useState('');
     const [prizeGiven, setPrizeGiven] = useState(false);
     const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
@@ -194,6 +197,50 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const currentNumber = currentGameState.called_numbers?.[currentGameState.numbers_called_count - 1] || null;
     const currentNickname = currentNumber ? NUMBER_NICKNAMES[currentNumber] : null;
     const lastNNumbers = (currentGameState.called_numbers || []).slice(-10, -1);
+
+    useEffect(() => {
+        const isCallableState =
+            currentGameState.status === 'in_progress' &&
+            !currentGameState.on_break &&
+            !currentGameState.paused_for_validation;
+
+        if (!isCallableState || currentGameState.numbers_called_count === 0 || !currentGameState.last_call_at) {
+            const resetTimeout = setTimeout(() => setDisplaySyncRemainingMs(0), 0);
+            return () => clearTimeout(resetTimeout);
+        }
+
+        const lastCallAtMs = new Date(currentGameState.last_call_at).getTime();
+        if (Number.isNaN(lastCallAtMs)) {
+            const resetTimeout = setTimeout(() => setDisplaySyncRemainingMs(0), 0);
+            return () => clearTimeout(resetTimeout);
+        }
+
+        const lockDurationMs = Math.max(0, currentGameState.call_delay_seconds * 1000 + DISPLAY_SYNC_BUFFER_MS);
+        const unlockAtMs = lastCallAtMs + lockDurationMs;
+
+        const updateRemaining = () => {
+            const remainingMs = Math.max(0, unlockAtMs - Date.now());
+            setDisplaySyncRemainingMs(remainingMs);
+        };
+
+        const initialUpdateTimeout = setTimeout(updateRemaining, 0);
+        if (unlockAtMs <= Date.now()) {
+            return () => clearTimeout(initialUpdateTimeout);
+        }
+
+        const interval = setInterval(updateRemaining, 100);
+        return () => {
+            clearTimeout(initialUpdateTimeout);
+            clearInterval(interval);
+        };
+    }, [
+        currentGameState.call_delay_seconds,
+        currentGameState.last_call_at,
+        currentGameState.numbers_called_count,
+        currentGameState.on_break,
+        currentGameState.paused_for_validation,
+        currentGameState.status
+    ]);
 
     useEffect(() => {
         const supabase = createClient();
@@ -454,8 +501,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isGameCompleted = currentGameState.status === 'completed';
     const isGameNotInProgress = currentGameState.status !== 'in_progress';
     const isPausedForValidation = currentGameState.paused_for_validation;
+    const isDisplaySyncLocked = displaySyncRemainingMs > 0;
+    const displaySyncSeconds = Math.ceil(displaySyncRemainingMs / 1000);
 
-    const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || currentGameState.numbers_called_count >= 90;
+    const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || isDisplaySyncLocked || currentGameState.numbers_called_count >= 90;
     const isBreakToggleDisabled = !isController || isGameNotInProgress || isGameCompleted || isPausedForValidation;
     const isValidateButtonDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
     const isVoidLastNumberDisabled = !isController || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
@@ -467,13 +516,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             {/* Controller Locked Overlay / Banner */}
             {!isController && (
                 <div className="absolute inset-x-0 top-0 z-50 p-4">
-                    <div className="bg-red-900/90 border border-red-500 text-white p-4 rounded-xl shadow-2xl backdrop-blur-sm flex flex-col items-center gap-3 text-center">
+                    <div className="bg-[#003f27]/95 border border-[#a57626] text-white p-4 rounded-xl shadow-2xl backdrop-blur-sm flex flex-col items-center gap-3 text-center">
                         <div>
                             <h3 className="font-bold text-lg">View Only Mode</h3>
-                            <p className="text-sm text-red-200">Another host is currently controlling this game.</p>
+                            <p className="text-sm text-white/85">Another host is currently controlling this game.</p>
                         </div>
                         {canTakeControl && (
-                            <Button variant="primary" className="bg-red-600 hover:bg-red-700 animate-pulse" onClick={handleTakeControl}>
+                            <Button variant="secondary" className="bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white animate-pulse" onClick={handleTakeControl}>
                                 Take Control
                             </Button>
                         )}
@@ -489,14 +538,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         LIVE
                     </div>
                 ) : (
-                    <div className="bg-red-500/20 text-red-400 text-xs font-bold px-3 py-1 rounded-full border border-red-500/50">
+                    <div className="bg-[#a57626]/20 text-white text-xs font-bold px-3 py-1 rounded-full border border-[#a57626]/80">
                         OFFLINE
                     </div>
                 )}
             </div>
 
             {/* Alerts */}
-            {actionError && <div className="mb-4 p-4 bg-red-900/50 border border-red-500 text-red-200 rounded-lg text-center">{actionError}</div>}
+            {actionError && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center">{actionError}</div>}
             {isGameCompleted && <div className="mb-4 p-4 bg-[#003f27]/90 border border-[#1f7c58] text-white rounded-lg text-center">Game Completed</div>}
             {currentGameState.on_break && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold animate-pulse">ON BREAK</div>}
             {currentGameState.paused_for_validation && <div className="mb-4 p-4 bg-[#a57626]/25 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">CHECKING CLAIM...</div>}
@@ -537,11 +586,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant="primary"
                     size="xl"
-                    className={cn("col-span-2 h-24 text-3xl bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] shadow-xl shadow-black/25", isCallingNumber && "opacity-80")}
+                    className={cn("col-span-2 h-24 text-3xl bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] shadow-lg shadow-black/20", isCallingNumber && "opacity-80")}
                     onClick={handleCallNextNumber}
                     disabled={isNextNumberDisabled}
                 >
-                    {isCallingNumber ? "CALLING..." : currentGameState.numbers_called_count >= 90 ? "ALL NUMBERS CALLED" : "NEXT NUMBER"}
+                    {isCallingNumber ? "CALLING..." : currentGameState.numbers_called_count >= 90 ? "ALL NUMBERS CALLED" : isDisplaySyncLocked ? `WAITING FOR DISPLAY (${displaySyncSeconds})` : "NEXT NUMBER"}
                 </Button>
 
                 <Button
@@ -564,6 +613,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     Check Claim
                 </Button>
             </div>
+            {isDisplaySyncLocked && isController && (
+                <p className="text-center text-sm text-white/80 mb-6">
+                    Next number unlocks when the previous ball is visible on the display.
+                </p>
+            )}
 
             {/* Secondary Controls */}
             <div className={cn("flex justify-center gap-4 mb-8", !isController && "opacity-50 pointer-events-none")}>
@@ -634,7 +688,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     variant={winner.prize_given ? "outline" : "secondary"}
                                     className={cn(
                                         "min-w-[100px] shrink-0",
-                                        winner.prize_given ? "text-[#f3d59d] border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
+                                        winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
                                     )}
                                     onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
                                     disabled={!canTogglePrize}
@@ -658,30 +712,30 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             >
                 <div className="flex flex-col h-full">
                     <div className="shrink-0 mb-4">
-                        {actionError && <div className="p-3 bg-red-900/50 text-red-200 rounded mb-3">{actionError}</div>}
+                        {actionError && <div className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded mb-3">{actionError}</div>}
 
                         {validationResult ? (
                             validationResult.valid ? (
-                                <div className="p-4 bg-green-900/30 border border-green-800 rounded-lg flex items-center justify-between mb-4">
-                                    <span className="text-green-400 font-bold text-lg">✅ Valid Claim!</span>
+                                <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg flex items-center justify-between mb-4">
+                                    <span className="text-white font-bold text-lg">Valid Claim</span>
                                     <div className="flex gap-2">
                                         <Button onClick={() => setShowWinnerModal(true)}>Record Winner</Button>
                                         <Button variant="ghost" onClick={handleSkipStage} className="text-white/80 hover:text-white hover:bg-[#0f6846]">Skip (No Winner)</Button>
                                     </div>
                                 </div>
                             ) : (
-                                <div className="p-4 bg-red-900/30 border border-red-800 rounded-lg mb-4">
-                                    <span className="text-red-400 font-bold text-lg block mb-1">❌ Invalid Claim</span>
+                                <div className="p-4 bg-[#a57626]/20 border border-[#a57626] rounded-lg mb-4">
+                                    <span className="text-white font-bold text-lg block mb-1">Invalid Claim</span>
                                     <span className="text-white/85 text-sm">Numbers not called: {validationResult.invalidNumbers?.join(', ')}</span>
                                     <div className="mt-2">
-                                        <Button variant="outline" size="sm" onClick={handleResumeGame} className="text-red-300 border-red-800 hover:bg-red-900/50">Reject & Resume</Button>
+                                        <Button variant="outline" size="sm" onClick={handleResumeGame} className="text-white border-[#a57626] hover:bg-[#a57626]/25">Reject & Resume</Button>
                                     </div>
                                 </div>
                             )
                         ) : (
                             <div className="space-y-1">
                                 <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below.</p>
-                                <p className="text-[#f3d59d] text-xs text-center">The last called number is highlighted in gold.</p>
+                                <p className="text-white/75 text-xs text-center">The last called number is highlighted.</p>
                             </div>
                         )}
                     </div>
@@ -697,9 +751,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
                                 if (isSelected) {
                                     if (isCalled) {
-                                        buttonStyle = "bg-green-600 text-white shadow-lg shadow-green-900/50 scale-105 z-10 border border-green-500";
+                                        buttonStyle = "bg-[#005131] text-white shadow-lg shadow-black/30 scale-105 z-10 border border-[#a57626]";
                                     } else {
-                                        buttonStyle = "bg-red-600 text-white shadow-lg shadow-red-900/50 scale-105 z-10 border border-red-500";
+                                        buttonStyle = "bg-[#a57626] text-white shadow-lg shadow-black/30 scale-105 z-10 border border-white/70";
                                     }
                                 } else if (isLastCalled) {
                                     buttonStyle = "bg-[#a57626] text-white font-bold border-2 border-white ring-2 ring-[#f3d59d] ring-offset-0";
@@ -772,7 +826,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
                                         {winner.is_void && (
-                                            <span className="px-2 py-1 rounded-full text-xs font-semibold border border-red-700 text-red-300 bg-red-900/20">
+                                            <span className="px-2 py-1 rounded-full text-xs font-semibold border border-[#a57626] text-white bg-[#a57626]/20">
                                                 VOID
                                             </span>
                                         )}
@@ -781,7 +835,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                             variant={winner.prize_given ? "outline" : "secondary"}
                                             className={cn(
                                                 "min-w-[120px]",
-                                                winner.prize_given ? "text-[#f3d59d] border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
+                                                winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
                                             )}
                                             onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
                                             disabled={!canTogglePrize || winner.is_void}
@@ -841,7 +895,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             {/* Post Win Modal */}
             <Modal isOpen={showPostWinModal} onClose={() => { }} title="Winner Recorded!" className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-6 text-center py-4">
-                    <div className="w-16 h-16 bg-[#a57626]/20 text-[#f3d59d] rounded-full flex items-center justify-center mx-auto text-3xl border border-[#a57626]">
+                    <div className="w-16 h-16 bg-[#a57626]/20 text-white rounded-full flex items-center justify-center mx-auto text-3xl border border-[#a57626]">
                         🎉
                     </div>
                     <p className="text-white/90">The winner has been announced. What&apos;s next?</p>

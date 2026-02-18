@@ -38,7 +38,7 @@ export default async function HostPage() {
     console.error("Error fetching sessions for host:", sessionsError.message);
     return (
         <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 text-center bg-[#003f27] text-white">
-            <h1 className="text-2xl font-bold text-red-500 mb-4">Error Loading Sessions</h1>
+            <h1 className="text-2xl font-bold text-white mb-4">Error Loading Sessions</h1>
             <p className="text-white/85 mb-6">Could not retrieve sessions. Please try again later.</p>
              <form action={signout}>
                 <Button variant="secondary">Sign Out</Button>

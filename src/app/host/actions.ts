@@ -470,9 +470,9 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
 
   const { data: gameState, error: fetchError } = await supabase
     .from('game_states')
-    .select('number_sequence, called_numbers, numbers_called_count, status')
+    .select('number_sequence, called_numbers, numbers_called_count, status, call_delay_seconds, last_call_at')
     .eq('game_id', gameId)
-    .single<Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'status'>>()
+    .single<Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'status' | 'call_delay_seconds' | 'last_call_at'>>()
 
   if (fetchError || !gameState) {
     console.error("Error fetching game state for next number:", fetchError?.message);
@@ -481,6 +481,22 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
 
   if (gameState.status !== 'in_progress') {
     return { success: false, error: "Game is not in progress." };
+  }
+
+  if (gameState.last_call_at && gameState.numbers_called_count > 0) {
+    const displaySyncBufferMs = 200;
+    const lastCallAtMs = new Date(gameState.last_call_at).getTime();
+    if (!Number.isNaN(lastCallAtMs)) {
+      const lockDurationMs = Math.max(0, gameState.call_delay_seconds * 1000 + displaySyncBufferMs);
+      const remainingMs = lastCallAtMs + lockDurationMs - Date.now();
+      if (remainingMs > 0) {
+        const remainingSeconds = Math.ceil(remainingMs / 1000);
+        return {
+          success: false,
+          error: `Please wait ${remainingSeconds}s for the display to catch up.`
+        };
+      }
+    }
   }
 
   if (!gameState.number_sequence || gameState.numbers_called_count >= gameState.number_sequence.length) {
@@ -642,6 +658,28 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
     await handleSnowballPotUpdate(supabase, sessionId, gameId);
     await maybeCompleteSession(supabase, sessionId);
 
+    const { data: sessionAfterEnd, error: sessionAfterEndError } = await supabase
+        .from('sessions')
+        .select('status')
+        .eq('id', sessionId)
+        .single<Pick<Database['public']['Tables']['sessions']['Row'], 'status'>>();
+
+    if (!sessionAfterEndError && sessionAfterEnd && sessionAfterEnd.status !== 'completed') {
+        const clearActiveGameUpdate: Database['public']['Tables']['sessions']['Update'] = {
+            active_game_id: null,
+            status: 'running',
+        };
+        const { error: clearActiveError } = await supabase
+            .from('sessions')
+            .update(clearActiveGameUpdate)
+            .eq('id', sessionId);
+
+        if (clearActiveError) {
+            console.error("Error clearing active game after endGame:", clearActiveError.message);
+            return { success: false, error: clearActiveError.message };
+        }
+    }
+
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the specific game page
     revalidatePath(`/host`); // Revalidate the host dashboard
     return { success: true };
@@ -652,34 +690,28 @@ export async function moveToNextGameOnBreak(currentGameId: string, sessionId: st
     const controlResult = await requireController(supabase, currentGameId);
     if (!controlResult.authorized) return { success: false, error: controlResult.error };
 
-    const { data: currentGame, error: currentGameError } = await supabase
+    const { data: sessionGames, error: sessionGamesError } = await supabase
         .from('games')
-        .select('game_index')
-        .eq('id', currentGameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'game_index'>>();
+        .select('id, game_index, created_at')
+        .eq('session_id', sessionId)
+        .order('game_index', { ascending: true })
+        .order('created_at', { ascending: true });
 
-    if (currentGameError || !currentGame) {
-        return { success: false, error: currentGameError?.message || "Current game not found." };
+    if (sessionGamesError || !sessionGames) {
+        return { success: false, error: sessionGamesError?.message || "Could not read session games." };
     }
+
+    const currentGamePosition = sessionGames.findIndex((game) => game.id === currentGameId);
+    if (currentGamePosition === -1) {
+        return { success: false, error: "Current game not found in this session." };
+    }
+
+    const nextGameId = sessionGames[currentGamePosition + 1]?.id;
 
     const endResult = await endGame(currentGameId, sessionId);
     if (!endResult.success) {
         return { success: false, error: endResult.error || "Failed to complete current game." };
     }
-
-    const { data: nextGames, error: nextGamesError } = await supabase
-        .from('games')
-        .select('id')
-        .eq('session_id', sessionId)
-        .gt('game_index', currentGame.game_index)
-        .order('game_index', { ascending: true })
-        .limit(1);
-
-    if (nextGamesError) {
-        return { success: false, error: nextGamesError.message };
-    }
-
-    const nextGameId = nextGames?.[0]?.id;
     if (!nextGameId) {
         return { success: true, data: { redirectTo: '/host' } };
     }
