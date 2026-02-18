@@ -15,7 +15,8 @@ export function LayoutContent({
   const isDisplayGamePage = pathSegments[0] === 'display' && pathSegments.length === 2;
   const isPlayerGamePage = pathSegments[0] === 'player' && pathSegments.length === 2;
   const isGamePage = isHostGamePage || isDisplayGamePage || isPlayerGamePage;
-  const showHeader = pathname !== '/' && !pathname.startsWith('/display') && !pathname.startsWith('/player') && !isHostGamePage;
+  const showHeader = pathname === '/' || pathname.startsWith('/admin');
+  const currentYear = new Date().getFullYear();
 
   return (
     <div className={cn("flex flex-col min-h-screen", !isGamePage && "anchor-theme")}>
@@ -25,7 +26,7 @@ export function LayoutContent({
       </main>
       {!pathname.startsWith('/display') && !pathname.startsWith('/player') && !isHostGamePage && (
         <footer className="w-full py-4 text-center text-xs text-emerald-100/75 bg-[#003c25] border-t border-[#1f7c58]">
-          © 2025 Orange Jelly Limited. All rights reserved.
+          © {currentYear} Orange Jelly Limited. All rights reserved.
         </footer>
       )}
     </div>
