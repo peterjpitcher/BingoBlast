@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage } from '@/app/host/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
@@ -255,6 +255,16 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         currentSnowballPot &&
         isSnowballJackpotEligible(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
     );
+    const isFinalStage = currentGameState.current_stage_index >= Math.max(0, game.stage_sequence.length - 1);
+
+    const navigateToHostPath = (targetPath?: string) => {
+        const destination = targetPath || '/host';
+        if (typeof window !== 'undefined') {
+            window.location.assign(destination);
+            return;
+        }
+        router.push(destination);
+    };
 
     useEffect(() => {
         const isCallableState =
@@ -402,8 +412,37 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
+    const handleContinuePlaying = async (putOnBreak: boolean = false) => {
+        if (!isController) return;
+        setActionError(null);
+
+        const advanceResult = await advanceToNextStage(gameId);
+        if (!advanceResult?.success) {
+            setActionError(advanceResult?.error || "Failed to continue playing.");
+            return;
+        }
+
+        if (putOnBreak) {
+            const breakResult = await toggleBreak(gameId, true);
+            if (!breakResult?.success) {
+                setActionError(breakResult?.error || "Failed to start break.");
+                return;
+            }
+        }
+
+        setShowPostWinModal(false);
+        setShowValidationModal(false);
+        handleClearSelection();
+    };
+
     const handleMoveToNextGame = async () => {
         if (!isController) return;
+
+        if (!isFinalStage) {
+            await handleContinuePlaying();
+            return;
+        }
+
         setActionError(null);
         const result = await moveToNextGameAfterWin(gameId, sessionId);
         if (!result?.success) {
@@ -421,11 +460,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setShowPostWinModal(false);
         setShowValidationModal(false);
         handleClearSelection();
-        router.push(result.data?.redirectTo || '/host');
+        navigateToHostPath(result.data?.redirectTo);
     };
 
     const handleTakeBreakAfterGame = async () => {
         if (!isController) return;
+
+        if (!isFinalStage) {
+            await handleContinuePlaying(true);
+            return;
+        }
+
         setActionError(null);
         const result = await moveToNextGameOnBreak(gameId, sessionId);
         if (!result?.success) {
@@ -443,7 +488,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setShowPostWinModal(false);
         setShowValidationModal(false);
         handleClearSelection();
-        router.push(result.data?.redirectTo || '/host');
+        navigateToHostPath(result.data?.redirectTo);
     };
 
     const handleConfirmCashJackpotAndContinue = async () => {
@@ -469,7 +514,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setShowCashJackpotModal(false);
         setShowValidationModal(false);
         handleClearSelection();
-        router.push(transitionResult.data?.redirectTo || '/host');
+        navigateToHostPath(transitionResult.data?.redirectTo);
     };
 
     const handleCancelCashJackpotModal = () => {
@@ -478,7 +523,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setCashJackpotAmount('');
 
         if (currentGameState.status === 'completed') {
-            router.push('/host');
+            navigateToHostPath('/host');
             return;
         }
 
@@ -1036,7 +1081,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
                     <div className="flex flex-col gap-3">
                         <Button variant="primary" size="lg" className="w-full bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]" onClick={handleMoveToNextGame}>
-                            Move to Next Game
+                            {isFinalStage ? 'Move to Next Game' : 'Continue Playing'}
                         </Button>
 
                         <div className="grid grid-cols-1 gap-3">
@@ -1051,7 +1096,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             </Button>
 
                             <Button variant="secondary" className="border-[#a57626] text-white hover:bg-[#a57626]/20" onClick={handleTakeBreakAfterGame}>
-                                Take a Break
+                                {isFinalStage ? 'Take a Break' : 'Continue & Take Break'}
                             </Button>
                         </div>
                     </div>

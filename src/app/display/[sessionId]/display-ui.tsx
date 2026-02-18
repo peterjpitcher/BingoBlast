@@ -312,6 +312,19 @@ export default function DisplayUI({
   const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
   const houseRulesTitleClass = "text-[clamp(2.6rem,3.8vw,4rem)] font-bold text-white mb-4 border-b border-[#1f7c58] pb-3";
   const houseRulesListClass = "space-y-4 text-[clamp(1.7rem,2.35vw,2.45rem)] leading-[1.22] text-white";
+  const stagePrizePreview = currentActiveGame
+    ? currentActiveGame.stage_sequence.map((stage, index) => ({
+        index,
+        stageLabel: formatStageLabel(stage),
+        prizeLabel: currentActiveGame.prizes?.[stage as keyof typeof currentActiveGame.prizes] || 'Standard Prize',
+      }))
+    : [];
+  const showPreCallStagePreview = !!(
+    showActiveGame &&
+    currentGameState &&
+    currentGameState.numbers_called_count === 0 &&
+    stagePrizePreview.length > 0
+  );
 
   const renderHouseRulesPanel = () => (
     <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md overflow-hidden">
@@ -468,7 +481,33 @@ export default function DisplayUI({
                   </div>
                 </div>
               ) : (
-                 <h1 className="text-[72px] font-bold opacity-40 animate-pulse">READY...</h1>
+                <>
+                  {showPreCallStagePreview ? (
+                    <div className="w-full max-w-4xl bg-[#005131]/92 border border-[#a57626] rounded-3xl p-8 text-white animate-in fade-in duration-500">
+                      <p className="text-[clamp(1rem,1.5vw,1.2rem)] uppercase tracking-[0.2em] font-semibold text-[#f3d59d] text-center animate-pulse">
+                        Game Stages & Prizes
+                      </p>
+                      <div className="mt-5 space-y-3">
+                        {stagePrizePreview.map((item) => (
+                          <div
+                            key={`${item.stageLabel}-${item.index}`}
+                            className="grid grid-cols-[1fr_auto] gap-4 items-center bg-[#003f27]/75 border border-[#1f7c58] rounded-2xl px-5 py-4 animate-pulse"
+                            style={{ animationDelay: `${item.index * 180}ms` }}
+                          >
+                            <p className="text-[clamp(1.2rem,2vw,1.8rem)] font-bold tracking-wide">
+                              Stage {item.index + 1}: {item.stageLabel}
+                            </p>
+                            <p className="text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold text-[#f3d59d]">
+                              {item.prizeLabel}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <h1 className="text-[72px] font-bold opacity-40 animate-pulse">READY...</h1>
+                  )}
+                </>
               )}
             </div>
           )}
