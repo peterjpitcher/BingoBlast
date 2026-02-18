@@ -305,13 +305,11 @@ export default function DisplayUI({
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
   const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
-  const panelTitleClass = "text-[clamp(2rem,4vw,3.2rem)] font-black uppercase tracking-[0.08em] text-white";
-  const panelBodyClass = "text-[clamp(1.2rem,2.2vw,2rem)] text-white";
 
   return (
     <div 
       className={cn(
-          "min-h-screen w-full flex flex-col transition-colors duration-1000 ease-in-out overflow-hidden relative text-white"
+          "h-screen max-h-screen w-full flex flex-col transition-colors duration-1000 ease-in-out overflow-hidden relative text-white"
       )}
       style={{ backgroundColor: displayBackgroundColor }}
     >
@@ -329,41 +327,50 @@ export default function DisplayUI({
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex items-center justify-center relative p-8">
+      <div className="flex-1 flex items-center justify-center relative p-6 overflow-hidden">
           
           {isWaitingState && (
-            <div className="w-full max-w-5xl mx-auto flex flex-col items-center gap-8 animate-in fade-in duration-700 py-8">
-                <div className="relative w-[min(70vw,430px)] h-[min(24vw,160px)] min-h-[96px]">
-                    <Image
-                        src="/the-anchor-pub-logo-white-transparent.png"
-                        alt="The Anchor"
-                        fill
-                        className="object-contain"
-                    />
+            <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-stretch overflow-hidden">
+                <div className="col-span-12 xl:col-span-7 flex flex-col justify-center gap-5">
+                    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 backdrop-blur-md flex items-center justify-center">
+                        <div className="relative w-[min(52vw,420px)] h-[min(18vw,150px)] min-h-[90px]">
+                            <Image
+                                src="/the-anchor-pub-logo-white-transparent.png"
+                                alt="The Anchor"
+                                fill
+                                className="object-contain"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center backdrop-blur-sm">
+                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Kitchen Open Until 9pm</h2>
+                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
+                    </div>
+
+                    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-center backdrop-blur-md">
+                        <h3 className="text-[clamp(1.5rem,2.3vw,2.3rem)] font-bold text-white">Session starts shortly</h3>
+                        <p className="text-[clamp(1rem,1.45vw,1.3rem)] text-white/90 mt-1">Please have your tickets ready.</p>
+                    </div>
                 </div>
 
-                <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-6 text-center backdrop-blur-sm">
-                    <h2 className={cn(panelTitleClass, "animate-pulse")}>Kitchen Open Until 9pm</h2>
-                    <p className={cn(panelBodyClass, "mt-2 font-medium")}>Get your drinks and order food at the bar!</p>
-                </div>
-
-                <div className="w-full bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md">
-                    <h3 className="text-[clamp(1.8rem,3.2vw,2.8rem)] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-3 text-[clamp(1.05rem,1.8vw,1.65rem)] text-white">
+                <div className="col-span-12 xl:col-span-5 bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-left backdrop-blur-md flex flex-col overflow-hidden">
+                    <h3 className="text-[clamp(1.5rem,2.2vw,2.2rem)] font-bold text-white mb-3 border-b border-[#1f7c58] pb-2 shrink-0">House Rules</h3>
+                    <ul className="space-y-2 text-[clamp(0.96rem,1.28vw,1.2rem)] text-white overflow-hidden">
                         <li className="flex gap-3 items-start">
-                            <span className="text-white mt-1">➤</span>
+                            <span className="text-white mt-0.5">➤</span>
                             <span>Claims must be called on the number they&apos;re won on - <span className="font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-white mt-1">➤</span>
+                            <span className="text-white mt-0.5">➤</span>
                             <span>Multiple claims share the prize</span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-white mt-1">➤</span>
+                            <span className="text-white mt-0.5">➤</span>
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
-                            <span className="text-[clamp(1.2rem,2vw,1.8rem)]">🎉</span>
+                            <span className="text-[clamp(1rem,1.3vw,1.3rem)]">🎉</span>
                             <span className="font-bold italic">Enjoy the night and best of luck to everyone!</span>
                         </li>
                     </ul>
@@ -372,22 +379,22 @@ export default function DisplayUI({
           )}
 
           {showBreak && (
-            <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in zoom-in duration-500 py-4 items-center">
+            <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-5 animate-in zoom-in duration-500 items-center overflow-hidden">
                 <div className="col-span-12 xl:col-span-7 flex flex-col gap-5">
                     <div className="text-center xl:text-left">
-                        <h1 className="text-[clamp(2.4rem,5.8vw,5.4rem)] font-black text-white tracking-[0.07em] uppercase">Break Time</h1>
-                        <p className="text-[clamp(1.2rem,2.2vw,2rem)] text-white font-semibold mt-1">We will resume shortly</p>
+                        <h1 className="text-[clamp(2.1rem,5.2vw,4.6rem)] font-black text-white tracking-[0.07em] uppercase">Break Time</h1>
+                        <p className="text-[clamp(1.05rem,1.8vw,1.6rem)] text-white font-semibold mt-1">We will resume shortly</p>
                     </div>
 
-                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className="text-[clamp(1.8rem,3vw,3rem)] font-black uppercase tracking-[0.08em] text-white">Kitchen Open Until 9pm</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.45rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
+                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-4 text-center xl:text-left backdrop-blur-sm">
+                        <h2 className="text-[clamp(1.55rem,2.5vw,2.4rem)] font-black uppercase tracking-[0.08em] text-white">Kitchen Open Until 9pm</h2>
+                        <p className="text-[clamp(0.95rem,1.45vw,1.2rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
                     </div>
                 </div>
 
-                <div className="col-span-12 xl:col-span-5 bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-left backdrop-blur-md">
-                    <h3 className="text-[clamp(1.5rem,2.3vw,2.2rem)] font-bold text-white mb-3 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-[clamp(0.95rem,1.35vw,1.2rem)] text-white">
+                <div className="col-span-12 xl:col-span-5 bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-4 text-left backdrop-blur-md overflow-hidden">
+                    <h3 className="text-[clamp(1.35rem,2vw,1.95rem)] font-bold text-white mb-2 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-[clamp(0.9rem,1.2vw,1.05rem)] text-white">
                         <li className="flex gap-3 items-start">
                             <span className="text-white mt-0.5">➤</span>
                             <span>Claims must be called on the number they&apos;re won on - <span className="font-bold">late claims invalid</span></span>
@@ -406,24 +413,24 @@ export default function DisplayUI({
           )}
 
           {isGameFinishedState && (
-            <div className="w-full max-w-5xl mx-auto flex flex-col items-center gap-8 animate-in fade-in duration-700 py-8 text-center">
+            <div className="w-full h-full max-w-6xl mx-auto flex flex-col items-center justify-center gap-5 animate-in fade-in duration-700 text-center overflow-hidden">
               <div>
-                  <h1 className="text-[clamp(2.6rem,7vw,6rem)] font-black text-white mb-2 tracking-[0.06em] uppercase">Thanks For Playing!</h1>
-                  <p className="text-[clamp(1.35rem,2.8vw,2.4rem)] text-white font-medium">We hope you had a blast!</p>
+                  <h1 className="text-[clamp(2.2rem,5.8vw,4.8rem)] font-black text-white mb-2 tracking-[0.06em] uppercase">Thanks For Playing!</h1>
+                  <p className="text-[clamp(1.1rem,2.1vw,1.8rem)] text-white font-medium">We hope you had a blast!</p>
               </div>
 
-              <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-8 backdrop-blur-sm">
-                  <h2 className="text-[clamp(2rem,4.8vw,4rem)] font-black text-white uppercase tracking-[0.08em]">Book for next time tonight!</h2>
-                  <p className="text-[clamp(1.2rem,2.5vw,2rem)] text-white font-semibold mt-3">Don&apos;t miss out - secure your table at the bar.</p>
+              <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-6 backdrop-blur-sm">
+                  <h2 className="text-[clamp(1.6rem,3.4vw,2.8rem)] font-black text-white uppercase tracking-[0.08em]">Book for next time tonight!</h2>
+                  <p className="text-[clamp(1rem,1.8vw,1.4rem)] text-white font-semibold mt-2">Don&apos;t miss out - secure your table at the bar.</p>
               </div>
 
-              <div className="space-y-4 max-w-4xl">
-                  <p className="text-[clamp(1.2rem,2.5vw,2rem)] text-white font-medium leading-relaxed">
+              <div className="space-y-3 max-w-4xl">
+                  <p className="text-[clamp(1rem,1.85vw,1.5rem)] text-white font-medium leading-relaxed">
                       Please enjoy the remaining time that we&apos;re open.
                       <br />
                       The bar is open for drinks!
                   </p>
-                  <p className="text-[clamp(1.1rem,2.2vw,1.8rem)] text-white font-bold uppercase tracking-[0.08em]">
+                  <p className="text-[clamp(1rem,1.65vw,1.3rem)] text-white font-bold uppercase tracking-[0.08em]">
                       Bring friends, family and neighbours next time!
                   </p>
               </div>
