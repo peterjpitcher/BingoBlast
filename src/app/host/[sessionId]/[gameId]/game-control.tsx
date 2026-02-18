@@ -59,6 +59,14 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
 
 const DISPLAY_SYNC_BUFFER_MS = 200;
 
+const getRequiredSelectionCount = (stage: string | undefined): number => {
+    if (!stage) return 5;
+    const normalized = stage.toLowerCase();
+    if (normalized.includes('two')) return 10;
+    if (normalized.includes('full')) return 15;
+    return 5;
+};
+
 
 export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole }: GameControlProps) {
     const router = useRouter();
@@ -197,6 +205,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const currentNumber = currentGameState.called_numbers?.[currentGameState.numbers_called_count - 1] || null;
     const currentNickname = currentNumber ? NUMBER_NICKNAMES[currentNumber] : null;
     const lastNNumbers = (currentGameState.called_numbers || []).slice(-10, -1);
+    const currentStageName = game.stage_sequence[currentGameState.current_stage_index];
+    const requiredSelectionCount = getRequiredSelectionCount(currentStageName);
 
     useEffect(() => {
         const isCallableState =
@@ -399,8 +409,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleCheckWin = async () => {
         if (!isController) return;
         setActionError(null);
-        if (selectedNumbers.length === 0) {
-            setActionError("Please select numbers to validate.");
+        if (selectedNumbers.length !== requiredSelectionCount) {
+            setActionError(`Select exactly ${requiredSelectionCount} numbers for ${currentStageName || 'this stage'} before checking.`);
             return;
         }
 
@@ -413,7 +423,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         const validation = result.data;
         setValidationResult(validation || null);
         if (validation?.valid) {
-            const currentStage = game.stage_sequence[currentGameState.current_stage_index];
+            const currentStage = currentStageName;
             const isSnowballGame = game.type === 'snowball' && currentStage === 'Full House';
             const isJackpot = isSnowballGame && currentSnowballPot && currentGameState.numbers_called_count <= currentSnowballPot.current_max_calls;
 
@@ -733,6 +743,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         ) : (
                             <div className="space-y-1">
                                 <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below.</p>
+                                <p className="text-white text-sm text-center font-semibold">Select exactly {requiredSelectionCount} numbers for {currentStageName || 'this stage'}.</p>
                                 <p className="text-white/75 text-xs text-center">The last called number is highlighted.</p>
                             </div>
                         )}
@@ -785,7 +796,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             <Button
                                 variant="primary"
                                 onClick={handleCheckWin}
-                                disabled={selectedNumbers.length === 0}
+                                disabled={selectedNumbers.length !== requiredSelectionCount}
                             >
                                 Check Win
                             </Button>
