@@ -1105,7 +1105,8 @@ export async function recordWinner(
     callCountAtWin: number,
     // isSnowballJackpot: boolean, // Removed, calculated server-side
     prizeGiven: boolean = false,
-    forceSnowballJackpot: boolean = false
+    forceSnowballJackpot: boolean = false,
+    snowballEligible: boolean = false
 ): Promise<ActionResult> {
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
@@ -1127,6 +1128,8 @@ export async function recordWinner(
     // Re-calculate isSnowballJackpot on the server for security
     let actualIsSnowballJackpot = false;
     let snowballJackpotAmount: number | null = null;
+    let isSnowballFullHouseStage = false;
+    let snowballWindowOpen = false;
     const { data: game, error: gameError } = await supabase
         .from('games')
         .select('type, snowball_pot_id')
@@ -1139,6 +1142,7 @@ export async function recordWinner(
     }
 
     if (game && game.type === 'snowball' && stage === 'Full House' && game.snowball_pot_id) {
+        isSnowballFullHouseStage = true;
         const { data: snowballPot, error: potError } = await supabase
             .from('snowball_pots')
             .select('current_max_calls, current_jackpot_amount')
@@ -1150,10 +1154,11 @@ export async function recordWinner(
             // Continue, but actualIsSnowballJackpot remains false
         }
 
-        if (
-            snowballPot &&
-            (forceSnowballJackpot || isSnowballJackpotEligible(resolvedCallCountAtWin, snowballPot.current_max_calls))
-        ) {
+        if (snowballPot) {
+            snowballWindowOpen = isSnowballJackpotEligible(resolvedCallCountAtWin, snowballPot.current_max_calls);
+        }
+
+        if (snowballPot && (forceSnowballJackpot || (snowballWindowOpen && snowballEligible))) {
             actualIsSnowballJackpot = true;
             snowballJackpotAmount = Number(snowballPot.current_jackpot_amount);
         }
@@ -1178,6 +1183,7 @@ export async function recordWinner(
         winner_name: winnerName,
         prize_description: finalPrizeDescription,
         call_count_at_win: resolvedCallCountAtWin,
+        is_snowball_eligible: snowballEligible,
         is_snowball_jackpot: actualIsSnowballJackpot, // Use server-calculated value
         prize_given: prizeGiven,
     };
@@ -1195,7 +1201,18 @@ export async function recordWinner(
     let displayWinText: string;
     if (actualIsSnowballJackpot) {
         displayWinType = 'snowball';
-        displayWinText = 'SNOWBALL JACKPOT WIN!';
+        displayWinText = snowballJackpotAmount !== null
+            ? `FULL HOUSE + SNOWBALL £${formatPounds(snowballJackpotAmount)}!`
+            : 'FULL HOUSE + SNOWBALL JACKPOT!';
+    } else if (isSnowballFullHouseStage) {
+        displayWinType = 'full_house';
+        if (snowballWindowOpen && !snowballEligible) {
+            displayWinText = 'FULL HOUSE WINNER (PRIZE ONLY)';
+        } else if (!snowballWindowOpen) {
+            displayWinText = 'FULL HOUSE WINNER (SNOWBALL CLOSED)';
+        } else {
+            displayWinText = 'FULL HOUSE WINNER!';
+        }
     } else {
         switch (stage) {
             case 'Line':

@@ -130,6 +130,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [displaySyncRemainingMs, setDisplaySyncRemainingMs] = useState(0);
     const [winnerName, setWinnerName] = useState('');
     const [prizeGiven, setPrizeGiven] = useState(false);
+    const [snowballEligible, setSnowballEligible] = useState(false);
     const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
     const [sessionWinners, setSessionWinners] = useState<SessionWinner[]>([]);
 
@@ -265,6 +266,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         currentSnowballPot &&
         isSnowballJackpotEligible(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
     );
+    const isSnowballEligibilityStage = isSnowballGame && currentStageName === 'Full House';
     const isFinalStage = currentGameState.current_stage_index >= Math.max(0, game.stage_sequence.length - 1);
 
     const navigateToHostPath = (targetPath?: string) => {
@@ -590,10 +592,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setValidationResult(validation || null);
         if (validation?.valid) {
             const currentStage = currentStageName;
-            const isSnowballFinalStage = isSnowballGame && currentStage === 'Full House';
-            const isJackpot = isSnowballFinalStage && isSnowballJackpotWindowOpen;
+            if (isSnowballGame && currentStage === 'Full House') {
+                setSnowballEligible(false);
+            }
 
-            const announceResult = await announceWin(gameId, isJackpot ? 'snowball' : currentStage);
+            const announceResult = await announceWin(gameId, currentStage);
             if (!announceResult?.success) {
                 setActionError(announceResult?.error || "Failed to announce win.");
                 return;
@@ -622,7 +625,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             winnerName,
             prizeDescription,
             currentGameState.numbers_called_count,
-            prizeGiven
+            prizeGiven,
+            false,
+            snowballEligible
         );
 
         if (!result?.success) {
@@ -630,6 +635,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         } else {
             setWinnerName('');
             setPrizeGiven(false);
+            setSnowballEligible(false);
             setShowWinnerModal(false);
             setShowPostWinModal(true);
         }
@@ -1079,14 +1085,38 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             onChange={(e) => setPrizeDescription(e.target.value)}
                             placeholder="e.g. £10 Cash"
                         />
-                        {game.type === 'snowball' && currentStageName === 'Full House' && currentSnowballPot && (
+                        {isSnowballEligibilityStage && currentSnowballPot && (
                             <p className="text-xs text-white/75 mt-2">
                                 {isSnowballJackpotWindowOpen
-                                    ? `Jackpot is live (${snowballCallsLabel}). Snowball Jackpot £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))} is added automatically.`
+                                    ? `Jackpot is live (${snowballCallsLabel}). Mark the winner as snowball eligible to award both prizes.`
                                     : `Jackpot is closed (${snowballCallsLabel}). This will record the normal game prize only.`}
                             </p>
                         )}
                     </div>
+                    {isSnowballEligibilityStage && currentSnowballPot && (
+                        <div className="rounded-lg border border-[#a57626]/70 bg-[#005131]/60 px-3 py-2">
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    id="snowballEligible"
+                                    checked={snowballEligible}
+                                    onChange={(e) => setSnowballEligible(e.target.checked)}
+                                    disabled={!isSnowballJackpotWindowOpen}
+                                    className="w-5 h-5 rounded border-[#1f7c58] bg-[#005131] text-[#a57626] focus:ring-[#a57626] accent-[#a57626] cursor-pointer disabled:opacity-50"
+                                />
+                                <label htmlFor="snowballEligible" className="text-sm text-white/90 select-none cursor-pointer">
+                                    Winner is eligible for Snowball (attended last 3 games)
+                                </label>
+                            </div>
+                            <p className="text-xs text-white/75 mt-2">
+                                {isSnowballJackpotWindowOpen
+                                    ? snowballEligible
+                                        ? `Will award stage prize + Snowball Jackpot £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}.`
+                                        : 'Will award stage prize only.'
+                                    : 'Snowball jackpot cannot be awarded after the call limit.'}
+                            </p>
+                        </div>
+                    )}
                     <div className="flex items-center gap-2 pt-2">
                         <input
                             type="checkbox"
@@ -1221,7 +1251,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 prizeDescription,
                                 currentGameState.numbers_called_count,
                                 true, // Prize given immediately? Assume yes for manual award or make optional. Let's default true for "Close out".
-                                true // Force snowball jackpot override for manual award path.
+                                true, // Force snowball jackpot override for manual award path.
+                                true
                             );
 
                             if (!result?.success) {

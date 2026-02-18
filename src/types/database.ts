@@ -299,6 +299,7 @@ export interface Database {
           prize_description: string | null
           prize_given: boolean
           call_count_at_win: number | null
+          is_snowball_eligible: boolean
           is_snowball_jackpot: boolean
           is_void: boolean
           void_reason: string | null
@@ -313,6 +314,7 @@ export interface Database {
           prize_description?: string | null
           prize_given?: boolean
           call_count_at_win?: number | null
+          is_snowball_eligible?: boolean
           is_snowball_jackpot?: boolean
           is_void?: boolean
           void_reason?: string | null
@@ -327,6 +329,7 @@ export interface Database {
           prize_description?: string | null
           prize_given?: boolean
           call_count_at_win?: number | null
+          is_snowball_eligible?: boolean
           is_snowball_jackpot?: boolean
           is_void?: boolean
           void_reason?: string | null
