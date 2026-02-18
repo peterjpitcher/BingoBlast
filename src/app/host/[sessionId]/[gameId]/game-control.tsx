@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { BingoBall } from '@/components/ui/bingo-ball';
 import { useWakeLock } from '@/hooks/wake-lock';
-import { formatPounds, getSnowballCallsLabel, isSnowballJackpotEligible } from '@/lib/snowball';
+import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining, isSnowballJackpotEligible } from '@/lib/snowball';
 
 type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -248,8 +248,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const currentStageName = game.stage_sequence[currentGameState.current_stage_index];
     const currentStagePrize = getPlannedPrize(currentGameState.current_stage_index) || 'Standard Prize';
     const requiredSelectionCount = getRequiredSelectionCount(currentStageName);
+    const isSnowballGame = game.type === 'snowball';
     const snowballCallsLabel = currentSnowballPot
         ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+        : null;
+    const snowballCallsRemaining = currentSnowballPot
+        ? getSnowballCallsRemaining(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
         : null;
     const isSnowballJackpotWindowOpen = !!(
         currentSnowballPot &&
@@ -561,6 +565,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError(`Select exactly ${requiredSelectionCount} numbers for ${currentStageName || 'this stage'} before checking.`);
             return;
         }
+        if (!currentNumber) {
+            setActionError("No last called number is available to verify this claim.");
+            return;
+        }
+        if (!selectedNumbers.includes(currentNumber)) {
+            setActionError(`Claim must include the last called number (${currentNumber}).`);
+            return;
+        }
 
         const result = await validateClaim(gameId, selectedNumbers);
         if (!result?.success) {
@@ -572,8 +584,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setValidationResult(validation || null);
         if (validation?.valid) {
             const currentStage = currentStageName;
-            const isSnowballGame = game.type === 'snowball' && currentStage === 'Full House';
-            const isJackpot = isSnowballGame && isSnowballJackpotWindowOpen;
+            const isSnowballFinalStage = isSnowballGame && currentStage === 'Full House';
+            const isJackpot = isSnowballFinalStage && isSnowballJackpotWindowOpen;
 
             const announceResult = await announceWin(gameId, isJackpot ? 'snowball' : currentStage);
             if (!announceResult?.success) {
@@ -739,14 +751,24 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             <span className="text-xl font-bold text-white">{currentStagePrize}</span>
                         </div>
                     </div>
-                    {game.type === 'snowball' && currentSnowballPot && snowballCallsLabel && (
+                    {isSnowballGame && (
                         <div className="mt-4 w-full rounded-xl border border-[#a57626]/70 bg-[#005131]/65 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                            <p className="text-white font-semibold">
-                                Snowball Jackpot: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
-                            </p>
-                            <p className="text-white/90 font-semibold">
-                                {snowballCallsLabel}
-                            </p>
+                            {currentSnowballPot && snowballCallsLabel ? (
+                                <>
+                                    <p className="text-white font-semibold">
+                                        Snowball Jackpot: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
+                                    </p>
+                                    <p className="text-white/90 font-semibold text-right">
+                                        {snowballCallsLabel}
+                                        {` • ${currentGameState.numbers_called_count}/${currentSnowballPot.current_max_calls} calls`}
+                                        {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
+                                    </p>
+                                </>
+                            ) : (
+                                <p className="text-white/90 font-semibold">
+                                    Snowball countdown unavailable: this game is not linked to a snowball pot.
+                                </p>
+                            )}
                         </div>
                     )}
                 </CardContent>
@@ -878,6 +900,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 onClose={() => {
                     if (!currentGameState.paused_for_validation) setShowValidationModal(false);
                 }}
+                showCloseButton={false}
                 title="Validate Ticket"
                 className="max-w-4xl h-[80vh] bg-[#003f27] border border-[#1f7c58]"
             >
@@ -907,7 +930,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             <div className="space-y-1">
                                 <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below.</p>
                                 <p className="text-white text-sm text-center font-semibold">Select exactly {requiredSelectionCount} numbers for {currentStageName || 'this stage'}.</p>
-                                <p className="text-white/75 text-xs text-center">The last called number is highlighted.</p>
+                                <p className="text-white/75 text-xs text-center">The claim must include the last called number (highlighted).</p>
                             </div>
                         )}
                     </div>
@@ -959,7 +982,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             <Button
                                 variant="primary"
                                 onClick={handleCheckWin}
-                                disabled={selectedNumbers.length !== requiredSelectionCount}
+                                disabled={selectedNumbers.length !== requiredSelectionCount || (currentNumber !== null && !selectedNumbers.includes(currentNumber))}
                             >
                                 Check Win
                             </Button>

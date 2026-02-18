@@ -6,7 +6,7 @@ import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
-import { formatPounds, getSnowballCallsLabel } from '@/lib/snowball';
+import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining } from '@/lib/snowball';
 
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
@@ -300,8 +300,12 @@ export default function DisplayUI({
   const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isGameFinishedState;
   const showWinState = !!currentGameState?.display_win_type && !isGameFinishedState;
   const showServiceState = !!(isWaitingState || showBreak || isGameFinishedState);
+  const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
     ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    : null;
+  const snowballCallsRemaining = currentSnowballPot && currentGameState
+    ? getSnowballCallsRemaining(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
     : null;
   const resolvedJoinUrl = playerJoinUrl.startsWith('http')
     ? playerJoinUrl
@@ -544,9 +548,11 @@ export default function DisplayUI({
                     <p className={footerLeftTextClass}>
                       Prize: {currentPrizeText || 'Standard Prize'}
                     </p>
-                    {currentActiveGame?.type === 'snowball' && currentSnowballPot && (
+                    {isSnowballGame && (
                       <p className={footerLeftTextClass}>
-                        Snowball: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))} {snowballCallsLabel ? `- ${snowballCallsLabel}` : ''}
+                        {currentSnowballPot && snowballCallsLabel && currentGameState
+                          ? `Snowball: £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))} - ${snowballCallsLabel} (${currentGameState.numbers_called_count}/${currentSnowballPot.current_max_calls} calls${typeof snowballCallsRemaining === 'number' ? `, ${snowballCallsRemaining} left` : ''})`
+                          : 'Snowball: countdown unavailable (no linked snowball pot)'}
                       </p>
                     )}
                   </>

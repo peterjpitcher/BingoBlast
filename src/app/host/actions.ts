@@ -894,16 +894,26 @@ export async function validateClaim(gameId: string, claimedNumbers: number[]): P
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
-        .select('called_numbers, current_stage_index')
+        .select('called_numbers, current_stage_index, numbers_called_count')
         .eq('game_id', gameId)
-        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'called_numbers' | 'current_stage_index'>>();
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'called_numbers' | 'current_stage_index' | 'numbers_called_count'>>();
 
     if (fetchError || !gameState) {
         return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
-    const calledNumbersSet = new Set(gameState.called_numbers as number[]);
+    const calledNumbers = gameState.called_numbers as number[];
+    const calledNumbersSet = new Set(calledNumbers);
     const invalidNumbers: number[] = [];
+
+    if (!gameState.numbers_called_count || calledNumbers.length === 0) {
+        return { success: false, error: "No numbers have been called yet." };
+    }
+
+    const lastCalledNumber = calledNumbers[gameState.numbers_called_count - 1];
+    if (!claimedNumbers.includes(lastCalledNumber)) {
+        return { success: false, error: `Claim must include the last called number (${lastCalledNumber}).` };
+    }
 
     for (const num of claimedNumbers) {
         if (!calledNumbersSet.has(num)) {

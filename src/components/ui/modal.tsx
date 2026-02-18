@@ -8,9 +8,18 @@ interface ModalProps {
   title: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  showCloseButton?: boolean;
 }
 
-export function Modal({ isOpen, onClose, title, children, footer, className }: ModalProps & { className?: string }) {
+export function Modal({
+  isOpen,
+  onClose,
+  title,
+  children,
+  footer,
+  className,
+  showCloseButton = true,
+}: ModalProps & { className?: string }) {
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -39,12 +48,14 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: M
       >
         <div className="flex items-center justify-between p-4 border-b border-[#1f7c58] shrink-0">
           <h2 className="text-lg font-bold text-white">{title}</h2>
-          <button 
-            onClick={onClose}
-            className="p-1 rounded-md text-white/70 hover:text-white hover:bg-[#0f6846] transition-colors"
-          >
-            ✕
-          </button>
+          {showCloseButton ? (
+            <button 
+              onClick={onClose}
+              className="p-1 rounded-md text-white/70 hover:text-white hover:bg-[#0f6846] transition-colors"
+            >
+              ✕
+            </button>
+          ) : null}
         </div>
         
         <div className="p-4 overflow-y-auto">

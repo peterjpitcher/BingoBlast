@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
 import { useWakeLock } from '@/hooks/wake-lock';
-import { formatPounds, getSnowballCallsLabel } from '@/lib/snowball';
+import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining } from '@/lib/snowball';
 
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
@@ -244,6 +244,9 @@ export default function PlayerUI({
   const snowballCallsLabel = currentSnowballPot && currentGameState
     ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
     : null;
+  const snowballCallsRemaining = currentSnowballPot && currentGameState
+    ? getSnowballCallsRemaining(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    : null;
 
   return (
     <div
@@ -347,16 +350,30 @@ export default function PlayerUI({
               </div>
             </div>
 
-            {isSnowballGame && currentSnowballPot && (
-              <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 flex justify-between items-center shadow-lg shadow-black/25">
-                <div>
-                  <span className="text-white text-xs font-bold uppercase block">Snowball Jackpot</span>
-                  <span className="text-2xl font-bold text-white">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-white text-xs block">Status</span>
-                  <span className="text-xl font-bold text-white">{snowballCallsLabel}</span>
-                </div>
+            {isSnowballGame && (
+              <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 flex justify-between items-center shadow-lg shadow-black/25 gap-4">
+                {currentSnowballPot && currentGameState ? (
+                  <>
+                    <div>
+                      <span className="text-white text-xs font-bold uppercase block">Snowball Jackpot</span>
+                      <span className="text-2xl font-bold text-white">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-white text-xs block">Status</span>
+                      <span className="text-xl font-bold text-white">
+                        {snowballCallsLabel}
+                      </span>
+                      <span className="text-xs text-white/90 block">
+                        {currentGameState.numbers_called_count}/{currentSnowballPot.current_max_calls} calls
+                        {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-white font-semibold">
+                    Snowball countdown unavailable: this game is not linked to a snowball pot.
+                  </p>
+                )}
               </div>
             )}
 
