@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, advanceToNextStage, toggleWinnerPrizeGiven, takeControl, sendHeartbeat } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat } from '@/app/host/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
@@ -62,7 +62,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [isCallingNumber, setIsCallingNumber] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
     const [isConnected, setIsConnected] = useState(true);
-    const [showEndGameConfirm, setShowEndGameConfirm] = useState(false);
     const [showValidationModal, setShowValidationModal] = useState(false);
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [validationResult, setValidationResult] = useState<{ valid: boolean; invalidNumbers?: number[] } | null>(null);
@@ -257,15 +256,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
-    const handleEndGame = async () => {
+    const handleMoveToNextGame = async () => {
         if (!isController) return;
-        setShowEndGameConfirm(false);
         setActionError(null);
         const result = await endGame(gameId, sessionId);
         if (!result?.success) {
             setActionError(result?.error || "Failed to end game.");
             return;
         }
+        setShowPostWinModal(false);
+        setShowValidationModal(false);
+        handleClearSelection();
         router.push('/host');
     };
 
@@ -345,23 +346,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
-    const handleAdvanceStage = async () => {
-        if (!isController) return;
-        setActionError(null);
-        const willCompleteGame = currentGameState.current_stage_index >= game.stage_sequence.length - 1;
-        const result = await advanceToNextStage(gameId);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to advance stage.");
-        } else {
-            setShowPostWinModal(false);
-            setShowValidationModal(false);
-            handleClearSelection();
-            if (willCompleteGame) {
-                router.push('/host');
-            }
-        }
-    };
-
     const handleSkipStage = async () => {
         if (!isController) return;
         if (confirm("Are you sure you want to skip this stage without a winner?")) {
@@ -412,7 +396,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || currentGameState.numbers_called_count >= 90;
     const isBreakToggleDisabled = !isController || isGameNotInProgress || isGameCompleted || isPausedForValidation;
     const isValidateButtonDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
-    const isEndGameDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || isPausedForValidation;
     const isVoidLastNumberDisabled = !isController || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
 
 
@@ -530,15 +513,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 >
                     Undo Last Call
                 </Button>
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-slate-500 hover:text-red-500"
-                    onClick={() => setShowEndGameConfirm(true)}
-                    disabled={isEndGameDisabled}
-                >
-                    End Game
-                </Button>
             </div>
 
             {/* Manual Snowball Win Button (Only for Snowball Games) */}
@@ -599,20 +573,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     </div>
                 </Card>
             )}
-
-            {/* End Game Modal */}
-            <Modal isOpen={showEndGameConfirm} onClose={() => setShowEndGameConfirm(false)} title="End Game?">
-                <div className="space-y-4">
-                    <p className="text-slate-300">Are you sure you want to end this game?</p>
-                    <div className="p-3 bg-red-900/20 border border-red-900/50 rounded text-red-200 text-sm">
-                        Warning: You will not be able to call more numbers or validate claims for this game once ended.
-                    </div>
-                </div>
-                <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="secondary" onClick={() => setShowEndGameConfirm(false)}>Cancel</Button>
-                    <Button variant="danger" onClick={handleEndGame}>Confirm End Game</Button>
-                </div>
-            </Modal>
 
             {/* Validation Modal */}
             <Modal
@@ -749,20 +709,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     <p className="text-slate-300">The winner has been announced. What&apos;s next?</p>
 
                     <div className="flex flex-col gap-3">
-                        {(() => {
-                            const hasNextStage = currentGameState.current_stage_index < game.stage_sequence.length - 1;
-                            const nextStageName = hasNextStage ? game.stage_sequence[currentGameState.current_stage_index + 1] : null;
-
-                            return hasNextStage ? (
-                                <Button variant="primary" size="lg" className="w-full bg-green-600 hover:bg-green-700" onClick={handleAdvanceStage}>
-                                    Start {nextStageName}
-                                </Button>
-                            ) : (
-                                <Button variant="primary" size="lg" className="w-full bg-red-600 hover:bg-red-700" onClick={handleAdvanceStage}>
-                                    End Game
-                                </Button>
-                            );
-                        })()}
+                        <Button variant="primary" size="lg" className="w-full bg-green-600 hover:bg-green-700" onClick={handleMoveToNextGame}>
+                            Move to Next Game
+                        </Button>
 
                         <div className="grid grid-cols-1 gap-3">
                             <Button variant="secondary" onClick={() => {
@@ -772,7 +721,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
                                 setShowWinnerModal(true);
                             }}>
-                                Record Another Winner (Split Pot)
+                                Validate Another Winner
                             </Button>
 
                             <Button variant="secondary" className="border-yellow-900/50 text-yellow-500 hover:bg-yellow-900/20" onClick={async () => {
