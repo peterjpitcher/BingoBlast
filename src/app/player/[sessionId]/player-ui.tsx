@@ -233,7 +233,8 @@ export default function PlayerUI({
 
 
   // --- UI States ---
-  const isWaiting = !currentActiveGame || (currentGameState?.status !== 'in_progress' && currentGameState?.status !== 'completed');
+  const isSessionCompleted = currentSession.status === 'completed';
+  const isWaiting = !isSessionCompleted && (!currentActiveGame || (currentGameState?.status !== 'in_progress' && currentGameState?.status !== 'completed'));
   const isOnBreak = currentGameState?.on_break;
   const isCompleted = currentGameState?.status === 'completed';
   const isValidating = currentGameState?.paused_for_validation;
@@ -279,6 +280,16 @@ export default function PlayerUI({
       <div className="p-4 space-y-4">
 
         {/* Status Banners */}
+        {isSessionCompleted && (
+          <Card className="bg-[#003f27]/80 border-[#1f7c58]">
+            <CardContent className="p-6 text-center">
+              <div className="text-4xl mb-2">🙏</div>
+              <h2 className="text-xl font-bold text-white">Thanks for coming!</h2>
+              <p className="text-white">Please book for our next bingo event at the bar.</p>
+            </CardContent>
+          </Card>
+        )}
+
         {isWaiting && (
           <Card className="bg-[#003f27]/80 border-[#1f7c58]">
             <CardContent className="p-6 text-center">
@@ -299,7 +310,7 @@ export default function PlayerUI({
           </Card>
         )}
 
-        {isCompleted && (
+        {isCompleted && !isSessionCompleted && (
           <Card className="bg-green-900/20 border-green-600">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2">🏁</div>
@@ -332,7 +343,7 @@ export default function PlayerUI({
         )}
 
         {/* Active Game Display */}
-        {!isWaiting && !isCompleted && !isOnBreak && (
+        {!isSessionCompleted && !isWaiting && !isCompleted && !isOnBreak && (
           <>
             {/* Info Cards */}
             <div className="grid grid-cols-2 gap-3">
