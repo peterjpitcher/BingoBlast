@@ -290,7 +290,7 @@ export default function DisplayUI({
   const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isGameFinishedState && !currentGameState.display_win_type; 
   const showWinState = !!currentGameState?.display_win_type;
   
-  const displayBackgroundColor = currentActiveGame?.background_colour || '#0F172A'; 
+  const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const contrastTextColor = useMemo(() => getContrastColor(displayBackgroundColor), [displayBackgroundColor]);
   const dimTextColor = contrastTextColor === 'text-white' ? 'text-white/70' : 'text-slate-900/70';
 
@@ -303,7 +303,7 @@ export default function DisplayUI({
       style={{ backgroundColor: displayBackgroundColor }}
     >
       {/* Top Bar */}
-      <div className="h-24 px-8 flex items-center justify-between bg-black/10 backdrop-blur-sm z-10">
+      <div className="h-24 px-8 flex items-center justify-between bg-[#003f27]/70 border-b border-[#1f7c58] backdrop-blur-sm z-10">
          <div className="flex items-center gap-4">
              <div className="relative w-64 h-24 rounded-xl bg-[#005131] border border-white/20 p-3">
                  <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left p-2" />
@@ -331,25 +331,25 @@ export default function DisplayUI({
                 </div>
 
                 {/* Kitchen Info Box */}
-                <div className="bg-indigo-900/40 border-2 border-indigo-500/50 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
-                    <h2 className="text-4xl font-black text-yellow-400 mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
+                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
+                    <h2 className="text-4xl font-black text-[#f0d8ad] mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
                     <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
                 </div>
 
                 {/* Rules */}
-                <div className="max-w-4xl w-full bg-slate-900/60 border border-white/10 rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-3xl font-bold text-bingo-primary mb-4 border-b border-white/10 pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-xl text-slate-200">
+                <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
+                    <h3 className="text-3xl font-bold text-[#a57626] mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-xl text-emerald-50">
                         <li className="flex gap-3 items-start">
-                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span className="text-[#a57626] mt-1">➤</span>
                             <span>Claims must be called on the number they&apos;re won on - <span className="text-red-400 font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span className="text-[#a57626] mt-1">➤</span>
                             <span>Multiple claims share the prize</span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span className="text-[#a57626] mt-1">➤</span>
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
@@ -369,25 +369,25 @@ export default function DisplayUI({
                 </div>
 
                 {/* Kitchen Info Box */}
-                <div className="bg-indigo-900/40 border-2 border-indigo-500/50 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
-                    <h2 className="text-4xl font-black text-yellow-400 mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
+                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
+                    <h2 className="text-4xl font-black text-[#f0d8ad] mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
                     <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
                 </div>
 
                 {/* Rules */}
-                <div className="max-w-4xl w-full bg-slate-900/60 border border-white/10 rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-3xl font-bold text-bingo-primary mb-4 border-b border-white/10 pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-xl text-slate-200">
+                <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
+                    <h3 className="text-3xl font-bold text-[#a57626] mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-xl text-emerald-50">
                         <li className="flex gap-3 items-start">
-                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span className="text-[#a57626] mt-1">➤</span>
                             <span>Claims must be called on the number they&apos;re won on - <span className="text-red-400 font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span className="text-[#a57626] mt-1">➤</span>
                             <span>Multiple claims share the prize</span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-bingo-secondary mt-1">➤</span>
+                            <span className="text-[#a57626] mt-1">➤</span>
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
@@ -407,18 +407,18 @@ export default function DisplayUI({
                   <p className="text-3xl text-white/90 font-medium">We hope you had a blast!</p>
               </div>
 
-              <div className="bg-indigo-900/40 border-2 border-indigo-500/50 rounded-3xl p-8 max-w-5xl w-full backdrop-blur-sm shadow-2xl shrink-0">
-                  <h2 className="text-5xl font-black text-yellow-400 mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
+              <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-3xl p-8 max-w-5xl w-full backdrop-blur-sm shadow-2xl shrink-0">
+                  <h2 className="text-5xl font-black text-[#f0d8ad] mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
                   <p className="text-3xl text-white font-bold">Don&apos;t miss out - secure your table at the bar.</p>
               </div>
 
               <div className="space-y-6 max-w-4xl shrink-0">
-                  <p className="text-3xl text-slate-200 font-medium leading-relaxed">
+                  <p className="text-3xl text-emerald-50 font-medium leading-relaxed">
                       Please enjoy the remaining time that we&apos;re open.
                       <br/>
                       The bar is open for drinks!
                   </p>
-                  <p className="text-2xl text-bingo-primary font-bold uppercase tracking-widest animate-pulse">
+                  <p className="text-2xl text-[#a57626] font-bold uppercase tracking-widest animate-pulse">
                       Bring friends, family & neighbours next time!
                   </p>
               </div>
@@ -428,8 +428,8 @@ export default function DisplayUI({
 
           {showPausedForValidation && (
             <div className="text-center animate-in slide-in-from-bottom duration-500" style={{ textShadow: TextShadow }}>
-                <div className="inline-block px-8 py-4 bg-blue-600/20 border-2 border-blue-500 rounded-full mb-8 animate-pulse">
-                    <h2 className="text-4xl font-bold text-blue-300 uppercase tracking-widest">Checking Ticket</h2>
+                <div className="inline-block px-8 py-4 bg-[#a57626]/20 border-2 border-[#a57626]/80 rounded-full mb-8 animate-pulse">
+                    <h2 className="text-4xl font-bold text-[#f0d8ad] uppercase tracking-widest">Checking Ticket</h2>
                 </div>
                 <h1 className="text-7xl font-black">PLEASE WAIT...</h1>
             </div>
@@ -478,7 +478,7 @@ export default function DisplayUI({
       </div>
 
       {/* Footer Info Bar */}
-      <div className="h-32 bg-black/10 border-t border-white/10 backdrop-blur-md grid grid-cols-2 px-8 z-10">
+      <div className="h-32 bg-[#003f27]/70 border-t border-[#1f7c58] backdrop-blur-md grid grid-cols-2 px-8 z-10">
           <div className="flex flex-col justify-center border-r border-white/10 pr-8">
              {(showActiveGame || showPausedForValidation) && (
                 <>
@@ -488,10 +488,10 @@ export default function DisplayUI({
                    </div>
                    
                    {currentActiveGame?.type === 'snowball' && currentSnowballPot ? (
-                        <div className="flex items-center gap-4 bg-indigo-900/80 p-2 px-4 rounded-lg border border-indigo-500/30 self-start shadow-lg">
-                            <span className="text-indigo-300 text-sm font-bold uppercase">Snowball</span>
+                        <div className="flex items-center gap-4 bg-[#a57626]/25 p-2 px-4 rounded-lg border border-[#a57626]/60 self-start shadow-lg">
+                            <span className="text-[#f0d8ad] text-sm font-bold uppercase">Snowball</span>
                             <span className="text-2xl font-bold text-white">£{currentSnowballPot.current_jackpot_amount}</span>
-                            <span className="text-indigo-300 text-sm">in {currentSnowballPot.current_max_calls} calls</span>
+                            <span className="text-[#f0d8ad] text-sm">in {currentSnowballPot.current_max_calls} calls</span>
                         </div>
                    ) : (
                         <div className="text-xl font-medium">
@@ -514,7 +514,7 @@ export default function DisplayUI({
                         {delayedNumbers.slice().reverse().map((num, idx) => (
                             <div key={idx} className={cn(
                                 "flex items-center justify-center rounded-full bg-white font-bold text-slate-900 shadow-lg shrink-0",
-                                idx === 0 ? "w-16 h-16 text-2xl border-4 border-bingo-primary" : "w-12 h-12 text-lg opacity-70"
+                                idx === 0 ? "w-16 h-16 text-2xl border-4 border-[#a57626]" : "w-12 h-12 text-lg opacity-70"
                             )}>
                                 {num}
                             </div>
@@ -527,16 +527,16 @@ export default function DisplayUI({
 
       {/* Player Join QR Code */}
       <div className="absolute bottom-36 left-8 bg-white p-4 rounded-xl shadow-2xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
-          <div className="bg-slate-900 p-2 rounded-lg">
+          <div className="bg-[#005131] p-2 rounded-lg">
              <QRCodeSVG 
                 value={`${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`} 
                 size={100}
                 level="H"
                 fgColor="#FFFFFF"
-                bgColor="#0F172A"
+                bgColor="#005131"
              />
           </div>
-          <p className="text-slate-900 font-bold text-sm uppercase tracking-wider">Play Along</p>
+          <p className="text-[#005131] font-bold text-sm uppercase tracking-wider">Play Along</p>
       </div>
     </div>
   );

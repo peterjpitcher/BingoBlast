@@ -241,7 +241,7 @@ export default function PlayerUI({
   const isValidating = currentGameState?.paused_for_validation;
   const isWin = !!currentGameState?.display_win_type;
 
-  const backgroundColor = currentActiveGame?.background_colour || '#0F172A';
+  const backgroundColor = currentActiveGame?.background_colour || '#005131';
   const contrastTextColor = useMemo(() => getContrastColor(backgroundColor), [backgroundColor]);
   const isSnowballGame = currentActiveGame?.type === 'snowball';
 
@@ -254,14 +254,14 @@ export default function PlayerUI({
       style={{ backgroundColor: backgroundColor }}
     >
       {/* Header */}
-      <div className="bg-slate-900 p-4 border-b border-slate-800 flex items-center justify-between sticky top-0 z-20 shadow-md">
+      <div className="bg-[#003f27]/80 p-4 border-b border-[#1f7c58] flex items-center justify-between sticky top-0 z-20 shadow-md">
         <div>
           <h1 className="font-bold text-lg leading-none text-white">{currentSession.name}</h1>
-          {currentActiveGame && <p className="text-sm text-slate-400">{currentActiveGame.name}</p>}
+          {currentActiveGame && <p className="text-sm text-emerald-100/80">{currentActiveGame.name}</p>}
         </div>
         {currentGameState && (
-          <div className="bg-slate-800 px-3 py-1 rounded border border-slate-700">
-            <span className="text-xs text-slate-400 uppercase block">Calls</span>
+          <div className="bg-[#005131] px-3 py-1 rounded border border-[#1f7c58]">
+            <span className="text-xs text-emerald-100/80 uppercase block">Calls</span>
             <span className="font-mono font-bold text-xl leading-none">{delayedNumbers.length}</span>
           </div>
         )}
@@ -272,11 +272,11 @@ export default function PlayerUI({
 
         {/* Status Banners */}
         {isWaiting && (
-          <Card className="bg-slate-900 border-slate-700">
+          <Card className="bg-[#003f27]/80 border-[#1f7c58]">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2">⏳</div>
               <h2 className="text-xl font-bold text-white">Waiting for Host</h2>
-              <p className="text-slate-400">Game will start soon...</p>
+              <p className="text-emerald-100/80">Game will start soon...</p>
             </CardContent>
           </Card>
         )}
@@ -328,14 +328,14 @@ export default function PlayerUI({
           <>
             {/* Info Cards */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
-                <span className="text-xs text-slate-500 uppercase block">Playing For</span>
-                <span className="font-bold text-yellow-500 text-lg leading-tight">
+              <div className="bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]">
+                <span className="text-xs text-emerald-100/80 uppercase block">Playing For</span>
+                <span className="font-bold text-[#f0d8ad] text-lg leading-tight">
                   {currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0]}
                 </span>
               </div>
-              <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
-                <span className="text-xs text-slate-500 uppercase block">Prize</span>
+              <div className="bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]">
+                <span className="text-xs text-emerald-100/80 uppercase block">Prize</span>
                 <span className="font-bold text-white text-lg leading-tight">
                   {currentPrizeText || '-'}
                 </span>
@@ -343,13 +343,13 @@ export default function PlayerUI({
             </div>
 
             {isSnowballGame && currentSnowballPot && (
-              <div className="bg-indigo-950 p-3 rounded-lg border border-indigo-500/50 flex justify-between items-center shadow-lg shadow-indigo-900/20">
+              <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 flex justify-between items-center shadow-lg shadow-black/25">
                 <div>
-                  <span className="text-indigo-300 text-xs font-bold uppercase block">Snowball Jackpot</span>
+                  <span className="text-[#f0d8ad] text-xs font-bold uppercase block">Snowball Jackpot</span>
                   <span className="text-2xl font-bold text-white">£{currentSnowballPot.current_jackpot_amount}</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-indigo-300 text-xs block">Win in</span>
+                  <span className="text-[#f0d8ad] text-xs block">Win in</span>
                   <span className="text-xl font-bold text-white">{currentSnowballPot.current_max_calls} calls</span>
                 </div>
               </div>
@@ -359,14 +359,14 @@ export default function PlayerUI({
             <div className="flex justify-center py-4">
               {currentNumberDelayed ? (
                 <div className="relative">
-                  <div className="w-48 h-48 bg-white rounded-full flex items-center justify-center shadow-2xl border-8 border-slate-200">
+                <div className="w-48 h-48 bg-white rounded-full flex items-center justify-center shadow-2xl border-8 border-emerald-100">
                     <span className="text-8xl font-black text-slate-900 tracking-tighter">
                       {currentNumberDelayed}
                     </span>
                   </div>
                 </div>
               ) : (
-                <div className="w-48 h-48 rounded-full border-4 border-slate-800 border-dashed flex items-center justify-center">
+                <div className="w-48 h-48 rounded-full border-4 border-[#1f7c58] border-dashed flex items-center justify-center">
                   <span className="text-slate-600 font-bold">READY</span>
                 </div>
               )}
@@ -375,11 +375,11 @@ export default function PlayerUI({
             {/* Recent History */}
             <div>
               <div className="flex justify-between items-end mb-2">
-                <span className="text-sm text-slate-400 font-medium">Recent Calls</span>
+                <span className="text-sm text-emerald-100/80 font-medium">Recent Calls</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-bingo-primary h-auto p-0 hover:bg-transparent"
+                  className="text-[#a57626] h-auto p-0 hover:bg-transparent"
                   onClick={() => setShowFullHistory(true)}
                 >
                   View All Numbers
@@ -417,7 +417,7 @@ export default function PlayerUI({
                   key={num}
                   className={cn(
                     "aspect-square flex items-center justify-center text-sm font-bold rounded",
-                    isCalled ? "bg-green-600 text-white" : "bg-slate-800 text-slate-600"
+                    isCalled ? "bg-green-600 text-white" : "bg-[#003f27] text-emerald-100/40"
                   )}
                 >
                   {num}
