@@ -470,9 +470,9 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
 
   const { data: gameState, error: fetchError } = await supabase
     .from('game_states')
-    .select('number_sequence, called_numbers, numbers_called_count, status, call_delay_seconds, last_call_at')
+    .select('number_sequence, called_numbers, numbers_called_count, status, call_delay_seconds, last_call_at, on_break, paused_for_validation')
     .eq('game_id', gameId)
-    .single<Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'status' | 'call_delay_seconds' | 'last_call_at'>>()
+    .single<Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'status' | 'call_delay_seconds' | 'last_call_at' | 'on_break' | 'paused_for_validation'>>()
 
   if (fetchError || !gameState) {
     console.error("Error fetching game state for next number:", fetchError?.message);
@@ -481,6 +481,12 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
 
   if (gameState.status !== 'in_progress') {
     return { success: false, error: "Game is not in progress." };
+  }
+  if (gameState.on_break) {
+    return { success: false, error: "Game is on break." };
+  }
+  if (gameState.paused_for_validation) {
+    return { success: false, error: "Game is paused for claim validation." };
   }
 
   if (gameState.last_call_at && gameState.numbers_called_count > 0) {
@@ -605,6 +611,9 @@ export async function resumeGame(gameId: string): Promise<ActionResult> {
     
     const resumeUpdate: Database['public']['Tables']['game_states']['Update'] = {
         paused_for_validation: false,
+        display_win_type: null,
+        display_win_text: null,
+        display_winner_name: null,
     };
     const { error } = await supabase
         .from('game_states')
@@ -643,6 +652,11 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
     const endUpdate: Database['public']['Tables']['game_states']['Update'] = {
         status: 'completed',
         ended_at: new Date().toISOString(),
+        on_break: false,
+        paused_for_validation: false,
+        display_win_type: null,
+        display_win_text: null,
+        display_winner_name: null,
     };
     const { error: updateError } = await supabase
         .from('game_states')
@@ -797,6 +811,7 @@ export async function announceWin(gameId: string, stage: WinStage | 'snowball'):
     const winUpdate: Database['public']['Tables']['game_states']['Update'] = {
         display_win_type: displayWinType,
         display_win_text: displayWinText,
+        display_winner_name: null,
         // Keep paused_for_validation true or ensure it is treated as such
         paused_for_validation: true 
     };
@@ -987,7 +1002,7 @@ export async function recordWinner(
 
     // Just update the display to show the winner name. Do NOT advance stage yet.
     const winnerDisplayUpdate: Database['public']['Tables']['game_states']['Update'] = {
-        // paused_for_validation: true, // Should already be true, keep it so
+        paused_for_validation: true,
         display_win_type: displayWinType,
         display_win_text: displayWinText,
         display_winner_name: winnerName,

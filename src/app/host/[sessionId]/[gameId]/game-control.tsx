@@ -487,12 +487,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleResumeGame = async () => {
         if (!isController) return;
         setActionError(null);
-        if (currentGameState.paused_for_validation) {
-            const result = await resumeGame(gameId);
-            if (!result?.success) {
-                setActionError("Failed to resume game: " + (result?.error || "Unknown error"));
-                return;
-            }
+        const result = await resumeGame(gameId);
+        if (!result?.success) {
+            setActionError("Failed to resume game: " + (result?.error || "Unknown error"));
+            return;
         }
         setShowValidationModal(false);
         handleClearSelection();
