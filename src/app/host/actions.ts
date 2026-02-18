@@ -356,7 +356,7 @@ export async function startGame(
         }
       } else {
         const sequence = existingGameState?.number_sequence ?? generateShuffledNumberSequence();
-        const callDelaySeconds = existingGameState?.call_delay_seconds ?? 3;
+        const callDelaySeconds = existingGameState?.call_delay_seconds ?? 1;
 
         const freshState: Database['public']['Tables']['game_states']['Insert'] = {
           game_id: gameId,

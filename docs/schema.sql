@@ -107,7 +107,7 @@ create table public.game_states (
   numbers_called_count int default 0,
   current_stage_index int default 0,
   status game_status default 'not_started'::game_status,
-  call_delay_seconds int default 8,
+  call_delay_seconds int default 1,
   on_break boolean default false,
   paused_for_validation boolean default false,
   display_win_type text default null, -- 'line', 'two_lines', 'full_house', 'snowball'
@@ -144,7 +144,7 @@ create table public.game_states_public (
   numbers_called_count int default 0,
   current_stage_index int default 0,
   status game_status default 'not_started'::game_status,
-  call_delay_seconds int default 8,
+  call_delay_seconds int default 1,
   on_break boolean default false,
   paused_for_validation boolean default false,
   display_win_type text default null,
