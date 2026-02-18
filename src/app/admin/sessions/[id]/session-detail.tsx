@@ -12,14 +12,18 @@ import { useRouter } from 'next/navigation'; // Import useRouter
 type Session = Database['public']['Tables']['sessions']['Row'];
 type Game = Database['public']['Tables']['games']['Row'];
 type SnowballPot = Pick<Database['public']['Tables']['snowball_pots']['Row'], 'id' | 'name' | 'current_jackpot_amount' | 'current_max_calls'>;
+type WinnerWithGame = Database['public']['Tables']['winners']['Row'] & {
+  game: Pick<Database['public']['Tables']['games']['Row'], 'name' | 'game_index'> | null;
+};
 
 interface SessionDetailProps {
   session: Session;
   initialGames: Game[];
   snowballPots: SnowballPot[];
+  winners: WinnerWithGame[];
 }
 
-export default function SessionDetail({ session, initialGames, snowballPots }: SessionDetailProps) {
+export default function SessionDetail({ session, initialGames, snowballPots, winners }: SessionDetailProps) {
   const [games, setGames] = useState<Game[]>(initialGames);
   const [showGameModal, setShowGameModal] = useState(false);
   const [editingGame, setEditingGame] = useState<Game | null>(null);
@@ -224,6 +228,75 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
               </Card>
           </div>
       </div>
+
+      <Card className="bg-slate-900 border-slate-800 mb-6">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Winners ({winners.length})</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {winners.length === 0 ? (
+            <div className="p-6 text-sm text-slate-500">No winners recorded for this session yet.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-800/50 text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Time</th>
+                    <th className="px-4 py-3 font-medium">Game</th>
+                    <th className="px-4 py-3 font-medium">Winner</th>
+                    <th className="px-4 py-3 font-medium">Stage</th>
+                    <th className="px-4 py-3 font-medium">Prize</th>
+                    <th className="px-4 py-3 font-medium text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {winners.map((winner) => (
+                    <tr key={winner.id} className="hover:bg-slate-800/30 transition-colors">
+                      <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
+                        {new Date(winner.created_at).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-white">
+                          {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-bold text-white">{winner.winner_name}</td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs border border-slate-700">
+                          {winner.stage}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">
+                        {winner.prize_description || '-'}
+                        {winner.is_snowball_jackpot && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-bold bg-yellow-900/30 text-yellow-500 border border-yellow-800">
+                            JACKPOT
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {winner.is_void ? (
+                          <span className="px-2 py-0.5 rounded-full border border-red-700 text-red-300 bg-red-900/20 text-xs font-semibold">
+                            VOID
+                          </span>
+                        ) : winner.prize_given ? (
+                          <span className="px-2 py-0.5 rounded-full border border-green-700 text-green-300 bg-green-900/20 text-xs font-semibold">
+                            Prize Given
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full border border-yellow-700 text-yellow-300 bg-yellow-900/20 text-xs font-semibold">
+                            Outstanding
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="bg-slate-900 border-slate-800">
         <CardHeader className="flex flex-row items-center justify-between">

@@ -41,21 +41,20 @@ function LoginPageContent() {
   };
 
   return (
-    <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 bg-gradient-to-b from-bingo-dark to-slate-900">
-      <div className="mb-8 relative w-48 h-24">
-        {/* Logo Placeholder - Replace with actual image path when verified */}
+    <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 bg-gradient-to-b from-[#005131] to-[#003f27]">
+      <div className="mb-8 relative w-48 h-24 rounded-xl bg-[#005131] border border-[#1f7c58] p-3 shadow-lg shadow-black/25">
          <Image 
-          src="/BingoBlast.png" 
-          alt="Bingo Blast" 
+          src="/the-anchor-pub-logo-white-transparent.png" 
+          alt="The Anchor" 
           fill 
-          className="object-contain"
+          className="object-contain p-2"
           priority
         />
       </div>
 
-      <Card className="w-full max-w-md border-bingo-primary/30 shadow-2xl shadow-bingo-primary/10 bg-slate-900/90 backdrop-blur-sm">
+      <Card className="w-full max-w-md border-[#1f7c58] shadow-2xl shadow-black/30 bg-[#005131]/90 backdrop-blur-sm">
         <CardHeader>
-          <CardTitle className="text-center text-2xl text-transparent bg-clip-text bg-gradient-to-r from-bingo-primary to-bingo-secondary font-bold">
+          <CardTitle className="text-center text-2xl text-[#f5f1e6] font-bold">
             {mode === 'login' ? 'Welcome Back' : 'Join the Party'}
           </CardTitle>
         </CardHeader>
@@ -68,7 +67,7 @@ function LoginPageContent() {
           
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-300" htmlFor="email">
+              <label className="text-sm font-medium text-emerald-50/90" htmlFor="email">
                 Email address
               </label>
               <Input 
@@ -77,12 +76,12 @@ function LoginPageContent() {
                 type="email" 
                 placeholder="Enter email" 
                 required 
-                className="bg-slate-950/50 border-slate-700 focus:border-bingo-primary"
+                className="bg-[#003f27]/70 border-[#2f8f6a] focus:border-[#a57626]"
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-300" htmlFor="password">
+              <label className="text-sm font-medium text-emerald-50/90" htmlFor="password">
                 Password
               </label>
               <Input 
@@ -91,7 +90,7 @@ function LoginPageContent() {
                 type="password" 
                 placeholder="Password" 
                 required 
-                className="bg-slate-950/50 border-slate-700 focus:border-bingo-primary"
+                className="bg-[#003f27]/70 border-[#2f8f6a] focus:border-[#a57626]"
               />
             </div>
 
@@ -107,7 +106,7 @@ function LoginPageContent() {
               
               <button
                 type="button"
-                className="w-full text-sm text-slate-400 hover:text-bingo-primary transition-colors"
+                className="w-full text-sm text-emerald-100/80 hover:text-[#f5f1e6] transition-colors"
                 onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
               >
                 {mode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
@@ -122,7 +121,7 @@ function LoginPageContent() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-bingo-primary">Loading...</div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-[#f5f1e6] bg-[#005131]">Loading...</div>}>
       <LoginPageContent />
     </Suspense>
   );

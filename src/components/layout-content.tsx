@@ -1,6 +1,7 @@
 "use client";
 
 import { Header } from "@/components/header";
+import { cn } from "@/lib/utils";
 import { usePathname } from 'next/navigation';
 
 export function LayoutContent({
@@ -9,16 +10,21 @@ export function LayoutContent({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const showHeader = pathname !== '/' && !pathname.startsWith('/display') && !pathname.startsWith('/player');
+  const pathSegments = pathname.split('/').filter(Boolean);
+  const isHostGamePage = pathSegments[0] === 'host' && pathSegments.length === 3;
+  const isDisplayGamePage = pathSegments[0] === 'display' && pathSegments.length === 2;
+  const isPlayerGamePage = pathSegments[0] === 'player' && pathSegments.length === 2;
+  const isGamePage = isHostGamePage || isDisplayGamePage || isPlayerGamePage;
+  const showHeader = pathname !== '/' && !pathname.startsWith('/display') && !pathname.startsWith('/player') && !isHostGamePage;
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className={cn("flex flex-col min-h-screen", !isGamePage && "anchor-theme")}>
       {showHeader && <Header />}
       <main className="flex-1 flex flex-col">
         {children}
       </main>
-      {!pathname.startsWith('/display') && !pathname.startsWith('/player') && (
-        <footer className="w-full py-4 text-center text-xs text-slate-500 bg-slate-950 border-t border-slate-800">
+      {!pathname.startsWith('/display') && !pathname.startsWith('/player') && !isHostGamePage && (
+        <footer className="w-full py-4 text-center text-xs text-emerald-100/75 bg-[#003c25] border-t border-[#1f7c58]">
           © 2025 Orange Jelly Limited. All rights reserved.
         </footer>
       )}

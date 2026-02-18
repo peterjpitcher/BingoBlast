@@ -12,6 +12,10 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
+type WinnerWithGame = Database['public']['Tables']['winners']['Row'] & {
+  game: Pick<Database['public']['Tables']['games']['Row'], 'name' | 'game_index'> | null;
+};
+
 export default async function SessionDetailPage({ params }: PageProps) {
   const { id } = await params;
 
@@ -64,6 +68,22 @@ export default async function SessionDetailPage({ params }: PageProps) {
     .select('id, name, current_jackpot_amount, current_max_calls')
     .order('name');
 
+  // Fetch winners for this session so admins can review prize status after game completion
+  const { data: winnersRaw, error: winnersError } = await supabase
+    .from('winners')
+    .select(`
+      *,
+      game:games (name, game_index)
+    `)
+    .eq('session_id', id)
+    .order('created_at', { ascending: false });
+
+  const winners: WinnerWithGame[] = (winnersRaw ?? []) as WinnerWithGame[];
+
+  if (winnersError) {
+    console.error('Error fetching winners', winnersError.message);
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-white">
       <div className="container mx-auto p-6 space-y-8">
@@ -102,6 +122,7 @@ export default async function SessionDetailPage({ params }: PageProps) {
           session={session} 
           initialGames={games || []} 
           snowballPots={snowballPots || []} 
+          winners={winners}
         />
       </div>
     </div>

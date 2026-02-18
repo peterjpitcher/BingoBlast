@@ -923,14 +923,26 @@ export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, 
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
-    if (controlResult.role !== 'admin') {
-        return { success: false, error: "Admin access required to update prize status." }
+
+    const { data: winner, error: winnerError } = await supabase
+        .from('winners')
+        .select('session_id')
+        .eq('id', winnerId)
+        .single<Pick<Database['public']['Tables']['winners']['Row'], 'session_id'>>();
+
+    if (winnerError || !winner) {
+        return { success: false, error: winnerError?.message || "Winner not found." };
+    }
+
+    if (winner.session_id !== sessionId) {
+        return { success: false, error: "Winner does not belong to this session." };
     }
     
     const { error } = await supabase
         .from('winners')
         .update({ prize_given: prizeGiven } satisfies Database['public']['Tables']['winners']['Update'])
-        .eq('id', winnerId);
+        .eq('id', winnerId)
+        .eq('session_id', sessionId);
 
     if (error) {
         return { success: false, error: error.message };

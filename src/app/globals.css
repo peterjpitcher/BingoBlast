@@ -4,6 +4,11 @@
 :root {
   --background: #ffffff;
   --foreground: #0F172A; /* Slate-900 */
+  --anchor-green: #005131;
+  --anchor-green-dark: #003f27;
+  --anchor-green-soft: #0f6846;
+  --anchor-border: #1f7c58;
+  --anchor-accent: #a57626;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -17,6 +22,188 @@ body {
   color: var(--foreground);
   background: var(--background);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+.anchor-theme {
+  color: #f4fbf7;
+  background: radial-gradient(circle at 15% 15%, #0d6b46 0%, #005131 40%, #003f27 100%);
+}
+
+.anchor-theme .bg-slate-950 {
+  background-color: #003f27 !important;
+}
+
+.anchor-theme .bg-slate-900 {
+  background-color: #005131 !important;
+}
+
+.anchor-theme .bg-slate-900\/50 {
+  background-color: rgb(0 81 49 / 0.8) !important;
+}
+
+.anchor-theme .bg-slate-900\/60 {
+  background-color: rgb(0 81 49 / 0.86) !important;
+}
+
+.anchor-theme .bg-slate-900\/80 {
+  background-color: rgb(0 81 49 / 0.92) !important;
+}
+
+.anchor-theme .bg-slate-800 {
+  background-color: #0f6846 !important;
+}
+
+.anchor-theme .bg-slate-800\/50 {
+  background-color: rgb(15 104 70 / 0.72) !important;
+}
+
+.anchor-theme .bg-slate-800\/30 {
+  background-color: rgb(15 104 70 / 0.45) !important;
+}
+
+.anchor-theme .bg-slate-950\/50 {
+  background-color: rgb(0 63 39 / 0.7) !important;
+}
+
+.anchor-theme .bg-blue-900\/50,
+.anchor-theme .bg-indigo-900\/50,
+.anchor-theme .bg-indigo-900\/40,
+.anchor-theme .bg-indigo-900\/30,
+.anchor-theme .bg-indigo-900\/20,
+.anchor-theme .bg-cyan-900\/30,
+.anchor-theme .bg-cyan-900 {
+  background-color: rgb(165 118 38 / 0.22) !important;
+}
+
+.anchor-theme .border-slate-800 {
+  border-color: var(--anchor-border) !important;
+}
+
+.anchor-theme .border-slate-800\/50 {
+  border-color: rgb(31 124 88 / 0.65) !important;
+}
+
+.anchor-theme .border-slate-700 {
+  border-color: #309068 !important;
+}
+
+.anchor-theme .border-slate-700\/50 {
+  border-color: rgb(48 144 104 / 0.6) !important;
+}
+
+.anchor-theme .border-blue-800,
+.anchor-theme .border-blue-500,
+.anchor-theme .border-indigo-800,
+.anchor-theme .border-indigo-700,
+.anchor-theme .border-indigo-500\/50,
+.anchor-theme .border-indigo-500\/30,
+.anchor-theme .border-indigo-900,
+.anchor-theme .border-cyan-800 {
+  border-color: rgb(165 118 38 / 0.7) !important;
+}
+
+.anchor-theme .text-slate-200 {
+  color: #e6f5ed !important;
+}
+
+.anchor-theme .text-slate-300 {
+  color: #d4ecdf !important;
+}
+
+.anchor-theme .text-slate-400 {
+  color: #c0dece !important;
+}
+
+.anchor-theme .text-slate-500 {
+  color: #9fc4b1 !important;
+}
+
+.anchor-theme .text-slate-600 {
+  color: #86ab97 !important;
+}
+
+.anchor-theme .text-blue-300,
+.anchor-theme .text-blue-400,
+.anchor-theme .text-indigo-200,
+.anchor-theme .text-indigo-300,
+.anchor-theme .text-indigo-400,
+.anchor-theme .text-cyan-300 {
+  color: #f0d8ad !important;
+}
+
+.anchor-theme .text-bingo-primary,
+.anchor-theme .text-bingo-secondary,
+.anchor-theme .text-bingo-accent {
+  color: var(--anchor-accent) !important;
+}
+
+.anchor-theme .border-bingo-primary,
+.anchor-theme .border-bingo-secondary,
+.anchor-theme .border-bingo-accent {
+  border-color: var(--anchor-accent) !important;
+}
+
+.anchor-theme .ring-bingo-primary {
+  --tw-ring-color: var(--anchor-accent) !important;
+}
+
+.anchor-theme .bg-bingo-surface {
+  background-color: #0f6846 !important;
+}
+
+.anchor-theme .from-slate-950,
+.anchor-theme .from-bingo-dark,
+.anchor-theme .from-bingo-primary {
+  --tw-gradient-from: #005131 var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgb(0 81 49 / 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+.anchor-theme .to-slate-900,
+.anchor-theme .to-bingo-secondary,
+.anchor-theme .to-pink-600 {
+  --tw-gradient-to: #a57626 var(--tw-gradient-to-position) !important;
+}
+
+.anchor-theme .hover\:from-pink-600:hover {
+  --tw-gradient-from: #0f6846 var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgb(15 104 70 / 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+.anchor-theme .hover\:to-pink-700:hover {
+  --tw-gradient-to: #8b621f var(--tw-gradient-to-position) !important;
+}
+
+.anchor-theme .hover\:bg-slate-800:hover {
+  background-color: #0d5b3d !important;
+}
+
+.anchor-theme .hover\:bg-indigo-900\/20:hover,
+.anchor-theme .hover\:bg-indigo-900\/50:hover,
+.anchor-theme .hover\:bg-indigo-900:hover {
+  background-color: rgb(165 118 38 / 0.35) !important;
+}
+
+.anchor-theme .hover\:border-bingo-primary:hover,
+.anchor-theme .hover\:border-bingo-secondary:hover,
+.anchor-theme .hover\:border-bingo-accent:hover {
+  border-color: var(--anchor-accent) !important;
+}
+
+.anchor-theme .hover\:text-bingo-primary:hover,
+.anchor-theme .hover\:text-bingo-secondary:hover,
+.anchor-theme .hover\:text-bingo-accent:hover {
+  color: var(--anchor-accent) !important;
+}
+
+.anchor-theme button[class*="bg-bingo-surface"] {
+  background-color: #0f6846 !important;
+  border-color: #309068 !important;
+}
+
+.anchor-theme button[class*="bg-bingo-surface"]:hover {
+  background-color: #0d5b3d !important;
 }
 
 /* Simple utility for full-height screens until we fully migrate layouts */

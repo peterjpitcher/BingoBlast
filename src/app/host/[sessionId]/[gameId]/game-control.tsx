@@ -17,6 +17,9 @@ type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
 type SnowballPot = Database['public']['Tables']['snowball_pots']['Row'];
 type Winner = Database['public']['Tables']['winners']['Row'];
+type SessionWinner = Winner & {
+    game: Pick<Game, 'id' | 'name' | 'game_index'> | null;
+};
 
 interface GameControlProps {
     sessionId: string;
@@ -68,15 +71,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [showWinnerModal, setShowWinnerModal] = useState(false);
     const [showManualSnowballModal, setShowManualSnowballModal] = useState(false);
     const [showPostWinModal, setShowPostWinModal] = useState(false);
+    const [showSessionWinnersModal, setShowSessionWinnersModal] = useState(false);
     const [winnerName, setWinnerName] = useState('');
     const [prizeGiven, setPrizeGiven] = useState(false);
-  const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
+    const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
+    const [sessionWinners, setSessionWinners] = useState<SessionWinner[]>([]);
 
   useWakeLock();
 
     // Controller Locking Logic
     const isController = currentGameState.controlling_host_id === currentUserId;
-    const canTogglePrize = isController && currentUserRole === 'admin';
+    const canTogglePrize = isController && (currentUserRole === 'admin' || currentUserRole === 'host');
     // Allow taking control if no one is controlling OR the last heartbeat was > 30s ago
     const canTakeControl = !currentGameState.controlling_host_id ||
         (currentGameState.controller_last_seen_at && (new Date().getTime() - new Date(currentGameState.controller_last_seen_at).getTime() > 30000));
@@ -132,16 +137,52 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         };
     }, [gameId]);
 
+    // Session-wide winners subscription so prize status can be managed after moving to later games
+    useEffect(() => {
+        const supabase = createClient();
+        const fetchSessionWinners = async () => {
+            const { data } = await supabase
+                .from('winners')
+                .select(`
+                    *,
+                    game:games (id, name, game_index)
+                `)
+                .eq('session_id', sessionId)
+                .order('created_at', { ascending: false });
+
+            if (data) setSessionWinners(data as SessionWinner[]);
+        };
+
+        fetchSessionWinners();
+
+        const channel = supabase
+            .channel(`session_winners:${sessionId}`)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'winners', filter: `session_id=eq.${sessionId}` },
+                () => {
+                    fetchSessionWinners();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [sessionId]);
+
     const handleTogglePrize = async (winnerId: string, currentStatus: boolean) => {
         if (!canTogglePrize) return;
         // Optimistic update
         setCurrentWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: !currentStatus } : w));
+        setSessionWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: !currentStatus } : w));
 
         const result = await toggleWinnerPrizeGiven(sessionId, gameId, winnerId, !currentStatus);
         if (!result?.success) {
             setActionError(result?.error || "Failed to update prize status.");
             // Revert
             setCurrentWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: currentStatus } : w));
+            setSessionWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: currentStatus } : w));
         }
     };
 
@@ -514,6 +555,16 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     Undo Last Call
                 </Button>
             </div>
+            <div className="flex justify-center mb-8">
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    className="border-indigo-800 text-indigo-300 hover:bg-indigo-900/40"
+                    onClick={() => setShowSessionWinnersModal(true)}
+                >
+                    Winners &amp; Prizes ({sessionWinners.length})
+                </Button>
+            </div>
 
             {/* Manual Snowball Win Button (Only for Snowball Games) */}
             {game.type === 'snowball' && currentSnowballPot && (
@@ -660,6 +711,65 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             </Button>
                         </div>
                     </div>
+                </div>
+            </Modal>
+
+            {/* Session Winners Modal */}
+            <Modal
+                isOpen={showSessionWinnersModal}
+                onClose={() => setShowSessionWinnersModal(false)}
+                title="Session Winners & Prizes"
+                className="max-w-4xl"
+            >
+                <div className="space-y-4">
+                    <p className="text-sm text-slate-400">
+                        Review winners across all games in this session and mark prizes as given when handed out.
+                    </p>
+                    {sessionWinners.length === 0 ? (
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-6 text-sm text-slate-500">
+                            No winners recorded yet.
+                        </div>
+                    ) : (
+                        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800">
+                            {sessionWinners.map((winner) => (
+                                <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
+                                    <div className="min-w-0">
+                                        <p className="font-bold text-white truncate">{winner.winner_name}</p>
+                                        <p className="text-sm text-slate-400">
+                                            {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'} • {winner.stage}
+                                        </p>
+                                        <p className="text-sm text-slate-500 truncate">
+                                            {winner.prize_description || 'No prize description'}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        {winner.is_void && (
+                                            <span className="px-2 py-1 rounded-full text-xs font-semibold border border-red-700 text-red-300 bg-red-900/20">
+                                                VOID
+                                            </span>
+                                        )}
+                                        <Button
+                                            size="sm"
+                                            variant={winner.prize_given ? "outline" : "secondary"}
+                                            className={cn(
+                                                "min-w-[120px]",
+                                                winner.prize_given ? "text-green-400 border-green-900 hover:bg-green-900/20" : "bg-yellow-600 hover:bg-yellow-700 text-white"
+                                            )}
+                                            onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
+                                            disabled={!canTogglePrize || winner.is_void}
+                                        >
+                                            {winner.prize_given ? "Given ✅" : "Mark Given"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+                <div className="mt-6 flex justify-end">
+                    <Button variant="secondary" onClick={() => setShowSessionWinnersModal(false)}>
+                        Close
+                    </Button>
                 </div>
             </Modal>
 

@@ -305,8 +305,8 @@ export default function DisplayUI({
       {/* Top Bar */}
       <div className="h-24 px-8 flex items-center justify-between bg-black/10 backdrop-blur-sm z-10">
          <div className="flex items-center gap-4">
-             <div className="relative w-64 h-24">
-                 <Image src="/BingoBlast.png" alt="Bingo Blast" fill className="object-contain object-left" />
+             <div className="relative w-64 h-24 rounded-xl bg-[#005131] border border-white/20 p-3">
+                 <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left p-2" />
              </div>
          </div>
          <div className="text-right" style={{ textShadow: TextShadow }}>
@@ -321,12 +321,12 @@ export default function DisplayUI({
           {isWaitingState && (
             <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4">
                 {/* Giant Logo */}
-                <div className="relative w-[400px] h-[150px] shrink-0">
+                <div className="relative w-[400px] h-[150px] shrink-0 rounded-2xl bg-[#005131] border border-white/20 p-4">
                     <Image 
-                        src="/BingoBlast.png" 
-                        alt="Bingo Blast" 
+                        src="/the-anchor-pub-logo-white-transparent.png" 
+                        alt="The Anchor" 
                         fill 
-                        className="object-contain drop-shadow-[0_0_30px_rgba(236,72,153,0.4)]" 
+                        className="object-contain p-4" 
                     />
                 </div>
 
