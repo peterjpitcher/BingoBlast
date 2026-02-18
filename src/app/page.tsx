@@ -14,12 +14,12 @@ export default function Home() {
 
       <div className="z-10 flex flex-col items-center w-full max-w-md gap-8">
         {/* Hero Logo */}
-        <div className="relative w-80 h-80 md:w-96 md:h-96 animate-in zoom-in duration-700 rounded-full bg-[#005131] border border-[#1f7c58] p-8 shadow-2xl shadow-black/30">
+        <div className="relative w-80 h-36 md:w-[28rem] md:h-48 animate-in zoom-in duration-700">
           <Image 
             src="/the-anchor-pub-logo-white-transparent.png" 
             alt="The Anchor" 
             fill
-            className="object-contain p-6"
+            className="object-contain"
             priority
           />
         </div>

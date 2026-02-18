@@ -25,7 +25,7 @@ body {
 }
 
 .anchor-theme {
-  color: #f4fbf7;
+  color: #ffffff;
   background: radial-gradient(circle at 15% 15%, #0d6b46 0%, #005131 40%, #003f27 100%);
 }
 
@@ -103,23 +103,23 @@ body {
 }
 
 .anchor-theme .text-slate-200 {
-  color: #e6f5ed !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme .text-slate-300 {
-  color: #d4ecdf !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme .text-slate-400 {
-  color: #c0dece !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme .text-slate-500 {
-  color: #9fc4b1 !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme .text-slate-600 {
-  color: #86ab97 !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme .text-blue-300,
@@ -128,13 +128,13 @@ body {
 .anchor-theme .text-indigo-300,
 .anchor-theme .text-indigo-400,
 .anchor-theme .text-cyan-300 {
-  color: #f0d8ad !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme .text-bingo-primary,
 .anchor-theme .text-bingo-secondary,
 .anchor-theme .text-bingo-accent {
-  color: var(--anchor-accent) !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme .border-bingo-primary,
@@ -194,7 +194,7 @@ body {
 .anchor-theme .hover\:text-bingo-primary:hover,
 .anchor-theme .hover\:text-bingo-secondary:hover,
 .anchor-theme .hover\:text-bingo-accent:hover {
-  color: var(--anchor-accent) !important;
+  color: #ffffff !important;
 }
 
 .anchor-theme button[class*="bg-bingo-surface"] {

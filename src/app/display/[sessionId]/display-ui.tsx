@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { cn, getContrastColor } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -291,22 +291,20 @@ export default function DisplayUI({
   const showWinState = !!currentGameState?.display_win_type;
   
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
-  const contrastTextColor = useMemo(() => getContrastColor(displayBackgroundColor), [displayBackgroundColor]);
-  const dimTextColor = contrastTextColor === 'text-white' ? 'text-white/70' : 'text-slate-900/70';
+  const dimTextColor = 'text-white';
 
   return (
     <div 
       className={cn(
-          "min-h-screen w-full flex flex-col transition-colors duration-1000 ease-in-out overflow-hidden relative",
-          contrastTextColor
+          "min-h-screen w-full flex flex-col transition-colors duration-1000 ease-in-out overflow-hidden relative text-white"
       )}
       style={{ backgroundColor: displayBackgroundColor }}
     >
       {/* Top Bar */}
       <div className="h-24 px-8 flex items-center justify-between bg-[#003f27]/70 border-b border-[#1f7c58] backdrop-blur-sm z-10">
          <div className="flex items-center gap-4">
-             <div className="relative w-64 h-24 rounded-xl bg-[#005131] border border-white/20 p-3">
-                 <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left p-2" />
+             <div className="relative w-64 h-20">
+                 <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
              </div>
          </div>
          <div className="text-right" style={{ textShadow: TextShadow }}>
@@ -321,35 +319,35 @@ export default function DisplayUI({
           {isWaitingState && (
             <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4">
                 {/* Giant Logo */}
-                <div className="relative w-[400px] h-[150px] shrink-0 rounded-2xl bg-[#005131] border border-white/20 p-4">
+                <div className="relative w-[400px] h-[150px] shrink-0">
                     <Image 
                         src="/the-anchor-pub-logo-white-transparent.png" 
                         alt="The Anchor" 
                         fill 
-                        className="object-contain p-4" 
+                        className="object-contain" 
                     />
                 </div>
 
                 {/* Kitchen Info Box */}
                 <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
-                    <h2 className="text-4xl font-black text-[#f0d8ad] mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
+                    <h2 className="text-4xl font-black text-white mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
                     <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
                 </div>
 
                 {/* Rules */}
                 <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-3xl font-bold text-[#a57626] mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-xl text-emerald-50">
+                    <h3 className="text-3xl font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-xl text-white">
                         <li className="flex gap-3 items-start">
-                            <span className="text-[#a57626] mt-1">➤</span>
-                            <span>Claims must be called on the number they&apos;re won on - <span className="text-red-400 font-bold">late claims invalid</span></span>
+                            <span className="text-white mt-1">➤</span>
+                            <span>Claims must be called on the number they&apos;re won on - <span className="text-white font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-[#a57626] mt-1">➤</span>
+                            <span className="text-white mt-1">➤</span>
                             <span>Multiple claims share the prize</span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-[#a57626] mt-1">➤</span>
+                            <span className="text-white mt-1">➤</span>
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
@@ -364,30 +362,30 @@ export default function DisplayUI({
           {showBreak && (
             <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in zoom-in duration-500 py-4">
                 <div className="text-center shrink-0">
-                    <h1 className="text-7xl font-black text-yellow-400 animate-pulse" style={{ textShadow: TextShadow }}>BREAK TIME</h1>
+                    <h1 className="text-7xl font-black text-white animate-pulse" style={{ textShadow: TextShadow }}>BREAK TIME</h1>
                     <p className="text-3xl text-white font-bold mt-2">We will resume shortly</p>
                 </div>
 
                 {/* Kitchen Info Box */}
                 <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
-                    <h2 className="text-4xl font-black text-[#f0d8ad] mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
+                    <h2 className="text-4xl font-black text-white mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
                     <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
                 </div>
 
                 {/* Rules */}
                 <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-3xl font-bold text-[#a57626] mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-xl text-emerald-50">
+                    <h3 className="text-3xl font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-xl text-white">
                         <li className="flex gap-3 items-start">
-                            <span className="text-[#a57626] mt-1">➤</span>
-                            <span>Claims must be called on the number they&apos;re won on - <span className="text-red-400 font-bold">late claims invalid</span></span>
+                            <span className="text-white mt-1">➤</span>
+                            <span>Claims must be called on the number they&apos;re won on - <span className="text-white font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-[#a57626] mt-1">➤</span>
+                            <span className="text-white mt-1">➤</span>
                             <span>Multiple claims share the prize</span>
                         </li>
                         <li className="flex gap-3 items-start">
-                            <span className="text-[#a57626] mt-1">➤</span>
+                            <span className="text-white mt-1">➤</span>
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
@@ -403,22 +401,22 @@ export default function DisplayUI({
             <div className="flex flex-col items-center justify-evenly w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4 text-center">
               
               <div className="shrink-0">
-                  <h1 className="text-7xl font-black text-green-400 mb-4 animate-bounce" style={{ textShadow: TextShadow }}>THANKS FOR PLAYING!</h1>
-                  <p className="text-3xl text-white/90 font-medium">We hope you had a blast!</p>
+                  <h1 className="text-7xl font-black text-white mb-4 animate-bounce" style={{ textShadow: TextShadow }}>THANKS FOR PLAYING!</h1>
+                  <p className="text-3xl text-white font-medium">We hope you had a blast!</p>
               </div>
 
               <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-3xl p-8 max-w-5xl w-full backdrop-blur-sm shadow-2xl shrink-0">
-                  <h2 className="text-5xl font-black text-[#f0d8ad] mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
+                  <h2 className="text-5xl font-black text-white mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
                   <p className="text-3xl text-white font-bold">Don&apos;t miss out - secure your table at the bar.</p>
               </div>
 
               <div className="space-y-6 max-w-4xl shrink-0">
-                  <p className="text-3xl text-emerald-50 font-medium leading-relaxed">
+                  <p className="text-3xl text-white font-medium leading-relaxed">
                       Please enjoy the remaining time that we&apos;re open.
                       <br/>
                       The bar is open for drinks!
                   </p>
-                  <p className="text-2xl text-[#a57626] font-bold uppercase tracking-widest animate-pulse">
+                  <p className="text-2xl text-white font-bold uppercase tracking-widest animate-pulse">
                       Bring friends, family & neighbours next time!
                   </p>
               </div>
@@ -429,7 +427,7 @@ export default function DisplayUI({
           {showPausedForValidation && (
             <div className="text-center animate-in slide-in-from-bottom duration-500" style={{ textShadow: TextShadow }}>
                 <div className="inline-block px-8 py-4 bg-[#a57626]/20 border-2 border-[#a57626]/80 rounded-full mb-8 animate-pulse">
-                    <h2 className="text-4xl font-bold text-[#f0d8ad] uppercase tracking-widest">Checking Ticket</h2>
+                    <h2 className="text-4xl font-bold text-white uppercase tracking-widest">Checking Ticket</h2>
                 </div>
                 <h1 className="text-7xl font-black">PLEASE WAIT...</h1>
             </div>
@@ -442,10 +440,10 @@ export default function DisplayUI({
                   <div className="absolute inset-0 bg-current blur-3xl rounded-full transform scale-150 opacity-20"></div>
                    {/* Massive Main Number */}
                   <div 
-                    className="relative bg-white rounded-full flex items-center justify-center shadow-2xl"
+                    className="relative bg-[#005131] border-4 border-white/70 rounded-full flex items-center justify-center shadow-2xl"
                     style={{ width: '35vh', height: '35vh', minWidth: '300px', minHeight: '300px' }}
                   >
-                      <span className="text-[20vh] font-black text-slate-900 leading-none tracking-tighter">
+                      <span className="text-[20vh] font-black text-white leading-none tracking-tighter">
                           {currentNumberDelayed}
                       </span>
                   </div>
@@ -462,14 +460,14 @@ export default function DisplayUI({
               <h1 
                 className={cn(
                     "text-9xl font-black mb-8 animate-bounce",
-                    currentGameState.display_win_type === 'snowball' ? "text-yellow-400 drop-shadow-[0_0_30px_rgba(250,204,21,0.8)]" : "text-green-500 drop-shadow-[0_0_30px_rgba(34,197,94,0.8)]"
+                    "text-white drop-shadow-[0_0_30px_rgba(255,255,255,0.8)]"
                 )}
               >
                   {currentGameState.display_win_text}
               </h1>
               {currentGameState.display_winner_name && (
                   <div className="bg-white/10 px-12 py-6 rounded-2xl border border-white/20 backdrop-blur-xl animate-in slide-in-from-bottom duration-700 delay-200">
-                      <p className="text-2xl text-white/60 uppercase tracking-widest mb-2">Winner</p>
+                      <p className="text-2xl text-white uppercase tracking-widest mb-2">Winner</p>
                       <h2 className="text-6xl font-bold text-white">{currentGameState.display_winner_name}</h2>
                   </div>
               )}
@@ -484,14 +482,14 @@ export default function DisplayUI({
                 <>
                    <div className="flex items-baseline gap-4 mb-1">
                       <span className={cn("text-sm uppercase tracking-widest font-bold", dimTextColor)}>Current Stage</span>
-                      <span className="text-3xl font-bold text-yellow-400" style={{ textShadow: TextShadow }}>{currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0]}</span>
+                      <span className="text-3xl font-bold text-white" style={{ textShadow: TextShadow }}>{currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0]}</span>
                    </div>
                    
                    {currentActiveGame?.type === 'snowball' && currentSnowballPot ? (
                         <div className="flex items-center gap-4 bg-[#a57626]/25 p-2 px-4 rounded-lg border border-[#a57626]/60 self-start shadow-lg">
-                            <span className="text-[#f0d8ad] text-sm font-bold uppercase">Snowball</span>
+                            <span className="text-white text-sm font-bold uppercase">Snowball</span>
                             <span className="text-2xl font-bold text-white">£{currentSnowballPot.current_jackpot_amount}</span>
-                            <span className="text-[#f0d8ad] text-sm">in {currentSnowballPot.current_max_calls} calls</span>
+                            <span className="text-white text-sm">in {currentSnowballPot.current_max_calls} calls</span>
                         </div>
                    ) : (
                         <div className="text-xl font-medium">
@@ -513,8 +511,8 @@ export default function DisplayUI({
                     <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
                         {delayedNumbers.slice().reverse().map((num, idx) => (
                             <div key={idx} className={cn(
-                                "flex items-center justify-center rounded-full bg-white font-bold text-slate-900 shadow-lg shrink-0",
-                                idx === 0 ? "w-16 h-16 text-2xl border-4 border-[#a57626]" : "w-12 h-12 text-lg opacity-70"
+                                "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shadow-lg shrink-0",
+                                idx === 0 ? "w-16 h-16 text-2xl border-4 border-white" : "w-12 h-12 text-lg opacity-70"
                             )}>
                                 {num}
                             </div>
@@ -526,17 +524,17 @@ export default function DisplayUI({
       </div>
 
       {/* Player Join QR Code */}
-      <div className="absolute bottom-36 left-8 bg-white p-4 rounded-xl shadow-2xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
-          <div className="bg-[#005131] p-2 rounded-lg">
+      <div className="absolute bottom-36 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl shadow-2xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
+          <div className="bg-white p-2 rounded-lg">
              <QRCodeSVG 
                 value={`${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`} 
                 size={100}
                 level="H"
-                fgColor="#FFFFFF"
-                bgColor="#005131"
+                fgColor="#005131"
+                bgColor="#FFFFFF"
              />
           </div>
-          <p className="text-[#005131] font-bold text-sm uppercase tracking-wider">Play Along</p>
+          <p className="text-white font-bold text-sm uppercase tracking-wider">Play Along</p>
       </div>
     </div>
   );

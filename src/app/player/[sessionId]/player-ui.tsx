@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { cn, getContrastColor } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { BingoBall } from '@/components/ui/bingo-ball';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -242,14 +242,12 @@ export default function PlayerUI({
   const isWin = !!currentGameState?.display_win_type;
 
   const backgroundColor = currentActiveGame?.background_colour || '#005131';
-  const contrastTextColor = useMemo(() => getContrastColor(backgroundColor), [backgroundColor]);
   const isSnowballGame = currentActiveGame?.type === 'snowball';
 
   return (
     <div
       className={cn(
-        "min-h-screen pb-8",
-        contrastTextColor
+        "min-h-screen pb-8 text-white"
       )}
       style={{ backgroundColor: backgroundColor }}
     >
@@ -257,11 +255,11 @@ export default function PlayerUI({
       <div className="bg-[#003f27]/80 p-4 border-b border-[#1f7c58] flex items-center justify-between sticky top-0 z-20 shadow-md">
         <div>
           <h1 className="font-bold text-lg leading-none text-white">{currentSession.name}</h1>
-          {currentActiveGame && <p className="text-sm text-emerald-100/80">{currentActiveGame.name}</p>}
+          {currentActiveGame && <p className="text-sm text-white">{currentActiveGame.name}</p>}
         </div>
         {currentGameState && (
           <div className="bg-[#005131] px-3 py-1 rounded border border-[#1f7c58]">
-            <span className="text-xs text-emerald-100/80 uppercase block">Calls</span>
+            <span className="text-xs text-white uppercase block">Calls</span>
             <span className="font-mono font-bold text-xl leading-none">{delayedNumbers.length}</span>
           </div>
         )}
@@ -276,7 +274,7 @@ export default function PlayerUI({
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2">⏳</div>
               <h2 className="text-xl font-bold text-white">Waiting for Host</h2>
-              <p className="text-emerald-100/80">Game will start soon...</p>
+              <p className="text-white">Game will start soon...</p>
             </CardContent>
           </Card>
         )}
@@ -285,8 +283,8 @@ export default function PlayerUI({
           <Card className="bg-yellow-900/20 border-yellow-600">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2 animate-bounce">☕️</div>
-              <h2 className="text-2xl font-bold text-yellow-500">On Break</h2>
-              <p className="text-yellow-200/70">We will resume shortly</p>
+              <h2 className="text-2xl font-bold text-white">On Break</h2>
+              <p className="text-white">We will resume shortly</p>
             </CardContent>
           </Card>
         )}
@@ -295,8 +293,8 @@ export default function PlayerUI({
           <Card className="bg-green-900/20 border-green-600">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2">🏁</div>
-              <h2 className="text-2xl font-bold text-green-500">Game Over</h2>
-              <p className="text-green-200/70">Thanks for playing!</p>
+              <h2 className="text-2xl font-bold text-white">Game Over</h2>
+              <p className="text-white">Thanks for playing!</p>
             </CardContent>
           </Card>
         )}
@@ -305,8 +303,8 @@ export default function PlayerUI({
           <Card className="bg-blue-900/20 border-blue-500 animate-pulse">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2">🎫</div>
-              <h2 className="text-2xl font-bold text-blue-400">Checking Claim</h2>
-              <p className="text-blue-200/70">Please wait...</p>
+              <h2 className="text-2xl font-bold text-white">Checking Claim</h2>
+              <p className="text-white">Please wait...</p>
             </CardContent>
           </Card>
         )}
@@ -329,13 +327,13 @@ export default function PlayerUI({
             {/* Info Cards */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]">
-                <span className="text-xs text-emerald-100/80 uppercase block">Playing For</span>
-                <span className="font-bold text-[#f0d8ad] text-lg leading-tight">
+                <span className="text-xs text-white uppercase block">Playing For</span>
+                <span className="font-bold text-white text-lg leading-tight">
                   {currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0]}
                 </span>
               </div>
               <div className="bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]">
-                <span className="text-xs text-emerald-100/80 uppercase block">Prize</span>
+                <span className="text-xs text-white uppercase block">Prize</span>
                 <span className="font-bold text-white text-lg leading-tight">
                   {currentPrizeText || '-'}
                 </span>
@@ -345,11 +343,11 @@ export default function PlayerUI({
             {isSnowballGame && currentSnowballPot && (
               <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 flex justify-between items-center shadow-lg shadow-black/25">
                 <div>
-                  <span className="text-[#f0d8ad] text-xs font-bold uppercase block">Snowball Jackpot</span>
+                  <span className="text-white text-xs font-bold uppercase block">Snowball Jackpot</span>
                   <span className="text-2xl font-bold text-white">£{currentSnowballPot.current_jackpot_amount}</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-[#f0d8ad] text-xs block">Win in</span>
+                  <span className="text-white text-xs block">Win in</span>
                   <span className="text-xl font-bold text-white">{currentSnowballPot.current_max_calls} calls</span>
                 </div>
               </div>
@@ -360,14 +358,14 @@ export default function PlayerUI({
               {currentNumberDelayed ? (
                 <div className="relative">
                 <div className="w-48 h-48 bg-white rounded-full flex items-center justify-center shadow-2xl border-8 border-emerald-100">
-                    <span className="text-8xl font-black text-slate-900 tracking-tighter">
+                    <span className="text-8xl font-black text-white tracking-tighter">
                       {currentNumberDelayed}
                     </span>
                   </div>
                 </div>
               ) : (
                 <div className="w-48 h-48 rounded-full border-4 border-[#1f7c58] border-dashed flex items-center justify-center">
-                  <span className="text-slate-600 font-bold">READY</span>
+                  <span className="text-white font-bold">READY</span>
                 </div>
               )}
             </div>
@@ -375,11 +373,11 @@ export default function PlayerUI({
             {/* Recent History */}
             <div>
               <div className="flex justify-between items-end mb-2">
-                <span className="text-sm text-emerald-100/80 font-medium">Recent Calls</span>
+                <span className="text-sm text-white font-medium">Recent Calls</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-[#a57626] h-auto p-0 hover:bg-transparent"
+                  className="text-white h-auto p-0 hover:bg-transparent"
                   onClick={() => setShowFullHistory(true)}
                 >
                   View All Numbers
@@ -391,10 +389,10 @@ export default function PlayerUI({
                     key={i}
                     number={num}
                     variant={i === 0 ? "active" : "called"}
-                    className={i === 0 ? "w-14 h-14 text-xl" : "w-12 h-12 text-lg opacity-80"}
+                    className={i === 0 ? "w-14 h-14 text-xl bg-[#005131] text-white border-white/70" : "w-12 h-12 text-lg opacity-80 bg-[#005131] text-white border-white/50"}
                   />
                 ))}
-                {delayedNumbers.length === 0 && <p className="text-slate-600 italic text-sm">No numbers called yet</p>}
+                {delayedNumbers.length === 0 && <p className="text-white italic text-sm">No numbers called yet</p>}
               </div>
             </div>
           </>
@@ -417,7 +415,7 @@ export default function PlayerUI({
                   key={num}
                   className={cn(
                     "aspect-square flex items-center justify-center text-sm font-bold rounded",
-                    isCalled ? "bg-green-600 text-white" : "bg-[#003f27] text-emerald-100/40"
+                    isCalled ? "bg-green-600 text-white" : "bg-[#003f27] text-white"
                   )}
                 >
                   {num}

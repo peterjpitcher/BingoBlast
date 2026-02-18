@@ -19,7 +19,7 @@ export function Header() {
     <header className="sticky top-0 z-50 w-full border-b border-[#1f7c58] bg-[#005131] shadow-md">
       <div className="container mx-auto flex min-h-16 flex-wrap items-center justify-between gap-3 px-4 py-2">
         <Link href="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
-          <div className="relative h-10 w-10 rounded-full bg-[#00472b] border border-[#1f7c58] p-1 shrink-0">
+          <div className="relative h-10 w-40 shrink-0">
             <Image 
               src="/the-anchor-pub-logo-white-transparent.png" 
               alt="The Anchor Logo" 
@@ -28,7 +28,7 @@ export function Header() {
               priority
             />
           </div>
-          <span className="text-xl font-bold text-[#f5f1e6]">
+          <span className="text-xl font-bold text-white">
             The Anchor Bingo
           </span>
         </Link>
@@ -46,8 +46,8 @@ export function Header() {
                 className={cn(
                   "rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors",
                   isActive
-                    ? "border-[#a57626] bg-[#a57626] text-[#003f27]"
-                    : "border-[#1f7c58] text-emerald-50 hover:bg-[#0f6846]"
+                    ? "border-[#a57626] bg-[#a57626] text-white"
+                    : "border-[#1f7c58] text-white hover:bg-[#0f6846]"
                 )}
               >
                 {item.label}

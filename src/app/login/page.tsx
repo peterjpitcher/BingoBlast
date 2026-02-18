@@ -42,12 +42,12 @@ function LoginPageContent() {
 
   return (
     <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 bg-gradient-to-b from-[#005131] to-[#003f27]">
-      <div className="mb-8 relative w-48 h-24 rounded-xl bg-[#005131] border border-[#1f7c58] p-3 shadow-lg shadow-black/25">
+      <div className="mb-8 relative w-56 h-24">
          <Image 
           src="/the-anchor-pub-logo-white-transparent.png" 
           alt="The Anchor" 
           fill 
-          className="object-contain p-2"
+          className="object-contain"
           priority
         />
       </div>
