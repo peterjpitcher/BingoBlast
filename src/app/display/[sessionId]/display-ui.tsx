@@ -19,6 +19,7 @@ interface DisplayUIProps {
   initialGameState: GameState | null;
   initialPrizeText: string;
   isWaitingState: boolean;
+  playerJoinUrl: string;
 }
 
 const TextShadow = "2px 2px 4px rgba(0,0,0,0.9)";
@@ -29,6 +30,7 @@ export default function DisplayUI({
   initialGameState: initialActiveGameState,
   initialPrizeText,
   isWaitingState: initialWaitingState,
+  playerJoinUrl,
 }: DisplayUIProps) {
   const supabase = useRef(createClient());
 
@@ -289,6 +291,9 @@ export default function DisplayUI({
   const showBreak = currentActiveGame && currentGameState?.on_break && !isGameFinishedState;
   const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isGameFinishedState && !currentGameState.display_win_type; 
   const showWinState = !!currentGameState?.display_win_type;
+  const resolvedJoinUrl = playerJoinUrl.startsWith('http')
+    ? playerJoinUrl
+    : `${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`;
   
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
@@ -527,7 +532,7 @@ export default function DisplayUI({
       <div className="absolute bottom-36 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl shadow-2xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
           <div className="bg-white p-2 rounded-lg">
              <QRCodeSVG 
-                value={`${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`} 
+                value={resolvedJoinUrl}
                 size={100}
                 level="H"
                 fgColor="#005131"

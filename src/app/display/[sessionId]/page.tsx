@@ -1,6 +1,7 @@
 import React from 'react';
 import { createClient } from '@/utils/supabase/server';
 import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import DisplayUI from './display-ui';
 import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
@@ -29,6 +30,18 @@ export default async function DisplayPage({ params }: PageProps) {
     console.error("Error fetching session for display:", sessionError?.message);
     notFound();
   }
+
+  const requestHeaders = await headers();
+  const forwardedHost = requestHeaders.get('x-forwarded-host');
+  const host = forwardedHost || requestHeaders.get('host');
+  const forwardedProto = requestHeaders.get('x-forwarded-proto');
+  const protocol = forwardedProto || (host?.includes('localhost') ? 'http' : 'https');
+  const origin = host
+    ? `${protocol}://${host}`
+    : (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/$/, '');
+  const playerJoinUrl = origin
+    ? `${origin}/player/${session.id}`
+    : `/player/${session.id}`;
 
   let activeGame: Database['public']['Tables']['games']['Row'] | null = null;
   let initialGameState: Database['public']['Tables']['game_states_public']['Row'] | null = null;
@@ -77,6 +90,7 @@ export default async function DisplayPage({ params }: PageProps) {
       initialGameState={initialGameState}
       initialPrizeText={prizeText}
       isWaitingState={isWaitingState}
+      playerJoinUrl={playerJoinUrl}
     />
   );
 }
