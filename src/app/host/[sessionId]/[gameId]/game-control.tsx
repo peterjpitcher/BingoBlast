@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak } from '@/app/host/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
@@ -311,6 +311,20 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         router.push('/host');
     };
 
+    const handleTakeBreakAfterGame = async () => {
+        if (!isController) return;
+        setActionError(null);
+        const result = await moveToNextGameOnBreak(gameId, sessionId);
+        if (!result?.success) {
+            setActionError(result?.error || "Failed to move to next game break.");
+            return;
+        }
+        setShowPostWinModal(false);
+        setShowValidationModal(false);
+        handleClearSelection();
+        router.push(result.data?.redirectTo || '/host');
+    };
+
     const handleToggleNumber = (num: number) => {
         setSelectedNumbers(prev =>
             prev.includes(num) ? prev.filter(n => n !== num) : [...prev, num].sort((a, b) => a - b)
@@ -322,17 +336,24 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setValidationResult(null);
     };
 
+    const handleBeginClaimCheck = async () => {
+        if (!isController) return;
+        setActionError(null);
+        setValidationResult(null);
+        setShowValidationModal(true);
+
+        const pauseResult = await pauseForValidation(gameId);
+        if (!pauseResult?.success) {
+            setActionError("Failed to start claim check: " + (pauseResult?.error || "Unknown error"));
+            setShowValidationModal(false);
+        }
+    };
+
     const handleCheckWin = async () => {
         if (!isController) return;
         setActionError(null);
         if (selectedNumbers.length === 0) {
             setActionError("Please select numbers to validate.");
-            return;
-        }
-
-        const pauseResult = await pauseForValidation(gameId);
-        if (!pauseResult?.success) {
-            setActionError("Failed to pause for validation: " + (pauseResult?.error || "Unknown error"));
             return;
         }
 
@@ -438,14 +459,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isBreakToggleDisabled = !isController || isGameNotInProgress || isGameCompleted || isPausedForValidation;
     const isValidateButtonDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
     const isVoidLastNumberDisabled = !isController || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
+    const hostSurfaceClass = "bg-[#003f27]/88 border border-[#1f7c58]";
 
 
     return (
-        <div className="p-4 pb-32 max-w-4xl mx-auto relative">
+        <div className="p-4 pb-32 max-w-5xl mx-auto relative text-white">
             {/* Controller Locked Overlay / Banner */}
             {!isController && (
                 <div className="absolute inset-x-0 top-0 z-50 p-4">
-                    <div className="bg-red-900/90 border border-red-500 text-white p-4 rounded-lg shadow-2xl backdrop-blur-sm flex flex-col items-center gap-3 text-center">
+                    <div className="bg-red-900/90 border border-red-500 text-white p-4 rounded-xl shadow-2xl backdrop-blur-sm flex flex-col items-center gap-3 text-center">
                         <div>
                             <h3 className="font-bold text-lg">View Only Mode</h3>
                             <p className="text-sm text-red-200">Another host is currently controlling this game.</p>
@@ -462,8 +484,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             {/* Connection Status */}
             <div className="flex justify-center mb-4">
                 {isConnected ? (
-                    <div className="bg-green-500/20 text-green-400 text-xs font-bold px-3 py-1 rounded-full border border-green-500/50 flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    <div className="bg-[#0f6846]/70 text-white text-xs font-bold px-3 py-1 rounded-full border border-[#1f7c58] flex items-center gap-2">
+                        <div className="w-2 h-2 bg-[#a57626] rounded-full animate-pulse"></div>
                         LIVE
                     </div>
                 ) : (
@@ -475,18 +497,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
             {/* Alerts */}
             {actionError && <div className="mb-4 p-4 bg-red-900/50 border border-red-500 text-red-200 rounded-lg text-center">{actionError}</div>}
-            {isGameCompleted && <div className="mb-4 p-4 bg-slate-800 border border-slate-600 text-slate-300 rounded-lg text-center">Game Completed</div>}
-            {currentGameState.on_break && <div className="mb-4 p-4 bg-bingo-secondary/20 border border-bingo-secondary text-bingo-secondary rounded-lg text-center text-lg font-bold animate-pulse">ON BREAK</div>}
-            {currentGameState.paused_for_validation && <div className="mb-4 p-4 bg-yellow-500/20 border border-yellow-500 text-yellow-300 rounded-lg text-center text-lg font-bold">CHECKING CLAIM...</div>}
+            {isGameCompleted && <div className="mb-4 p-4 bg-[#003f27]/90 border border-[#1f7c58] text-white rounded-lg text-center">Game Completed</div>}
+            {currentGameState.on_break && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold animate-pulse">ON BREAK</div>}
+            {currentGameState.paused_for_validation && <div className="mb-4 p-4 bg-[#a57626]/25 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">CHECKING CLAIM...</div>}
 
             {/* Main Display Card */}
-            <Card className="bg-slate-900 border-slate-800 mb-6 overflow-hidden">
+            <Card className={cn(hostSurfaceClass, "mb-6 overflow-hidden")}>
                 <CardContent className="p-8 flex flex-col items-center text-center">
                     <div className="mb-6 relative">
                         {currentNumber ? (
-                            <BingoBall number={currentNumber} variant="active" className="w-40 h-40 text-7xl shadow-[0_0_50px_rgba(236,72,153,0.3)]" />
+                            <BingoBall number={currentNumber} variant="active" className="w-40 h-40 text-7xl bg-[#005131] border-[#a57626]/70 text-white shadow-[0_0_40px_rgba(165,118,38,0.35)]" />
                         ) : (
-                            <div className="w-40 h-40 rounded-full bg-slate-800 border-4 border-slate-700 flex items-center justify-center text-slate-600 text-sm font-bold">
+                            <div className="w-40 h-40 rounded-full bg-[#005131] border-4 border-[#1f7c58] flex items-center justify-center text-white/70 text-sm font-bold">
                                 READY
                             </div>
                         )}
@@ -496,15 +518,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <h2 className="text-3xl font-bold text-white mb-4 animate-in fade-in slide-in-from-bottom-4">{currentNickname}</h2>
                     )}
 
-                    <div className="flex items-center gap-6 text-sm text-slate-400 border-t border-slate-800 pt-4 w-full justify-center">
+                    <div className="flex items-center gap-6 text-sm text-white/90 border-t border-[#1f7c58] pt-4 w-full justify-center">
                         <div>
-                            <span className="block text-slate-500 uppercase text-xs tracking-wider mb-1">Calls</span>
+                            <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Calls</span>
                             <span className="text-xl font-mono text-white">{currentGameState.numbers_called_count}</span>
                         </div>
-                        <div className="h-8 w-px bg-slate-800"></div>
+                        <div className="h-8 w-px bg-[#1f7c58]"></div>
                         <div>
-                            <span className="block text-slate-500 uppercase text-xs tracking-wider mb-1">Playing For</span>
-                            <span className="text-xl font-bold text-bingo-primary">{game.stage_sequence[currentGameState.current_stage_index] || 'Finished'}</span>
+                            <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Playing For</span>
+                            <span className="text-xl font-bold text-white">{game.stage_sequence[currentGameState.current_stage_index] || 'Finished'}</span>
                         </div>
                     </div>
                 </CardContent>
@@ -515,7 +537,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant="primary"
                     size="xl"
-                    className={cn("col-span-2 h-24 text-3xl shadow-xl shadow-bingo-primary/20", isCallingNumber && "opacity-80")}
+                    className={cn("col-span-2 h-24 text-3xl bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] shadow-xl shadow-black/25", isCallingNumber && "opacity-80")}
                     onClick={handleCallNextNumber}
                     disabled={isNextNumberDisabled}
                 >
@@ -525,7 +547,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant={currentGameState.on_break ? 'secondary' : 'secondary'}
                     size="lg"
-                    className={cn("h-16", currentGameState.on_break ? "bg-yellow-600 hover:bg-yellow-700 text-white border-yellow-500" : "")}
+                    className={cn("h-16 bg-[#0f6846] hover:bg-[#136f4b] border border-[#1f7c58] text-white", currentGameState.on_break ? "bg-[#a57626] hover:bg-[#8f6621] border-[#a57626]" : "")}
                     onClick={handleToggleBreak}
                     disabled={isBreakToggleDisabled}
                 >
@@ -535,8 +557,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant="secondary"
                     size="lg"
-                    className="h-16 bg-indigo-900/50 border-indigo-800 text-indigo-300 hover:bg-indigo-900 hover:text-indigo-200"
-                    onClick={() => setShowValidationModal(true)}
+                    className="h-16 bg-[#0f6846] border border-[#a57626] text-white hover:bg-[#136f4b]"
+                    onClick={handleBeginClaimCheck}
                     disabled={isValidateButtonDisabled}
                 >
                     Check Claim
@@ -548,7 +570,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant="ghost"
                     size="sm"
-                    className="text-slate-500 hover:text-yellow-500"
+                    className="text-white/80 hover:text-white hover:bg-[#0f6846]"
                     onClick={handleVoidLastNumber}
                     disabled={isVoidLastNumberDisabled}
                 >
@@ -559,7 +581,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant="secondary"
                     size="sm"
-                    className="border-indigo-800 text-indigo-300 hover:bg-indigo-900/40"
+                    className="border-[#a57626] text-white hover:bg-[#0f6846]"
                     onClick={() => setShowSessionWinnersModal(true)}
                 >
                     Winners &amp; Prizes ({sessionWinners.length})
@@ -572,7 +594,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     <Button
                         variant="secondary"
                         size="sm"
-                        className="bg-indigo-900/30 border-indigo-800/50 text-indigo-400 hover:bg-indigo-900/50 hover:text-indigo-300"
+                        className="bg-[#0f6846] border-[#a57626] text-white hover:bg-[#136f4b]"
                         onClick={() => {
                             setWinnerName('');
                             setPrizeDescription(`£${currentSnowballPot.current_jackpot_amount} (Manual Snowball Win)`);
@@ -590,29 +612,29 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     {lastNNumbers.map((num, i) => (
                         <BingoBall key={i} number={num} variant="called" className="w-12 h-12 text-lg" />
                     ))}
-                    {lastNNumbers.length === 0 && <p className="text-slate-600 text-sm italic">No history yet</p>}
+                    {lastNNumbers.length === 0 && <p className="text-white/70 text-sm italic">No history yet</p>}
                 </div>
             </div>
 
             {/* Winners List */}
             {currentWinners.length > 0 && (
-                <Card className="bg-slate-900 border-slate-800 mb-8 mx-4 md:mx-0">
-                    <div className="p-4 border-b border-slate-800">
+                <Card className={cn(hostSurfaceClass, "mb-8 mx-4 md:mx-0")}>
+                    <div className="p-4 border-b border-[#1f7c58]">
                         <h3 className="font-bold text-white">Winners</h3>
                     </div>
-                    <div className="divide-y divide-slate-800">
+                    <div className="divide-y divide-[#1f7c58]">
                         {currentWinners.map(winner => (
                             <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
                                 <div>
                                     <p className="font-bold text-white">{winner.winner_name}</p>
-                                    <p className="text-sm text-slate-400">{winner.stage} - {winner.prize_description}</p>
+                                    <p className="text-sm text-white/85">{winner.stage} - {winner.prize_description}</p>
                                 </div>
                                 <Button
                                     size="sm"
                                     variant={winner.prize_given ? "outline" : "secondary"}
                                     className={cn(
                                         "min-w-[100px] shrink-0",
-                                        winner.prize_given ? "text-green-400 border-green-900 hover:bg-green-900/20" : "bg-yellow-600 hover:bg-yellow-700 text-white"
+                                        winner.prize_given ? "text-[#f3d59d] border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
                                     )}
                                     onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
                                     disabled={!canTogglePrize}
@@ -632,7 +654,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     if (!currentGameState.paused_for_validation) setShowValidationModal(false);
                 }}
                 title="Validate Ticket"
-                className="max-w-4xl h-[80vh]"
+                className="max-w-4xl h-[80vh] bg-[#003f27] border border-[#1f7c58]"
             >
                 <div className="flex flex-col h-full">
                     <div className="shrink-0 mb-4">
@@ -644,30 +666,34 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     <span className="text-green-400 font-bold text-lg">✅ Valid Claim!</span>
                                     <div className="flex gap-2">
                                         <Button onClick={() => setShowWinnerModal(true)}>Record Winner</Button>
-                                        <Button variant="ghost" onClick={handleSkipStage} className="text-slate-400 hover:text-white">Skip (No Winner)</Button>
+                                        <Button variant="ghost" onClick={handleSkipStage} className="text-white/80 hover:text-white hover:bg-[#0f6846]">Skip (No Winner)</Button>
                                     </div>
                                 </div>
                             ) : (
                                 <div className="p-4 bg-red-900/30 border border-red-800 rounded-lg mb-4">
                                     <span className="text-red-400 font-bold text-lg block mb-1">❌ Invalid Claim</span>
-                                    <span className="text-slate-400 text-sm">Numbers not called: {validationResult.invalidNumbers?.join(', ')}</span>
+                                    <span className="text-white/85 text-sm">Numbers not called: {validationResult.invalidNumbers?.join(', ')}</span>
                                     <div className="mt-2">
                                         <Button variant="outline" size="sm" onClick={handleResumeGame} className="text-red-300 border-red-800 hover:bg-red-900/50">Reject & Resume</Button>
                                     </div>
                                 </div>
                             )
                         ) : (
-                            <p className="text-slate-400 text-sm text-center">Tap the claimed numbers on the grid below.</p>
+                            <div className="space-y-1">
+                                <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below.</p>
+                                <p className="text-[#f3d59d] text-xs text-center">The last called number is highlighted in gold.</p>
+                            </div>
                         )}
                     </div>
 
-                    <div className="flex-1 overflow-y-auto bg-slate-950/50 rounded-lg p-2 border border-slate-800">
+                    <div className="flex-1 overflow-y-auto bg-[#003f27]/80 rounded-lg p-2 border border-[#1f7c58]">
                         <div className="grid grid-cols-10 gap-1 sm:gap-2">
                             {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
                                 const isSelected = selectedNumbers.includes(num);
                                 const isCalled = (currentGameState.called_numbers as number[]).includes(num);
+                                const isLastCalled = num === currentNumber;
 
-                                let buttonStyle = "bg-slate-800 text-slate-500 hover:bg-slate-700";
+                                let buttonStyle = "bg-[#0f6846] text-white/55 hover:bg-[#136f4b]";
 
                                 if (isSelected) {
                                     if (isCalled) {
@@ -675,8 +701,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     } else {
                                         buttonStyle = "bg-red-600 text-white shadow-lg shadow-red-900/50 scale-105 z-10 border border-red-500";
                                     }
+                                } else if (isLastCalled) {
+                                    buttonStyle = "bg-[#a57626] text-white font-bold border-2 border-white ring-2 ring-[#f3d59d] ring-offset-0";
                                 } else if (isCalled) {
-                                    buttonStyle = "bg-slate-800 text-green-500 font-bold border border-green-500/30";
+                                    buttonStyle = "bg-[#0f6846] text-white font-bold border border-[#a57626]/60";
                                 }
 
                                 return (
@@ -696,7 +724,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         </div>
                     </div>
 
-                    <div className="shrink-0 pt-4 mt-4 border-t border-slate-800 flex justify-between gap-3">
+                    <div className="shrink-0 pt-4 mt-4 border-t border-[#1f7c58] flex justify-between gap-3">
                         <Button variant="secondary" onClick={handleResumeGame}>
                             {currentGameState.paused_for_validation ? 'Cancel & Resume' : 'Cancel'}
                         </Button>
@@ -719,26 +747,26 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 isOpen={showSessionWinnersModal}
                 onClose={() => setShowSessionWinnersModal(false)}
                 title="Session Winners & Prizes"
-                className="max-w-4xl"
+                className="max-w-4xl bg-[#003f27] border border-[#1f7c58]"
             >
                 <div className="space-y-4">
-                    <p className="text-sm text-slate-400">
+                    <p className="text-sm text-white/85">
                         Review winners across all games in this session and mark prizes as given when handed out.
                     </p>
                     {sessionWinners.length === 0 ? (
-                        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-6 text-sm text-slate-500">
+                        <div className="rounded-lg border border-[#1f7c58] bg-[#003f27]/80 p-6 text-sm text-white/70">
                             No winners recorded yet.
                         </div>
                     ) : (
-                        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800">
+                        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-[#1f7c58] divide-y divide-[#1f7c58]">
                             {sessionWinners.map((winner) => (
                                 <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
                                     <div className="min-w-0">
                                         <p className="font-bold text-white truncate">{winner.winner_name}</p>
-                                        <p className="text-sm text-slate-400">
+                                        <p className="text-sm text-white/85">
                                             {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'} • {winner.stage}
                                         </p>
-                                        <p className="text-sm text-slate-500 truncate">
+                                        <p className="text-sm text-white/70 truncate">
                                             {winner.prize_description || 'No prize description'}
                                         </p>
                                     </div>
@@ -753,7 +781,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                             variant={winner.prize_given ? "outline" : "secondary"}
                                             className={cn(
                                                 "min-w-[120px]",
-                                                winner.prize_given ? "text-green-400 border-green-900 hover:bg-green-900/20" : "bg-yellow-600 hover:bg-yellow-700 text-white"
+                                                winner.prize_given ? "text-[#f3d59d] border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
                                             )}
                                             onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
                                             disabled={!canTogglePrize || winner.is_void}
@@ -774,10 +802,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             </Modal>
 
             {/* Record Winner Modal */}
-            <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${game.stage_sequence[currentGameState.current_stage_index]}`}>
+            <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${game.stage_sequence[currentGameState.current_stage_index]}`} className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
                     <div>
-                        <label className="text-sm text-slate-400 block mb-1">Winner Name</label>
+                        <label className="text-sm text-white/85 block mb-1">Winner Name</label>
                         <Input
                             value={winnerName}
                             onChange={(e) => setWinnerName(e.target.value)}
@@ -786,7 +814,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         />
                     </div>
                     <div>
-                        <label className="text-sm text-slate-400 block mb-1">Prize Description</label>
+                        <label className="text-sm text-white/85 block mb-1">Prize Description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}
@@ -799,9 +827,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             id="prizeGiven"
                             checked={prizeGiven}
                             onChange={(e) => setPrizeGiven(e.target.checked)}
-                            className="w-5 h-5 rounded border-slate-600 bg-slate-800 text-bingo-primary focus:ring-bingo-primary accent-bingo-primary cursor-pointer"
+                            className="w-5 h-5 rounded border-[#1f7c58] bg-[#005131] text-[#a57626] focus:ring-[#a57626] accent-[#a57626] cursor-pointer"
                         />
-                        <label htmlFor="prizeGiven" className="text-sm text-slate-300 select-none cursor-pointer">Prize Given Immediately?</label>
+                        <label htmlFor="prizeGiven" className="text-sm text-white/90 select-none cursor-pointer">Prize Given Immediately?</label>
                     </div>
                 </div>
                 <div className="mt-6 flex justify-end gap-3">
@@ -811,34 +839,30 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             </Modal>
 
             {/* Post Win Modal */}
-            <Modal isOpen={showPostWinModal} onClose={() => { }} title="Winner Recorded!" className="border-green-900">
+            <Modal isOpen={showPostWinModal} onClose={() => { }} title="Winner Recorded!" className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-6 text-center py-4">
-                    <div className="w-16 h-16 bg-green-900/20 text-green-500 rounded-full flex items-center justify-center mx-auto text-3xl border border-green-900/50">
+                    <div className="w-16 h-16 bg-[#a57626]/20 text-[#f3d59d] rounded-full flex items-center justify-center mx-auto text-3xl border border-[#a57626]">
                         🎉
                     </div>
-                    <p className="text-slate-300">The winner has been announced. What&apos;s next?</p>
+                    <p className="text-white/90">The winner has been announced. What&apos;s next?</p>
 
                     <div className="flex flex-col gap-3">
-                        <Button variant="primary" size="lg" className="w-full bg-green-600 hover:bg-green-700" onClick={handleMoveToNextGame}>
+                        <Button variant="primary" size="lg" className="w-full bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]" onClick={handleMoveToNextGame}>
                             Move to Next Game
                         </Button>
 
                         <div className="grid grid-cols-1 gap-3">
-                            <Button variant="secondary" onClick={() => {
+                            <Button variant="secondary" onClick={async () => {
                                 setShowPostWinModal(false);
                                 setWinnerName('');
-                                // setIsSnowballEligible(false); // No longer needed
                                 setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
-                                setShowWinnerModal(true);
+                                handleClearSelection();
+                                await handleBeginClaimCheck();
                             }}>
                                 Validate Another Winner
                             </Button>
 
-                            <Button variant="secondary" className="border-yellow-900/50 text-yellow-500 hover:bg-yellow-900/20" onClick={async () => {
-                                await handleToggleBreak();
-                                setShowPostWinModal(false);
-                                setShowValidationModal(false);
-                            }}>
+                            <Button variant="secondary" className="border-[#a57626] text-white hover:bg-[#a57626]/20" onClick={handleTakeBreakAfterGame}>
                                 Take a Break
                             </Button>
                         </div>
@@ -847,14 +871,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             </Modal>
 
             {/* Manual Snowball Win Modal */}
-            <Modal isOpen={showManualSnowballModal} onClose={() => setShowManualSnowballModal(false)} title="Manual Snowball Award">
+            <Modal isOpen={showManualSnowballModal} onClose={() => setShowManualSnowballModal(false)} title="Manual Snowball Award" className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
-                    <div className="p-3 bg-indigo-900/20 border border-indigo-900/50 rounded text-indigo-200 text-sm">
+                    <div className="p-3 bg-[#a57626]/20 border border-[#a57626] rounded text-white text-sm">
                         This will record a Snowball Jackpot win, display the celebration, and <strong>reset the pot</strong>.
                         Use this if the automatic trigger was missed or for special circumstances.
                     </div>
                     <div>
-                        <label className="text-sm text-slate-400 block mb-1">Winner Name</label>
+                        <label className="text-sm text-white/85 block mb-1">Winner Name</label>
                         <Input
                             value={winnerName}
                             onChange={(e) => setWinnerName(e.target.value)}
@@ -863,7 +887,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         />
                     </div>
                     <div>
-                        <label className="text-sm text-slate-400 block mb-1">Prize Description</label>
+                        <label className="text-sm text-white/85 block mb-1">Prize Description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}

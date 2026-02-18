@@ -296,15 +296,17 @@ export default function DisplayUI({
 
   const showActiveGame = currentActiveGame && currentGameState && currentGameState.status === 'in_progress' && !currentGameState.on_break && !isGameFinishedState && !currentGameState.display_win_type && !currentGameState.paused_for_validation;
   const showBreak = currentActiveGame && currentGameState?.on_break && !isGameFinishedState;
-  const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isGameFinishedState && !currentGameState.display_win_type; 
-  const showWinState = !!currentGameState?.display_win_type;
+  const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isGameFinishedState;
+  const showWinState = !!currentGameState?.display_win_type && !isGameFinishedState;
   const resolvedJoinUrl = playerJoinUrl.startsWith('http')
     ? playerJoinUrl
     : `${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`;
   
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
-  const footerLeftTextClass = "text-[30px] font-semibold text-white";
+  const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
+  const panelTitleClass = "text-[clamp(2rem,4vw,3.2rem)] font-black uppercase tracking-[0.08em] text-white";
+  const panelBodyClass = "text-[clamp(1.2rem,2.2vw,2rem)] text-white";
 
   return (
     <div 
@@ -314,7 +316,7 @@ export default function DisplayUI({
       style={{ backgroundColor: displayBackgroundColor }}
     >
       {/* Top Bar */}
-      <div className="h-24 px-8 flex items-center justify-between bg-[#003f27]/70 border-b border-[#1f7c58] backdrop-blur-sm z-10">
+      <div className="h-24 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10">
          <div className="flex items-center gap-4">
              <div className="relative w-64 h-20">
                  <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
@@ -330,30 +332,27 @@ export default function DisplayUI({
       <div className="flex-1 flex items-center justify-center relative p-8">
           
           {isWaitingState && (
-            <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4">
-                {/* Giant Logo */}
-                <div className="relative w-[400px] h-[150px] shrink-0">
-                    <Image 
-                        src="/the-anchor-pub-logo-white-transparent.png" 
-                        alt="The Anchor" 
-                        fill 
-                        className="object-contain" 
+            <div className="w-full max-w-5xl mx-auto flex flex-col items-center gap-8 animate-in fade-in duration-700 py-8">
+                <div className="relative w-[min(70vw,430px)] h-[min(24vw,160px)] min-h-[96px]">
+                    <Image
+                        src="/the-anchor-pub-logo-white-transparent.png"
+                        alt="The Anchor"
+                        fill
+                        className="object-contain"
                     />
                 </div>
 
-                {/* Kitchen Info Box */}
-                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shrink-0">
-                    <h2 className="text-[54px] font-black text-white mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
-                    <p className="text-[36px] text-white font-medium">Get your drinks and order food at the bar!</p>
+                <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-6 text-center backdrop-blur-sm">
+                    <h2 className={cn(panelTitleClass, "animate-pulse")}>Kitchen Open Until 9pm</h2>
+                    <p className={cn(panelBodyClass, "mt-2 font-medium")}>Get your drinks and order food at the bar!</p>
                 </div>
 
-                {/* Rules */}
-                <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-[45px] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-[30px] text-white">
+                <div className="w-full bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md">
+                    <h3 className="text-[clamp(1.8rem,3.2vw,2.8rem)] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-3 text-[clamp(1.05rem,1.8vw,1.65rem)] text-white">
                         <li className="flex gap-3 items-start">
                             <span className="text-white mt-1">➤</span>
-                            <span>Claims must be called on the number they&apos;re won on - <span className="text-white font-bold">late claims invalid</span></span>
+                            <span>Claims must be called on the number they&apos;re won on - <span className="font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
                             <span className="text-white mt-1">➤</span>
@@ -364,8 +363,8 @@ export default function DisplayUI({
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
-                            <span className="text-[36px]">🎉</span>
-                            <span className="text-white font-bold italic">Enjoy the night and best of luck to everyone!</span>
+                            <span className="text-[clamp(1.2rem,2vw,1.8rem)]">🎉</span>
+                            <span className="font-bold italic">Enjoy the night and best of luck to everyone!</span>
                         </li>
                     </ul>
                 </div>
@@ -373,25 +372,23 @@ export default function DisplayUI({
           )}
 
           {showBreak && (
-            <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in zoom-in duration-500 py-4">
-                <div className="text-center shrink-0">
-                    <h1 className="text-[108px] font-black text-white animate-pulse">BREAK TIME</h1>
-                    <p className="text-[45px] text-white font-bold mt-2">We will resume shortly</p>
+            <div className="w-full max-w-5xl mx-auto flex flex-col items-center gap-7 animate-in zoom-in duration-500 py-8">
+                <div className="text-center">
+                    <h1 className="text-[clamp(3.2rem,8vw,7rem)] font-black text-white tracking-[0.08em] uppercase">Break Time</h1>
+                    <p className="text-[clamp(1.5rem,3vw,2.6rem)] text-white font-semibold mt-2">We will resume shortly</p>
                 </div>
 
-                {/* Kitchen Info Box */}
-                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shrink-0">
-                    <h2 className="text-[54px] font-black text-white mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
-                    <p className="text-[36px] text-white font-medium">Get your drinks and order food at the bar!</p>
+                <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-6 text-center backdrop-blur-sm">
+                    <h2 className={panelTitleClass}>Kitchen Open Until 9pm</h2>
+                    <p className={cn(panelBodyClass, "mt-2 font-medium")}>Get your drinks and order food at the bar!</p>
                 </div>
 
-                {/* Rules */}
-                <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-[45px] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-[30px] text-white">
+                <div className="w-full bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md">
+                    <h3 className="text-[clamp(1.8rem,3.2vw,2.8rem)] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-3 text-[clamp(1.05rem,1.8vw,1.65rem)] text-white">
                         <li className="flex gap-3 items-start">
                             <span className="text-white mt-1">➤</span>
-                            <span>Claims must be called on the number they&apos;re won on - <span className="text-white font-bold">late claims invalid</span></span>
+                            <span>Claims must be called on the number they&apos;re won on - <span className="font-bold">late claims invalid</span></span>
                         </li>
                         <li className="flex gap-3 items-start">
                             <span className="text-white mt-1">➤</span>
@@ -401,48 +398,43 @@ export default function DisplayUI({
                             <span className="text-white mt-1">➤</span>
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
-                        <li className="flex gap-3 items-start pt-1">
-                            <span className="text-[36px]">🎉</span>
-                            <span className="text-white font-bold italic">Enjoy the night and best of luck to everyone!</span>
-                        </li>
                     </ul>
                 </div>
             </div>
           )}
 
           {isGameFinishedState && (
-            <div className="flex flex-col items-center justify-evenly w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4 text-center">
-              
-              <div className="shrink-0">
-                  <h1 className="text-[108px] font-black text-white mb-4 animate-bounce">THANKS FOR PLAYING!</h1>
-                  <p className="text-[45px] text-white font-medium">We hope you had a blast!</p>
+            <div className="w-full max-w-5xl mx-auto flex flex-col items-center gap-8 animate-in fade-in duration-700 py-8 text-center">
+              <div>
+                  <h1 className="text-[clamp(2.6rem,7vw,6rem)] font-black text-white mb-2 tracking-[0.06em] uppercase">Thanks For Playing!</h1>
+                  <p className="text-[clamp(1.35rem,2.8vw,2.4rem)] text-white font-medium">We hope you had a blast!</p>
               </div>
 
-              <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-3xl p-8 max-w-5xl w-full backdrop-blur-sm shrink-0">
-                  <h2 className="text-[72px] font-black text-white mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
-                  <p className="text-[45px] text-white font-bold">Don&apos;t miss out - secure your table at the bar.</p>
+              <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-8 backdrop-blur-sm">
+                  <h2 className="text-[clamp(2rem,4.8vw,4rem)] font-black text-white uppercase tracking-[0.08em]">Book for next time tonight!</h2>
+                  <p className="text-[clamp(1.2rem,2.5vw,2rem)] text-white font-semibold mt-3">Don&apos;t miss out - secure your table at the bar.</p>
               </div>
 
-              <div className="space-y-6 max-w-4xl shrink-0">
-                  <p className="text-[45px] text-white font-medium leading-relaxed">
+              <div className="space-y-4 max-w-4xl">
+                  <p className="text-[clamp(1.2rem,2.5vw,2rem)] text-white font-medium leading-relaxed">
                       Please enjoy the remaining time that we&apos;re open.
-                      <br/>
+                      <br />
                       The bar is open for drinks!
                   </p>
-                  <p className="text-[36px] text-white font-bold uppercase tracking-widest animate-pulse">
-                      Bring friends, family & neighbours next time!
+                  <p className="text-[clamp(1.1rem,2.2vw,1.8rem)] text-white font-bold uppercase tracking-[0.08em]">
+                      Bring friends, family and neighbours next time!
                   </p>
               </div>
-
             </div>
           )}
 
           {showPausedForValidation && (
-            <div className="text-center animate-in slide-in-from-bottom duration-500">
-                <div className="inline-block px-8 py-4 bg-[#a57626]/20 border-2 border-[#a57626]/80 rounded-full mb-8 animate-pulse">
-                    <h2 className="text-[54px] font-bold text-white uppercase tracking-widest">Checking Ticket</h2>
+            <div className="absolute inset-0 z-[70] flex items-center justify-center bg-[#003f27]/95 backdrop-blur-md p-8 text-center animate-in fade-in duration-300">
+                <div className="w-full max-w-4xl bg-[#005131]/90 border border-[#a57626] rounded-3xl p-10">
+                    <p className="text-[clamp(1rem,2vw,1.5rem)] uppercase tracking-[0.18em] font-bold text-[#f3d59d]">Validation In Progress</p>
+                    <h1 className="text-[clamp(2.7rem,7.2vw,6.5rem)] font-black uppercase tracking-[0.08em] text-white mt-3">Checking Claim</h1>
+                    <p className="text-[clamp(1.1rem,2.4vw,2rem)] text-white/90 mt-4">Please hold all calls while the ticket is verified.</p>
                 </div>
-                <h1 className="text-[108px] font-black">PLEASE WAIT...</h1>
             </div>
           )}
 
@@ -478,19 +470,19 @@ export default function DisplayUI({
 
           {/* WIN OVERLAY */}
           {showWinState && currentGameState && (
-            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md animate-in fade-in zoom-in duration-500 p-8 text-center">
+            <div className="absolute inset-0 z-[80] flex flex-col items-center justify-center bg-[#003f27]/95 backdrop-blur-md animate-in fade-in duration-300 p-8 text-center">
               <h1 
                 className={cn(
-                    "text-[192px] font-black mb-8 animate-bounce",
+                    "text-[clamp(3rem,10vw,9rem)] leading-[0.9] font-black mb-8",
                     "text-white"
                 )}
               >
                   {currentGameState.display_win_text}
               </h1>
               {currentGameState.display_winner_name && (
-                  <div className="bg-white/10 px-12 py-6 rounded-2xl border border-white/20 backdrop-blur-xl animate-in slide-in-from-bottom duration-700 delay-200">
-                      <p className="text-[36px] text-white uppercase tracking-widest mb-2">Winner</p>
-                      <h2 className="text-[90px] font-bold text-white">{currentGameState.display_winner_name}</h2>
+                  <div className="w-full max-w-3xl bg-[#005131]/92 px-12 py-8 rounded-3xl border border-[#a57626] backdrop-blur-xl animate-in slide-in-from-bottom duration-500">
+                      <p className="text-[clamp(1rem,2vw,1.5rem)] text-[#f3d59d] uppercase tracking-[0.16em] mb-2 font-bold">Winner</p>
+                      <h2 className="text-[clamp(2.2rem,6vw,5rem)] font-black text-white break-words">{currentGameState.display_winner_name}</h2>
                   </div>
               )}
             </div>
@@ -498,46 +490,46 @@ export default function DisplayUI({
       </div>
 
       {/* Footer Info Bar */}
-      <div className="h-32 bg-[#003f27]/70 border-t border-[#1f7c58] backdrop-blur-md grid grid-cols-2 px-8 z-10">
-          <div className="flex flex-col justify-center border-r border-white/10 pr-8">
-             {(showActiveGame || showPausedForValidation) && (
-                <>
-                   <p className={footerLeftTextClass}>
-                     Playing for: {formatStageLabel(currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0])}
-                   </p>
-                   <p className={footerLeftTextClass}>
-                     Prize: {currentPrizeText || 'Standard Prize'}
-                   </p>
-                   {currentActiveGame?.type === 'snowball' && currentSnowballPot && (
-                     <p className={footerLeftTextClass}>
-                       Snowball: £{currentSnowballPot.current_jackpot_amount} in {currentSnowballPot.current_max_calls} calls
-                     </p>
-                   )}
-                </>
-             )}
-          </div>
-
-          <div className="flex flex-col justify-center pl-8 overflow-hidden">
-              {(showActiveGame || showPausedForValidation) && delayedNumbers.length > 0 && (
+      <div className="h-32 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10">
+            <div className="flex flex-col justify-center border-r border-white/10 pr-8">
+                {(showActiveGame || showPausedForValidation) && (
                   <>
-                    <div className="flex justify-between items-end mb-2">
-                        <span className={cn("text-[18px] uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
-                        <span className={cn("text-[18px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {delayedNumbers.length}</span>
-                    </div>
-                    <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
-                        {delayedNumbers.slice().reverse().map((num, idx) => (
-                            <div key={idx} className={cn(
-                                "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
-                                idx === 0 ? "w-16 h-16 text-[36px] border-4 border-white" : "w-12 h-12 text-[27px] opacity-70"
-                            )}>
-                                {num}
-                            </div>
-                        ))}
-                    </div>
+                    <p className={footerLeftTextClass}>
+                      Playing for: {formatStageLabel(currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0])}
+                    </p>
+                    <p className={footerLeftTextClass}>
+                      Prize: {currentPrizeText || 'Standard Prize'}
+                    </p>
+                    {currentActiveGame?.type === 'snowball' && currentSnowballPot && (
+                      <p className={footerLeftTextClass}>
+                        Snowball: £{currentSnowballPot.current_jackpot_amount} in {currentSnowballPot.current_max_calls} calls
+                      </p>
+                    )}
                   </>
-              )}
-          </div>
-      </div>
+                )}
+            </div>
+
+            <div className="flex flex-col justify-center pl-8 overflow-hidden">
+                {(showActiveGame || showPausedForValidation) && delayedNumbers.length > 0 && (
+                    <>
+                      <div className="flex justify-between items-end mb-2">
+                          <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
+                          <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {delayedNumbers.length}</span>
+                      </div>
+                      <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
+                          {delayedNumbers.slice().reverse().map((num, idx) => (
+                              <div key={idx} className={cn(
+                                  "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
+                                  idx === 0 ? "w-16 h-16 text-[36px] border-4 border-white" : "w-12 h-12 text-[27px] opacity-70"
+                              )}>
+                                  {num}
+                              </div>
+                          ))}
+                      </div>
+                    </>
+                )}
+            </div>
+        </div>
 
       {/* Player Join QR Code */}
       <div className="absolute bottom-36 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">

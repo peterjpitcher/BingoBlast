@@ -5,6 +5,7 @@ import { signout } from '@/app/login/actions';
 import HostDashboard from './dashboard';
 import { Database } from '@/types/database';
 import { Button } from '@/components/ui/button';
+import Image from 'next/image';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {
@@ -36,9 +37,9 @@ export default async function HostPage() {
   if (sessionsError) {
     console.error("Error fetching sessions for host:", sessionsError.message);
     return (
-        <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 text-center bg-slate-950 text-white">
+        <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 text-center bg-[#003f27] text-white">
             <h1 className="text-2xl font-bold text-red-500 mb-4">Error Loading Sessions</h1>
-            <p className="text-slate-400 mb-6">Could not retrieve sessions. Please try again later.</p>
+            <p className="text-white/85 mb-6">Could not retrieve sessions. Please try again later.</p>
              <form action={signout}>
                 <Button variant="secondary">Sign Out</Button>
              </form>
@@ -49,13 +50,18 @@ export default async function HostPage() {
   const sessions: SessionWithGames[] = (sessionsData || []) as SessionWithGames[];
 
   return (
-    <div className="min-h-screen-safe bg-slate-950 text-white pb-20">
-       <header className="p-4 flex justify-between items-center border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
-          <h1 className="font-bold text-lg text-bingo-secondary">Host Console</h1>
+    <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white pb-20">
+       <header className="p-4 flex justify-between items-center border-b border-[#1f7c58] bg-[#005131]/95 backdrop-blur-sm sticky top-0 z-10">
+          <div className="flex items-center gap-3">
+            <div className="relative w-32 h-10">
+              <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
+            </div>
+            <h1 className="font-bold text-lg text-white">Host Console</h1>
+          </div>
           <div className="flex items-center gap-4">
-             <span className="text-xs text-slate-400 hidden sm:inline-block">{user.email}</span>
+             <span className="text-xs text-white/80 hidden sm:inline-block">{user.email}</span>
              <form action={signout}>
-                <Button variant="ghost" size="sm" className="text-red-400 hover:bg-red-900/20 hover:text-red-300">Sign Out</Button>
+                <Button variant="ghost" size="sm" className="text-white hover:bg-[#0f6846]">Sign Out</Button>
              </form>
           </div>
        </header>

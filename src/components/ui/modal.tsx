@@ -31,17 +31,17 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: M
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div 
         className={cn(
-          "relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col", 
+          "relative w-full max-w-lg bg-[#003f27] border border-[#1f7c58] rounded-xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col text-white", 
           className
         )}
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-center justify-between p-4 border-b border-slate-800 shrink-0">
+        <div className="flex items-center justify-between p-4 border-b border-[#1f7c58] shrink-0">
           <h2 className="text-lg font-bold text-white">{title}</h2>
           <button 
             onClick={onClose}
-            className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1 rounded-md text-white/70 hover:text-white hover:bg-[#0f6846] transition-colors"
           >
             ✕
           </button>
@@ -52,7 +52,7 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: M
         </div>
 
         {footer && (
-          <div className="flex items-center justify-end gap-2 p-4 border-t border-slate-800 shrink-0 bg-slate-900 rounded-b-xl">
+          <div className="flex items-center justify-end gap-2 p-4 border-t border-[#1f7c58] shrink-0 bg-[#003f27] rounded-b-xl">
             {footer}
           </div>
         )}

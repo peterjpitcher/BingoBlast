@@ -8,6 +8,7 @@ import { getCurrentGameState } from '@/app/host/actions';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { isUuid } from '@/lib/utils';
+import Image from 'next/image';
 
 interface PageProps {
   params: Promise<{ sessionId: string; gameId: string }>;
@@ -67,22 +68,25 @@ export default async function GameControlPage({ params }: PageProps) {
   }
 
   return (
-    <div className="min-h-screen-safe bg-slate-950 text-white">
-       <header className="p-3 bg-slate-900 border-b border-slate-800 flex justify-between items-center sticky top-0 z-20 shadow-md">
+    <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white">
+       <header className="p-3 bg-[#005131]/95 border-b border-[#1f7c58] flex justify-between items-center sticky top-0 z-20 shadow-md">
         <div className="flex items-center gap-3">
             <Link href="/host">
-              <Button variant="secondary" size="sm" className="h-8 px-2 border-slate-700 bg-slate-800 hover:bg-slate-700">
+              <Button variant="secondary" size="sm" className="h-8 px-2 border-[#1f7c58] bg-[#0f6846] hover:bg-[#136f4b]">
                 &larr;
               </Button>
             </Link>
-            <div className="leading-tight">
+            <div className="relative w-28 h-9">
+              <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
+            </div>
+            <div className="leading-tight hidden sm:block">
               <h1 className="text-sm font-bold text-white">{session.name}</h1>
-              <p className="text-xs text-slate-400">{game.name}</p>
+              <p className="text-xs text-white/80">{game.name}</p>
             </div>
         </div>
         <div className="flex items-center gap-3">
           <form action={signout}>
-            <Button variant="ghost" size="sm" className="text-xs h-8 text-red-400 hover:text-red-300 hover:bg-red-900/20">Sign Out</Button>
+            <Button variant="ghost" size="sm" className="text-xs h-8 text-white hover:bg-[#0f6846]">Sign Out</Button>
           </form>
         </div>
       </header>

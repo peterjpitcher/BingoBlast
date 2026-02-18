@@ -21,8 +21,8 @@ const BingoBall = ({ number, variant = "normal", className }: BingoBallProps) =>
   
   const variants = {
     normal: "w-16 h-16 text-2xl bg-white border-4 shadow-md text-slate-900 font-bold",
-    active: "w-32 h-32 text-6xl bg-gradient-to-br from-white to-slate-200 border-8 shadow-[0_0_30px_rgba(236,72,153,0.6)] scale-110 z-10 animate-bounce-slight",
-    called: "w-10 h-10 text-sm bg-slate-800 border-2 border-slate-600 text-slate-400 opacity-50",
+    active: "w-32 h-32 text-6xl bg-[#005131] border-8 border-white text-white shadow-[0_0_28px_rgba(165,118,38,0.4)] scale-110 z-10 animate-bounce-slight",
+    called: "w-10 h-10 text-sm bg-[#0f6846] border-2 border-[#1f7c58] text-white opacity-80",
     mini: "w-8 h-8 text-xs bg-white border-2 font-bold",
   };
 

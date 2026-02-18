@@ -565,6 +565,8 @@ export async function pauseForValidation(gameId: string): Promise<ActionResult> 
     const validationUpdate: Database['public']['Tables']['game_states']['Update'] = {
         paused_for_validation: true,
         display_win_type: null, // Clear old win display if any
+        display_win_text: null,
+        display_winner_name: null,
     };
     const { error } = await supabase
         .from('game_states')
@@ -643,6 +645,59 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the specific game page
     revalidatePath(`/host`); // Revalidate the host dashboard
     return { success: true };
+}
+
+export async function moveToNextGameOnBreak(currentGameId: string, sessionId: string): Promise<ActionResult<{ redirectTo: string }>> {
+    const supabase = await createClient();
+    const controlResult = await requireController(supabase, currentGameId);
+    if (!controlResult.authorized) return { success: false, error: controlResult.error };
+
+    const { data: currentGame, error: currentGameError } = await supabase
+        .from('games')
+        .select('game_index')
+        .eq('id', currentGameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'game_index'>>();
+
+    if (currentGameError || !currentGame) {
+        return { success: false, error: currentGameError?.message || "Current game not found." };
+    }
+
+    const endResult = await endGame(currentGameId, sessionId);
+    if (!endResult.success) {
+        return { success: false, error: endResult.error || "Failed to complete current game." };
+    }
+
+    const { data: nextGames, error: nextGamesError } = await supabase
+        .from('games')
+        .select('id')
+        .eq('session_id', sessionId)
+        .gt('game_index', currentGame.game_index)
+        .order('game_index', { ascending: true })
+        .limit(1);
+
+    if (nextGamesError) {
+        return { success: false, error: nextGamesError.message };
+    }
+
+    const nextGameId = nextGames?.[0]?.id;
+    if (!nextGameId) {
+        return { success: true, data: { redirectTo: '/host' } };
+    }
+
+    const startResult = await startGame(sessionId, nextGameId);
+    if (!startResult.success) {
+        return { success: false, error: startResult.error || "Failed to start next game." };
+    }
+
+    const breakResult = await toggleBreak(nextGameId, true);
+    if (!breakResult.success) {
+        return { success: false, error: breakResult.error || "Failed to put next game on break." };
+    }
+
+    revalidatePath(`/host/${sessionId}/${nextGameId}`);
+    revalidatePath(`/host`);
+
+    return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}` } };
 }
 
 export async function validateClaim(gameId: string, claimedNumbers: number[]): Promise<ActionResult<{ valid: boolean; invalidNumbers?: number[] }>> {

@@ -360,7 +360,7 @@ export default function PlayerUI({
             <div className="flex justify-center py-4">
               {currentNumberDelayed ? (
                 <div className="relative">
-                <div className="w-48 h-48 bg-[#005131] rounded-full flex items-center justify-center shadow-2xl border-8 border-[#a57626]/70">
+                <div className="w-48 h-48 bg-[#005131] rounded-full flex items-center justify-center shadow-2xl border-8 border-white">
                     <span className="text-8xl font-black text-white tracking-tighter">
                       {currentNumberDelayed}
                     </span>

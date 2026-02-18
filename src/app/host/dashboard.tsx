@@ -30,14 +30,14 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
     <div className="space-y-6">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-white">Available Sessions</h2>
-        <p className="text-slate-400 text-sm">Tap a session to view games</p>
+        <p className="text-white/80 text-sm">Tap a session to view games</p>
       </div>
 
       {sessions.length === 0 ? (
-        <Card className="bg-slate-900/50 border-slate-800 text-center p-8">
+        <Card className="bg-[#003f27]/85 border-[#1f7c58] text-center p-8">
           <CardContent>
-            <p className="text-slate-400 mb-4">No sessions available.</p>
-            <p className="text-sm text-slate-500">Please check the Admin page to create or activate sessions.</p>
+            <p className="text-white/85 mb-4">No sessions available.</p>
+            <p className="text-sm text-white/75">Please check the Admin page to create or activate sessions.</p>
           </CardContent>
         </Card>
       ) : (
@@ -54,8 +54,8 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
               <Card 
                 key={session.id} 
                 className={cn(
-                  "bg-slate-800 border-slate-700 transition-all duration-200",
-                  expandedSessionId === session.id ? "ring-2 ring-bingo-primary" : "hover:bg-slate-750"
+                  "bg-[#005131]/88 border-[#1f7c58] transition-all duration-200",
+                  expandedSessionId === session.id ? "ring-2 ring-[#a57626]" : "hover:bg-[#0f6846]/90"
                 )}
               >
                 <div
@@ -66,28 +66,28 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="text-lg font-bold text-white">{session.name}</h3>
                       {session.is_test_session && (
-                        <span className="px-2 py-0.5 text-xs font-bold bg-cyan-900 text-cyan-300 rounded-full">TEST</span>
+                        <span className="px-2 py-0.5 text-xs font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">TEST</span>
                       )}
                     </div>
-                    <p className="text-sm text-slate-400">{session.start_date}</p>
+                    <p className="text-sm text-white/80">{session.start_date}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     {session.status === 'running' && (
-                      <span className="px-2 py-1 text-xs font-bold bg-green-900/50 text-green-400 rounded-full border border-green-800 animate-pulse">RUNNING</span>
+                      <span className="px-2 py-1 text-xs font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626] animate-pulse">RUNNING</span>
                     )}
                     {session.status === 'ready' && (
-                      <span className="px-2 py-1 text-xs font-bold bg-blue-900/50 text-blue-400 rounded-full border border-blue-800">READY</span>
+                      <span className="px-2 py-1 text-xs font-bold bg-[#0f6846] text-white rounded-full border border-[#1f7c58]">READY</span>
                     )}
-                    <div className={cn("transform transition-transform text-slate-500", expandedSessionId === session.id ? "rotate-180" : "")}>
+                    <div className={cn("transform transition-transform text-white/75", expandedSessionId === session.id ? "rotate-180" : "")}>
                       ▼
                     </div>
                   </div>
                 </div>
                 
                 {expandedSessionId === session.id && (
-                  <div className="border-t border-slate-700 bg-slate-900/50 p-4">
+                  <div className="border-t border-[#1f7c58] bg-[#003f27]/82 p-4">
                     {sortedGames.length === 0 ? (
-                      <p className="text-slate-500 text-center py-4">No games configured for this session.</p>
+                      <p className="text-white/75 text-center py-4">No games configured for this session.</p>
                     ) : (
                       <div className="space-y-3">
                         {sortedGames.map((game) => {
@@ -105,28 +105,28 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                               key={game.id} 
                               className={cn(
                                 "flex items-center justify-between p-3 rounded-lg border transition-colors",
-                                isInProgress ? "bg-green-900/20 border-green-800/50" : 
-                                isCompleted ? "bg-slate-800/50 border-slate-700" : 
-                                isLocked ? "bg-slate-800/30 border-slate-700/50 opacity-50" :
-                                "bg-slate-800 border-slate-700"
+                                isInProgress ? "bg-[#a57626]/20 border-[#a57626]/70" : 
+                                isCompleted ? "bg-[#005131]/60 border-[#1f7c58]" : 
+                                isLocked ? "bg-[#005131]/45 border-[#1f7c58]/60 opacity-50" :
+                                "bg-[#0f6846] border-[#1f7c58]"
                               )}
                             >
                               <div className="flex items-center gap-3">
                                 <div className={cn(
                                   "w-2 h-2 rounded-full",
-                                  isInProgress ? "bg-green-500 animate-pulse" :
-                                  isCompleted ? "bg-slate-500" :
-                                  "bg-slate-700"
+                                  isInProgress ? "bg-[#a57626] animate-pulse" :
+                                  isCompleted ? "bg-white/70" :
+                                  "bg-white/60"
                                 )}></div>
                                 <div>
-                                  <h4 className={cn("font-bold", isCompleted ? "text-slate-400" : "text-white")}>
+                                  <h4 className={cn("font-bold", isCompleted ? "text-white/80" : "text-white")}>
                                     Game {game.game_index}: {game.name}
                                   </h4>
                                   <div className="flex gap-2 text-xs">
-                                    <span className="text-slate-400 uppercase tracking-wider">{game.type}</span>
-                                    {status === 'not_started' && <span className="text-slate-500">Not Started</span>}
-                                    {status === 'in_progress' && <span className="text-green-400 font-bold">In Progress</span>}
-                                    {status === 'completed' && <span className="text-slate-500">Completed</span>}
+                                    <span className="text-white/80 uppercase tracking-wider">{game.type}</span>
+                                    {status === 'not_started' && <span className="text-white/70">Not Started</span>}
+                                    {status === 'in_progress' && <span className="text-[#f3d59d] font-bold">In Progress</span>}
+                                    {status === 'completed' && <span className="text-white/70">Completed</span>}
                                   </div>
                                 </div>
                               </div>
@@ -166,7 +166,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                     size="sm" 
                                     variant="ghost" 
                                     disabled 
-                                    className="text-slate-500"
+                                    className="text-white/60"
                                   >
                                     Locked
                                   </Button>
