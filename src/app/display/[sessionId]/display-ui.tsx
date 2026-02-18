@@ -47,7 +47,6 @@ export default function DisplayUI({
   const [currentGameState, setCurrentGameState] = useState<GameState | null>(initialActiveGameState);
   const [currentPrizeText, setCurrentPrizeText] = useState<string>(initialPrizeText);
   const [isWaitingState, setIsWaitingState] = useState<boolean>(initialWaitingState);
-  const [isGameFinishedState, setIsGameFinishedState] = useState(false);
   const [currentNumberDelayed, setCurrentNumberDelayed] = useState<number | null>(null);
   const [delayedNumbers, setDelayedNumbers] = useState<number[]>([]);
   const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
@@ -81,11 +80,9 @@ export default function DisplayUI({
           
           if (newGameState) {
             setCurrentGameState(newGameState);
-            setIsGameFinishedState(newGameState.status === 'completed');
             setCurrentPrizeText(newGame.prizes?.[newGame.stage_sequence[newGameState.current_stage_index] as keyof typeof newGame.prizes] || '');
           } else {
             setCurrentGameState(null);
-            setIsGameFinishedState(false);
           }
         } else {
           console.error("Error fetching new active game:", gameError?.message);
@@ -95,7 +92,6 @@ export default function DisplayUI({
       } else {
         setCurrentActiveGame(null);
         setCurrentGameState(null);
-        setIsGameFinishedState(false);
       }
       setIsWaitingState(!newActiveGameId);
   }, [currentActiveGame?.id]);
@@ -129,7 +125,6 @@ export default function DisplayUI({
             // No audio here anymore
 
             setCurrentGameState(newState);
-            setIsGameFinishedState(newState.status === 'completed');
             setCurrentPrizeText(currentActiveGame?.prizes?.[currentActiveGame.stage_sequence[newState.current_stage_index] as keyof typeof currentActiveGame.prizes] || '');
           }
         )
@@ -168,7 +163,6 @@ export default function DisplayUI({
                   
                   if (freshState) {
                       setCurrentGameState(freshState);
-                      setIsGameFinishedState(freshState.status === 'completed');
                   }
               }
           }
@@ -295,11 +289,12 @@ export default function DisplayUI({
     };
   }, [currentActiveGame, currentGameState, currentNumberDelayed, delayedNumbers]);
 
-  const showActiveGame = currentActiveGame && currentGameState && currentGameState.status === 'in_progress' && !currentGameState.on_break && !isGameFinishedState && !currentGameState.display_win_type && !currentGameState.paused_for_validation;
-  const showBreak = currentActiveGame && currentGameState?.on_break && !isGameFinishedState;
-  const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isGameFinishedState;
-  const showWinState = !!currentGameState?.display_win_type && !isGameFinishedState;
-  const showServiceState = !!(isWaitingState || showBreak || isGameFinishedState);
+  const isSessionCompletedState = currentSession.status === 'completed';
+  const showActiveGame = currentActiveGame && currentGameState && currentGameState.status === 'in_progress' && !currentGameState.on_break && !isSessionCompletedState && !currentGameState.display_win_type && !currentGameState.paused_for_validation;
+  const showBreak = currentActiveGame && currentGameState?.on_break && !isSessionCompletedState;
+  const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isSessionCompletedState;
+  const showWinState = !!currentGameState?.display_win_type && !isSessionCompletedState;
+  const showServiceState = !!((isWaitingState && !isSessionCompletedState) || showBreak || isSessionCompletedState);
   const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
     ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
@@ -377,7 +372,7 @@ export default function DisplayUI({
       {/* Main Content Area */}
       <div className={cn("flex-1 flex items-center justify-center relative p-6 overflow-hidden", showServiceState && "xl:pl-44")}>
           
-          {isWaitingState && (
+          {isWaitingState && !isSessionCompletedState && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
                 <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6">
                     <div className="text-center xl:text-left">
@@ -424,23 +419,23 @@ export default function DisplayUI({
             </div>
           )}
 
-          {isGameFinishedState && (
+                  {isSessionCompletedState && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
                 <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6 text-center xl:text-left">
                     <div>
                         <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold">Anchor Bingo Night</p>
-                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Thanks For Playing!</h1>
-                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">We hope you had a great night.</p>
+                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Thanks For Coming!</h1>
+                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">Please book your table for our next bingo event before you leave.</p>
                     </div>
 
                     <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className="text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white">Book For Next Time Tonight</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Don&apos;t miss out, secure your table at the bar.</p>
+                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Book For Our Next Event</h2>
+                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Don&apos;t miss out. Reserve your table at the bar tonight.</p>
                     </div>
 
                     <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-center xl:text-left backdrop-blur-md">
-                        <h3 className="text-[clamp(1.5rem,2.3vw,2.3rem)] font-bold text-white">Bar still open for drinks</h3>
-                        <p className="text-[clamp(1rem,1.45vw,1.3rem)] text-white/90 mt-1">Bring friends, family and neighbours next time.</p>
+                        <h3 className="text-[clamp(1.5rem,2.3vw,2.3rem)] font-bold text-white">Bring friends for the next one</h3>
+                        <p className="text-[clamp(1rem,1.45vw,1.3rem)] text-white/90 mt-1">Ask the team about dates and get booked in early.</p>
                     </div>
                 </div>
 
