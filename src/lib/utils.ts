@@ -1,8 +1,14 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+export function isUuid(value: string): boolean {
+  return UUID_REGEX.test(value);
 }
 
 export function getContrastColor(hexColor: string): 'text-white' | 'text-slate-900' {

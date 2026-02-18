@@ -3,6 +3,7 @@ import { createClient } from '@/utils/supabase/server';
 import { notFound } from 'next/navigation';
 import DisplayUI from './display-ui';
 import { Database } from '@/types/database';
+import { isUuid } from '@/lib/utils';
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
@@ -10,6 +11,11 @@ interface PageProps {
 
 export default async function DisplayPage({ params }: PageProps) {
   const { sessionId } = await params;
+
+  if (!isUuid(sessionId)) {
+    notFound();
+  }
+
   const supabase = await createClient();
 
   // Fetch session details

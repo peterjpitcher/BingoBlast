@@ -7,6 +7,7 @@ import { Database } from '@/types/database';
 import { getCurrentGameState } from '@/app/host/actions';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { isUuid } from '@/lib/utils';
 
 interface PageProps {
   params: Promise<{ sessionId: string; gameId: string }>;
@@ -14,6 +15,11 @@ interface PageProps {
 
 export default async function GameControlPage({ params }: PageProps) {
   const { sessionId, gameId } = await params;
+
+  if (!isUuid(sessionId) || !isUuid(gameId)) {
+    notFound();
+  }
+
   const supabase = await createClient();
   
   const { data: { user } } = await supabase.auth.getUser();

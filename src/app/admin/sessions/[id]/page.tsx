@@ -6,6 +6,7 @@ import SessionDetail from './session-detail';
 import type { Database } from '@/types/database';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { isUuid } from '@/lib/utils';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -13,6 +14,11 @@ interface PageProps {
 
 export default async function SessionDetailPage({ params }: PageProps) {
   const { id } = await params;
+
+  if (!isUuid(id)) {
+    notFound();
+  }
+
   const supabase = await createClient();
   
   const { data: { user } } = await supabase.auth.getUser();
