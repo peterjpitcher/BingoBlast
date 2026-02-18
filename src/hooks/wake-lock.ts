@@ -1,81 +1,102 @@
-import { useCallback, useEffect, useState } from 'react';
-
-type WakeLockSentinel = {
-    released: boolean;
-    release: () => Promise<void>;
-    addEventListener: (type: 'release', listener: () => void) => void;
-};
-
-type WakeLock = {
-    request: (type: 'screen') => Promise<WakeLockSentinel>;
-};
-
-const getWakeLock = () =>
-    (navigator as Navigator & { wakeLock?: WakeLock }).wakeLock;
+import { useCallback, useEffect, useRef, useState } from 'react';
+import NoSleep from 'nosleep.js';
 
 /**
- * A hook to lock the screen from sleeping.
- * Uses the Screen Wake Lock API.
- * Handles visibility changes automatically.
+ * Keeps mobile screens awake using the native wake lock API where available,
+ * with a no-sleep fallback for browsers like iOS Safari.
  */
 export function useWakeLock() {
     const [isLocked, setIsLocked] = useState(false);
-    const [isSupported] = useState(() => {
-        if (typeof navigator === 'undefined') return false;
-        return Boolean(getWakeLock());
-    });
     const [error, setError] = useState<string | null>(null);
+    const noSleepRef = useRef<NoSleep | null>(null);
 
-    const requestLock = useCallback(async () => {
-        const wakeLock = getWakeLock();
-        if (!wakeLock) return;
+    const enableWakeLock = useCallback(async () => {
+        if (!noSleepRef.current) {
+            noSleepRef.current = new NoSleep();
+        }
 
         try {
-            const wakeLockSentinel = await wakeLock.request('screen');
-            setIsLocked(true); // If we get here, we have the lock
-
-            wakeLockSentinel.addEventListener('release', () => {
-                setIsLocked(false);
-            });
-
-            return wakeLockSentinel;
+            await noSleepRef.current.enable();
+            setIsLocked(true);
+            setError(null);
         } catch (err: unknown) {
-            const error = err as Error;
-            console.error(`Wake Lock error: ${error.name}, ${error.message}`);
-            setError(error.message);
+            const wakeLockError = err as Error;
             setIsLocked(false);
-            return null;
+            setError(wakeLockError.message);
         }
     }, []);
 
-    useEffect(() => {
-        // Keep track of the lock object so we can release it on cleanup
-        let wakeLockSentinel: unknown = null;
-
-        const init = async () => {
-            wakeLockSentinel = await requestLock();
-        };
-
-        if (isSupported) {
-            init();
+    const disableWakeLock = useCallback(() => {
+        if (!noSleepRef.current) {
+            return;
         }
 
-        const handleVisibilityChange = async () => {
-            if (document.visibilityState === 'visible' && isSupported) {
-                // Re-acquire lock when page becomes visible
-                wakeLockSentinel = await requestLock();
+        noSleepRef.current.disable();
+        setIsLocked(false);
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        let isUnmounted = false;
+
+        const requestWakeLock = async () => {
+            if (isUnmounted || document.visibilityState !== 'visible') {
+                return;
+            }
+
+            await enableWakeLock();
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                void requestWakeLock();
+            } else {
+                disableWakeLock();
             }
         };
+
+        const handlePageActivation = () => {
+            if (document.visibilityState === 'visible' && !noSleepRef.current?.isEnabled) {
+                void requestWakeLock();
+            }
+        };
+
+        const handleUserInteraction = () => {
+            if (!noSleepRef.current?.isEnabled) {
+                void requestWakeLock();
+            }
+        };
+
+        void requestWakeLock();
 
         document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('focus', handlePageActivation);
+        window.addEventListener('pageshow', handlePageActivation);
+        document.addEventListener('click', handleUserInteraction, { passive: true });
+        document.addEventListener('touchstart', handleUserInteraction, { passive: true });
+        document.addEventListener('keydown', handleUserInteraction);
+
+        const keepAliveInterval = window.setInterval(() => {
+            if (document.visibilityState === 'visible' && !noSleepRef.current?.isEnabled) {
+                void requestWakeLock();
+            }
+        }, 15000);
 
         return () => {
-            if (wakeLockSentinel && typeof (wakeLockSentinel as { release: () => void }).release === 'function') {
-                (wakeLockSentinel as { release: () => void }).release();
-            }
+            isUnmounted = true;
+            window.clearInterval(keepAliveInterval);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('focus', handlePageActivation);
+            window.removeEventListener('pageshow', handlePageActivation);
+            document.removeEventListener('click', handleUserInteraction);
+            document.removeEventListener('touchstart', handleUserInteraction);
+            document.removeEventListener('keydown', handleUserInteraction);
+            disableWakeLock();
         };
-    }, [isSupported, requestLock]);
+    }, [disableWakeLock, enableWakeLock]);
 
-    return { isSupported, isLocked, error };
+    return { isSupported: typeof window !== 'undefined', isLocked, error };
 }

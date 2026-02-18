@@ -22,7 +22,14 @@ interface DisplayUIProps {
   playerJoinUrl: string;
 }
 
-const TextShadow = "2px 2px 4px rgba(0,0,0,0.9)";
+const formatStageLabel = (stage: string | undefined) => {
+  if (!stage) return '-';
+
+  return stage
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
 
 export default function DisplayUI({
   session,
@@ -297,6 +304,7 @@ export default function DisplayUI({
   
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
+  const footerLeftTextClass = "text-[30px] font-semibold text-white";
 
   return (
     <div 
@@ -312,9 +320,9 @@ export default function DisplayUI({
                  <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
              </div>
          </div>
-         <div className="text-right" style={{ textShadow: TextShadow }}>
-             <h2 className="text-2xl font-bold tracking-tight">{currentSession.name}</h2>
-             {currentActiveGame && <p className={cn("text-lg font-medium uppercase tracking-wider", dimTextColor)}>{currentActiveGame.name}</p>}
+         <div className="text-right">
+             <h2 className="text-[36px] font-bold tracking-tight">{currentSession.name}</h2>
+             {currentActiveGame && <p className={cn("text-[27px] font-medium uppercase tracking-wider", dimTextColor)}>{currentActiveGame.name}</p>}
          </div>
       </div>
 
@@ -334,15 +342,15 @@ export default function DisplayUI({
                 </div>
 
                 {/* Kitchen Info Box */}
-                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
-                    <h2 className="text-4xl font-black text-white mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
-                    <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
+                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shrink-0">
+                    <h2 className="text-[54px] font-black text-white mb-2 uppercase tracking-widest animate-pulse">Kitchen Open Until 9pm</h2>
+                    <p className="text-[36px] text-white font-medium">Get your drinks and order food at the bar!</p>
                 </div>
 
                 {/* Rules */}
                 <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-3xl font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-xl text-white">
+                    <h3 className="text-[45px] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-[30px] text-white">
                         <li className="flex gap-3 items-start">
                             <span className="text-white mt-1">➤</span>
                             <span>Claims must be called on the number they&apos;re won on - <span className="text-white font-bold">late claims invalid</span></span>
@@ -356,7 +364,7 @@ export default function DisplayUI({
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
-                            <span className="text-2xl">🎉</span>
+                            <span className="text-[36px]">🎉</span>
                             <span className="text-white font-bold italic">Enjoy the night and best of luck to everyone!</span>
                         </li>
                     </ul>
@@ -367,20 +375,20 @@ export default function DisplayUI({
           {showBreak && (
             <div className="flex flex-col items-center justify-between w-full h-[calc(100vh-18rem)] animate-in zoom-in duration-500 py-4">
                 <div className="text-center shrink-0">
-                    <h1 className="text-7xl font-black text-white animate-pulse" style={{ textShadow: TextShadow }}>BREAK TIME</h1>
-                    <p className="text-3xl text-white font-bold mt-2">We will resume shortly</p>
+                    <h1 className="text-[108px] font-black text-white animate-pulse">BREAK TIME</h1>
+                    <p className="text-[45px] text-white font-bold mt-2">We will resume shortly</p>
                 </div>
 
                 {/* Kitchen Info Box */}
-                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shadow-2xl shrink-0">
-                    <h2 className="text-4xl font-black text-white mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
-                    <p className="text-2xl text-white font-medium">Get your drinks and order food at the bar!</p>
+                <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-2xl p-6 max-w-4xl w-full text-center backdrop-blur-sm shrink-0">
+                    <h2 className="text-[54px] font-black text-white mb-2 uppercase tracking-widest">Kitchen Open Until 9pm</h2>
+                    <p className="text-[36px] text-white font-medium">Get your drinks and order food at the bar!</p>
                 </div>
 
                 {/* Rules */}
                 <div className="max-w-4xl w-full bg-[#003f27]/80 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md shrink-0 overflow-hidden">
-                    <h3 className="text-3xl font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
-                    <ul className="space-y-2 text-xl text-white">
+                    <h3 className="text-[45px] font-bold text-white mb-4 border-b border-[#1f7c58] pb-2">House Rules</h3>
+                    <ul className="space-y-2 text-[30px] text-white">
                         <li className="flex gap-3 items-start">
                             <span className="text-white mt-1">➤</span>
                             <span>Claims must be called on the number they&apos;re won on - <span className="text-white font-bold">late claims invalid</span></span>
@@ -394,7 +402,7 @@ export default function DisplayUI({
                             <span>Snowball eligibility: Players must have been here for the last three games</span>
                         </li>
                         <li className="flex gap-3 items-start pt-1">
-                            <span className="text-2xl">🎉</span>
+                            <span className="text-[36px]">🎉</span>
                             <span className="text-white font-bold italic">Enjoy the night and best of luck to everyone!</span>
                         </li>
                     </ul>
@@ -406,22 +414,22 @@ export default function DisplayUI({
             <div className="flex flex-col items-center justify-evenly w-full h-[calc(100vh-18rem)] animate-in fade-in duration-700 py-4 text-center">
               
               <div className="shrink-0">
-                  <h1 className="text-7xl font-black text-white mb-4 animate-bounce" style={{ textShadow: TextShadow }}>THANKS FOR PLAYING!</h1>
-                  <p className="text-3xl text-white font-medium">We hope you had a blast!</p>
+                  <h1 className="text-[108px] font-black text-white mb-4 animate-bounce">THANKS FOR PLAYING!</h1>
+                  <p className="text-[45px] text-white font-medium">We hope you had a blast!</p>
               </div>
 
-              <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-3xl p-8 max-w-5xl w-full backdrop-blur-sm shadow-2xl shrink-0">
-                  <h2 className="text-5xl font-black text-white mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
-                  <p className="text-3xl text-white font-bold">Don&apos;t miss out - secure your table at the bar.</p>
+              <div className="bg-[#005131]/85 border-2 border-[#a57626]/70 rounded-3xl p-8 max-w-5xl w-full backdrop-blur-sm shrink-0">
+                  <h2 className="text-[72px] font-black text-white mb-4 uppercase tracking-widest">Book for next time TONIGHT!</h2>
+                  <p className="text-[45px] text-white font-bold">Don&apos;t miss out - secure your table at the bar.</p>
               </div>
 
               <div className="space-y-6 max-w-4xl shrink-0">
-                  <p className="text-3xl text-white font-medium leading-relaxed">
+                  <p className="text-[45px] text-white font-medium leading-relaxed">
                       Please enjoy the remaining time that we&apos;re open.
                       <br/>
                       The bar is open for drinks!
                   </p>
-                  <p className="text-2xl text-white font-bold uppercase tracking-widest animate-pulse">
+                  <p className="text-[36px] text-white font-bold uppercase tracking-widest animate-pulse">
                       Bring friends, family & neighbours next time!
                   </p>
               </div>
@@ -430,11 +438,11 @@ export default function DisplayUI({
           )}
 
           {showPausedForValidation && (
-            <div className="text-center animate-in slide-in-from-bottom duration-500" style={{ textShadow: TextShadow }}>
+            <div className="text-center animate-in slide-in-from-bottom duration-500">
                 <div className="inline-block px-8 py-4 bg-[#a57626]/20 border-2 border-[#a57626]/80 rounded-full mb-8 animate-pulse">
-                    <h2 className="text-4xl font-bold text-white uppercase tracking-widest">Checking Ticket</h2>
+                    <h2 className="text-[54px] font-bold text-white uppercase tracking-widest">Checking Ticket</h2>
                 </div>
-                <h1 className="text-7xl font-black">PLEASE WAIT...</h1>
+                <h1 className="text-[108px] font-black">PLEASE WAIT...</h1>
             </div>
           )}
 
@@ -442,19 +450,28 @@ export default function DisplayUI({
             <div className="flex flex-col items-center justify-center h-full w-full">
               {currentNumberDelayed ? (
                 <div className="relative animate-in zoom-in duration-300">
-                  <div className="absolute inset-0 bg-current blur-3xl rounded-full transform scale-150 opacity-20"></div>
                    {/* Massive Main Number */}
                   <div 
-                    className="relative bg-[#005131] border-4 border-white/70 rounded-full flex items-center justify-center shadow-2xl"
-                    style={{ width: '35vh', height: '35vh', minWidth: '300px', minHeight: '300px' }}
+                    className="relative bg-[#005131] border-4 border-white rounded-full flex items-center justify-center overflow-hidden"
+                    style={{
+                      ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 16rem))',
+                      width: 'var(--display-ball-size)',
+                      height: 'var(--display-ball-size)',
+                    } as React.CSSProperties}
                   >
-                      <span className="text-[20vh] font-black text-white leading-none tracking-tighter">
+                      <span
+                        className="block font-bold text-white text-center select-none leading-none"
+                        style={{
+                          fontSize: 'calc(var(--display-ball-size) * 0.73)',
+                          fontVariantNumeric: 'tabular-nums lining-nums',
+                        }}
+                      >
                           {currentNumberDelayed}
                       </span>
                   </div>
                 </div>
               ) : (
-                 <h1 className="text-5xl font-bold opacity-40 animate-pulse">READY...</h1>
+                 <h1 className="text-[72px] font-bold opacity-40 animate-pulse">READY...</h1>
               )}
             </div>
           )}
@@ -464,16 +481,16 @@ export default function DisplayUI({
             <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md animate-in fade-in zoom-in duration-500 p-8 text-center">
               <h1 
                 className={cn(
-                    "text-9xl font-black mb-8 animate-bounce",
-                    "text-white drop-shadow-[0_0_30px_rgba(255,255,255,0.8)]"
+                    "text-[192px] font-black mb-8 animate-bounce",
+                    "text-white"
                 )}
               >
                   {currentGameState.display_win_text}
               </h1>
               {currentGameState.display_winner_name && (
                   <div className="bg-white/10 px-12 py-6 rounded-2xl border border-white/20 backdrop-blur-xl animate-in slide-in-from-bottom duration-700 delay-200">
-                      <p className="text-2xl text-white uppercase tracking-widest mb-2">Winner</p>
-                      <h2 className="text-6xl font-bold text-white">{currentGameState.display_winner_name}</h2>
+                      <p className="text-[36px] text-white uppercase tracking-widest mb-2">Winner</p>
+                      <h2 className="text-[90px] font-bold text-white">{currentGameState.display_winner_name}</h2>
                   </div>
               )}
             </div>
@@ -485,22 +502,16 @@ export default function DisplayUI({
           <div className="flex flex-col justify-center border-r border-white/10 pr-8">
              {(showActiveGame || showPausedForValidation) && (
                 <>
-                   <div className="flex items-baseline gap-4 mb-1">
-                      <span className={cn("text-sm uppercase tracking-widest font-bold", dimTextColor)}>Current Stage</span>
-                      <span className="text-3xl font-bold text-white" style={{ textShadow: TextShadow }}>{currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0]}</span>
-                   </div>
-                   
-                   {currentActiveGame?.type === 'snowball' && currentSnowballPot ? (
-                        <div className="flex items-center gap-4 bg-[#a57626]/25 p-2 px-4 rounded-lg border border-[#a57626]/60 self-start shadow-lg">
-                            <span className="text-white text-sm font-bold uppercase">Snowball</span>
-                            <span className="text-2xl font-bold text-white">£{currentSnowballPot.current_jackpot_amount}</span>
-                            <span className="text-white text-sm">in {currentSnowballPot.current_max_calls} calls</span>
-                        </div>
-                   ) : (
-                        <div className="text-xl font-medium">
-                            <span className={cn("mr-2", dimTextColor)}>Prize:</span>
-                            <span style={{ textShadow: TextShadow }}>{currentPrizeText || 'Standard Prize'}</span>
-                        </div>
+                   <p className={footerLeftTextClass}>
+                     Playing for: {formatStageLabel(currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0])}
+                   </p>
+                   <p className={footerLeftTextClass}>
+                     Prize: {currentPrizeText || 'Standard Prize'}
+                   </p>
+                   {currentActiveGame?.type === 'snowball' && currentSnowballPot && (
+                     <p className={footerLeftTextClass}>
+                       Snowball: £{currentSnowballPot.current_jackpot_amount} in {currentSnowballPot.current_max_calls} calls
+                     </p>
                    )}
                 </>
              )}
@@ -510,14 +521,14 @@ export default function DisplayUI({
               {(showActiveGame || showPausedForValidation) && delayedNumbers.length > 0 && (
                   <>
                     <div className="flex justify-between items-end mb-2">
-                        <span className={cn("text-xs uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
-                        <span className={cn("text-xs uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {delayedNumbers.length}</span>
+                        <span className={cn("text-[18px] uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
+                        <span className={cn("text-[18px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {delayedNumbers.length}</span>
                     </div>
                     <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
                         {delayedNumbers.slice().reverse().map((num, idx) => (
                             <div key={idx} className={cn(
-                                "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shadow-lg shrink-0",
-                                idx === 0 ? "w-16 h-16 text-2xl border-4 border-white" : "w-12 h-12 text-lg opacity-70"
+                                "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
+                                idx === 0 ? "w-16 h-16 text-[36px] border-4 border-white" : "w-12 h-12 text-[27px] opacity-70"
                             )}>
                                 {num}
                             </div>
@@ -529,7 +540,7 @@ export default function DisplayUI({
       </div>
 
       {/* Player Join QR Code */}
-      <div className="absolute bottom-36 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl shadow-2xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
+      <div className="absolute bottom-36 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
           <div className="bg-white p-2 rounded-lg">
              <QRCodeSVG 
                 value={resolvedJoinUrl}
@@ -539,7 +550,7 @@ export default function DisplayUI({
                 bgColor="#FFFFFF"
              />
           </div>
-          <p className="text-white font-bold text-sm uppercase tracking-wider">Play Along</p>
+          <p className="text-white font-bold text-[21px] uppercase tracking-wider">Play Along</p>
       </div>
     </div>
   );

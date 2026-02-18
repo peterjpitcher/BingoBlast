@@ -48,10 +48,7 @@ export default function PlayerUI({
     currentGameStateRef.current = currentGameState;
   }, [currentGameState]);
 
-  // Wake Lock
-  useWakeLock();
-
-  // Wake Lock
+  const { isLocked: isWakeLockActive } = useWakeLock();
 
 
   // --- Data Fetching & Subscription Logic (Shared with Display) ---
@@ -265,6 +262,12 @@ export default function PlayerUI({
         )}
       </div>
 
+      {!isWakeLockActive && (
+        <div className="bg-[#a57626]/20 border-b border-[#a57626]/50 px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-white">
+          Tap once to keep this screen awake
+        </div>
+      )}
+
       {/* Main Status Content */}
       <div className="p-4 space-y-4">
 
@@ -357,7 +360,7 @@ export default function PlayerUI({
             <div className="flex justify-center py-4">
               {currentNumberDelayed ? (
                 <div className="relative">
-                <div className="w-48 h-48 bg-white rounded-full flex items-center justify-center shadow-2xl border-8 border-emerald-100">
+                <div className="w-48 h-48 bg-[#005131] rounded-full flex items-center justify-center shadow-2xl border-8 border-[#a57626]/70">
                     <span className="text-8xl font-black text-white tracking-tighter">
                       {currentNumberDelayed}
                     </span>
