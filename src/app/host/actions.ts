@@ -746,6 +746,49 @@ export async function moveToNextGameOnBreak(currentGameId: string, sessionId: st
     return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}` } };
 }
 
+export async function moveToNextGameAfterWin(currentGameId: string, sessionId: string): Promise<ActionResult<{ redirectTo: string }>> {
+    const supabase = await createClient();
+    const controlResult = await requireController(supabase, currentGameId);
+    if (!controlResult.authorized) return { success: false, error: controlResult.error };
+
+    const { data: sessionGames, error: sessionGamesError } = await supabase
+        .from('games')
+        .select('id, game_index, created_at')
+        .eq('session_id', sessionId)
+        .order('game_index', { ascending: true })
+        .order('created_at', { ascending: true });
+
+    if (sessionGamesError || !sessionGames) {
+        return { success: false, error: sessionGamesError?.message || "Could not read session games." };
+    }
+
+    const currentGamePosition = sessionGames.findIndex((game) => game.id === currentGameId);
+    if (currentGamePosition === -1) {
+        return { success: false, error: "Current game not found in this session." };
+    }
+
+    const nextGameId = sessionGames[currentGamePosition + 1]?.id;
+
+    const endResult = await endGame(currentGameId, sessionId);
+    if (!endResult.success) {
+        return { success: false, error: endResult.error || "Failed to complete current game." };
+    }
+
+    if (!nextGameId) {
+        return { success: true, data: { redirectTo: '/host' } };
+    }
+
+    const startResult = await startGame(sessionId, nextGameId);
+    if (!startResult.success) {
+        return { success: false, error: startResult.error || "Failed to start next game." };
+    }
+
+    revalidatePath(`/host/${sessionId}/${nextGameId}`);
+    revalidatePath(`/host`);
+
+    return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}` } };
+}
+
 export async function validateClaim(gameId: string, claimedNumbers: number[]): Promise<ActionResult<{ valid: boolean; invalidNumbers?: number[] }>> {
     const supabase = await createClient()
     const controlResult = await requireController(supabase, gameId)

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin } from '@/app/host/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
@@ -206,6 +206,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const currentNickname = currentNumber ? NUMBER_NICKNAMES[currentNumber] : null;
     const lastNNumbers = (currentGameState.called_numbers || []).slice(-10, -1);
     const currentStageName = game.stage_sequence[currentGameState.current_stage_index];
+    const currentStagePrize = getPlannedPrize(currentGameState.current_stage_index) || 'Standard Prize';
     const requiredSelectionCount = getRequiredSelectionCount(currentStageName);
 
     useEffect(() => {
@@ -357,15 +358,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleMoveToNextGame = async () => {
         if (!isController) return;
         setActionError(null);
-        const result = await endGame(gameId, sessionId);
+        const result = await moveToNextGameAfterWin(gameId, sessionId);
         if (!result?.success) {
-            setActionError(result?.error || "Failed to end game.");
+            setActionError(result?.error || "Failed to move to next game.");
             return;
         }
         setShowPostWinModal(false);
         setShowValidationModal(false);
         handleClearSelection();
-        router.push('/host');
+        router.push(result.data?.redirectTo || '/host');
     };
 
     const handleTakeBreakAfterGame = async () => {
@@ -584,6 +585,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <div>
                             <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Playing For</span>
                             <span className="text-xl font-bold text-white">{game.stage_sequence[currentGameState.current_stage_index] || 'Finished'}</span>
+                        </div>
+                        <div className="h-8 w-px bg-[#1f7c58]"></div>
+                        <div>
+                            <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Prize</span>
+                            <span className="text-xl font-bold text-white">{currentStagePrize}</span>
                         </div>
                     </div>
                 </CardContent>
