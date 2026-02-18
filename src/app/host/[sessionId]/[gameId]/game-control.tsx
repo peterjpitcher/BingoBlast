@@ -96,9 +96,14 @@ const DISPLAY_SYNC_BUFFER_MS = 200;
 
 const getRequiredSelectionCount = (stage: string | undefined): number => {
     if (!stage) return 5;
-    const normalized = stage.toLowerCase();
-    if (normalized.includes('two')) return 10;
-    if (normalized.includes('full')) return 15;
+    const normalized = stage.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+    if (normalized.includes('full') || normalized.includes('house')) return 15;
+    const isTwoLineStage =
+        (normalized.includes('two') || normalized.includes('2') || normalized.includes('double')) &&
+        normalized.includes('line');
+    if (isTwoLineStage) return 10;
+    if (normalized.includes('line')) return 5;
     return 5;
 };
 
@@ -245,7 +250,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const currentNumber = currentGameState.called_numbers?.[currentGameState.numbers_called_count - 1] || null;
     const currentNickname = currentNumber ? NUMBER_NICKNAMES[currentNumber] : null;
     const lastNNumbers = (currentGameState.called_numbers || []).slice(-10, -1);
-    const currentStageName = game.stage_sequence[currentGameState.current_stage_index];
+    const fallbackStageName = game.stage_sequence[game.stage_sequence.length - 1];
+    const currentStageName = game.stage_sequence[currentGameState.current_stage_index] || fallbackStageName;
     const currentStagePrize = getPlannedPrize(currentGameState.current_stage_index) || 'Standard Prize';
     const requiredSelectionCount = getRequiredSelectionCount(currentStageName);
     const isSnowballGame = game.type === 'snowball';
@@ -603,7 +609,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError("Winner name cannot be empty.");
             return;
         }
-        const currentStage = game.stage_sequence[currentGameState.current_stage_index];
+        const currentStage = currentStageName;
+        if (!currentStage) {
+            setActionError("Current stage is not available for this game.");
+            return;
+        }
 
         const result = await recordWinner(
             sessionId,
@@ -743,7 +753,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <div className="h-8 w-px bg-[#1f7c58]"></div>
                         <div>
                             <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Playing For</span>
-                            <span className="text-xl font-bold text-white">{game.stage_sequence[currentGameState.current_stage_index] || 'Finished'}</span>
+                            <span className="text-xl font-bold text-white">{currentStageName || 'Finished'}</span>
                         </div>
                         <div className="h-8 w-px bg-[#1f7c58]"></div>
                         <div>
@@ -1051,7 +1061,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             </Modal>
 
             {/* Record Winner Modal */}
-            <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${game.stage_sequence[currentGameState.current_stage_index]}`} className="bg-[#003f27] border border-[#1f7c58]">
+            <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${currentStageName || 'Stage'}`} className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
                     <div>
                         <label className="text-sm text-white/85 block mb-1">Winner Name</label>

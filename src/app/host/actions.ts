@@ -87,6 +87,19 @@ function generateShuffledNumberSequence(): number[] {
   return numbers;
 }
 
+function getRequiredSelectionCountForStage(stage: string | undefined): number {
+    if (!stage) return 5;
+    const normalized = stage.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+    if (normalized.includes('full') || normalized.includes('house')) return 15;
+    const isTwoLineStage =
+        (normalized.includes('two') || normalized.includes('2') || normalized.includes('double')) &&
+        normalized.includes('line');
+    if (isTwoLineStage) return 10;
+    if (normalized.includes('line')) return 5;
+    return 5;
+}
+
 // Shared Snowball Logic Helper
 async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessionId: string, gameId: string) {
     // 1. Check session type
@@ -900,6 +913,28 @@ export async function validateClaim(gameId: string, claimedNumbers: number[]): P
 
     if (fetchError || !gameState) {
         return { success: false, error: fetchError?.message || "Game state not found." };
+    }
+
+    const { data: gameDetails, error: gameDetailsError } = await supabase
+        .from('games')
+        .select('stage_sequence')
+        .eq('id', gameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'stage_sequence'>>();
+
+    if (gameDetailsError || !gameDetails) {
+        return { success: false, error: gameDetailsError?.message || "Game details not found." };
+    }
+
+    const stageSequence = (gameDetails.stage_sequence as string[]) || [];
+    const fallbackStageName = stageSequence[stageSequence.length - 1];
+    const currentStageName = stageSequence[gameState.current_stage_index] || fallbackStageName;
+    const requiredSelectionCount = getRequiredSelectionCountForStage(currentStageName);
+
+    if (claimedNumbers.length !== requiredSelectionCount) {
+        return {
+            success: false,
+            error: `Select exactly ${requiredSelectionCount} numbers for ${currentStageName || 'this stage'}.`,
+        };
     }
 
     const calledNumbers = gameState.called_numbers as number[];
