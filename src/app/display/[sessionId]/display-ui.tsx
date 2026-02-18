@@ -6,6 +6,7 @@ import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
+import { formatPounds, getSnowballCallsLabel } from '@/lib/snowball';
 
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
@@ -299,6 +300,9 @@ export default function DisplayUI({
   const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isGameFinishedState;
   const showWinState = !!currentGameState?.display_win_type && !isGameFinishedState;
   const showServiceState = !!(isWaitingState || showBreak || isGameFinishedState);
+  const snowballCallsLabel = currentSnowballPot && currentGameState
+    ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    : null;
   const resolvedJoinUrl = playerJoinUrl.startsWith('http')
     ? playerJoinUrl
     : `${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`;
@@ -503,7 +507,7 @@ export default function DisplayUI({
                     </p>
                     {currentActiveGame?.type === 'snowball' && currentSnowballPot && (
                       <p className={footerLeftTextClass}>
-                        Snowball: £{currentSnowballPot.current_jackpot_amount} in {currentSnowballPot.current_max_calls} calls
+                        Snowball: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))} {snowballCallsLabel ? `- ${snowballCallsLabel}` : ''}
                       </p>
                     )}
                   </>

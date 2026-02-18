@@ -4,7 +4,7 @@
 -- 1. ENUMS
 create type user_role as enum ('admin', 'host');
 create type session_status as enum ('draft', 'ready', 'running', 'completed');
-create type game_type as enum ('standard', 'snowball');
+create type game_type as enum ('standard', 'snowball', 'jackpot');
 create type game_status as enum ('not_started', 'in_progress', 'completed');
 create type win_stage as enum ('Line', 'Two Lines', 'Full House');
 

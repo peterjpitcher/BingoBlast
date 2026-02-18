@@ -8,7 +8,7 @@ export type Json =
 
 export type UserRole = 'admin' | 'host'
 export type SessionStatus = 'draft' | 'ready' | 'running' | 'completed'
-export type GameType = 'standard' | 'snowball'
+export type GameType = 'standard' | 'snowball' | 'jackpot'
 export type GameStatus = 'not_started' | 'in_progress' | 'completed'
 export type WinStage = 'Line' | 'Two Lines' | 'Full House'
 

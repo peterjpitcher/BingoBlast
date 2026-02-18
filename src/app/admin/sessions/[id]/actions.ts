@@ -20,6 +20,14 @@ const stageOrder: Record<WinStage, number> = {
 
 const sortStages = (stages: WinStage[]) => stages.sort((a, b) => stageOrder[a] - stageOrder[b])
 
+const getDefaultStagesForType = (type: GameType): WinStage[] => {
+  if (type === 'snowball' || type === 'jackpot') {
+    return ['Full House'];
+  }
+
+  return ['Line', 'Two Lines', 'Full House'];
+}
+
 async function authorizeAdmin(
   supabase: SupabaseClient<Database>
 ): Promise<AdminAuthResult> {
@@ -62,11 +70,15 @@ export async function createGame(sessionId: string, _prevState: unknown, formDat
   }
 
   const selectedStages = formData.getAll('stages') as WinStage[]
-  const stage_sequence: WinStage[] = selectedStages.length > 0
-    ? sortStages([...selectedStages])
-    : type === 'snowball'
-      ? ['Full House']
-      : ['Line', 'Two Lines', 'Full House']
+  const stage_sequence: WinStage[] = type === 'snowball' || type === 'jackpot'
+    ? ['Full House']
+    : selectedStages.length > 0
+      ? sortStages([...selectedStages])
+      : getDefaultStagesForType(type)
+
+  if (type === 'snowball' && !snowball_pot_id) {
+    return { success: false, error: 'Snowball games must be linked to a snowball pot.' }
+  }
 
   const prizes: Record<string, string> = {}
   stage_sequence.forEach((stage) => {
@@ -82,7 +94,7 @@ export async function createGame(sessionId: string, _prevState: unknown, formDat
     background_colour,
     notes,
     stage_sequence,
-    snowball_pot_id,
+    snowball_pot_id: type === 'snowball' ? snowball_pot_id : null,
     prizes,
   }
 
@@ -140,18 +152,22 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
   }
 
   const selectedStages = formData.getAll('stages') as WinStage[]
-  const stage_sequence: WinStage[] = selectedStages.length > 0
-    ? sortStages([...selectedStages])
-    : type === 'snowball'
-      ? ['Full House']
-      : ['Line', 'Two Lines', 'Full House']
+  const stage_sequence: WinStage[] = type === 'snowball' || type === 'jackpot'
+    ? ['Full House']
+    : selectedStages.length > 0
+      ? sortStages([...selectedStages])
+      : getDefaultStagesForType(type)
+
+  if (type === 'snowball' && !snowball_pot_id) {
+    return { success: false, error: 'Snowball games must be linked to a snowball pot.' }
+  }
 
   // 2. Enforce rules if session is running
   if (session.status === 'running') {
     if (type !== originalGame.type) {
       return { success: false, error: "Cannot change game type while session is running." }
     }
-    if (snowball_pot_id !== originalGame.snowball_pot_id) {
+    if ((type === 'snowball' ? snowball_pot_id : null) !== originalGame.snowball_pot_id) {
       return { success: false, error: "Cannot change snowball pot while session is running." }
     }
     // Compare stage_sequence as JSON strings or deep equality
@@ -174,7 +190,7 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
       background_colour,
       notes,
       type, // Will be same as original if running
-      snowball_pot_id, // Will be same as original if running
+      snowball_pot_id: type === 'snowball' ? snowball_pot_id : null, // Will be same as original if running
       stage_sequence, // Will be same as original if running
       prizes,
     })

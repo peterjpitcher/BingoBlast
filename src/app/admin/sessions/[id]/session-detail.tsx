@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Database } from '@/types/database';
+import { Database, GameType } from '@/types/database';
 import { createGame, deleteGame, duplicateGame, updateSessionStatus, updateGame, resetSession } from './actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,7 +32,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
   const [backgroundColor, setBackgroundColor] = useState<string>('#ffffff');
   
   // Form State
-  const [selectedGameType, setSelectedGameType] = useState<'standard' | 'snowball'>('standard');
+  const [selectedGameType, setSelectedGameType] = useState<GameType>('standard');
   const [selectedStages, setSelectedStages] = useState<string[]>(['Line', 'Two Lines', 'Full House']);
 
   const router = useRouter(); // Initialize useRouter
@@ -333,10 +333,13 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                           {game.notes && <div className="text-xs text-slate-500">{game.notes}</div>}
                       </td>
                       <td className="px-4 py-3">
-                          {game.type === 'snowball' ? 
-                              <span className="px-2 py-0.5 bg-indigo-900/50 text-indigo-300 rounded border border-indigo-800 text-xs font-bold">Snowball</span> : 
+                          {game.type === 'snowball' ? (
+                              <span className="px-2 py-0.5 bg-indigo-900/50 text-indigo-300 rounded border border-indigo-800 text-xs font-bold">Snowball</span>
+                          ) : game.type === 'jackpot' ? (
+                              <span className="px-2 py-0.5 bg-amber-900/40 text-amber-300 rounded border border-amber-700 text-xs font-bold">Jackpot</span>
+                          ) : (
                               <span className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded border border-slate-700 text-xs">Standard</span>
-                          }
+                          )}
                       </td>
                       <td className="px-4 py-3">
                           <div className="flex gap-1">
@@ -405,9 +408,9 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                 name="type" 
                 value={selectedGameType}
                 onChange={(e) => {
-                    const newType = e.target.value as 'standard' | 'snowball';
+                    const newType = e.target.value as GameType;
                     setSelectedGameType(newType);
-                    if (newType === 'snowball') {
+                    if (newType === 'snowball' || newType === 'jackpot') {
                         setSelectedStages(['Full House']);
                     } else {
                          if (editingGame && editingGame.type === 'standard') {
@@ -420,6 +423,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                 className="flex h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bingo-primary"
               >
                   <option value="standard">Standard Game</option>
+                  <option value="jackpot">Jackpot Game</option>
                   <option value="snowball">Snowball Game</option>
               </select>
             </div>
@@ -473,6 +477,15 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                     <p className="text-xs text-indigo-300 flex items-center gap-2">ℹ️ Snowball games are Full House only.</p>
                 </div>
             )}
+
+            {selectedGameType === 'jackpot' && (
+                <div className="p-4 bg-amber-900/20 border border-amber-800 rounded-lg space-y-3">
+                    <input type="hidden" name="stages" value="Full House" />
+                    <p className="text-xs text-amber-200">
+                        Jackpot games are configured as Full House only. The cash jackpot amount is entered by host when starting this game.
+                    </p>
+                </div>
+            )}
             
             <div>
                 <label className="text-sm font-medium text-slate-300 mb-2 block">Prizes</label>
@@ -484,7 +497,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                                 type="text" 
                                 name={`prize_${stage}`} 
                                 defaultValue={editingGame?.prizes?.[stage] || ''} 
-                                placeholder={selectedGameType === 'snowball' ? "e.g. £20" : "e.g. £10"}
+                                placeholder={selectedGameType === 'snowball' ? "e.g. £20" : selectedGameType === 'jackpot' ? "Set at game start" : "e.g. £10"}
                                 className="h-9"
                             />
                         </div>

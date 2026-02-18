@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { BingoBall } from '@/components/ui/bingo-ball';
 import { useWakeLock } from '@/hooks/wake-lock';
+import { formatPounds, getSnowballCallsLabel, isSnowballJackpotEligible } from '@/lib/snowball';
 
 type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -32,29 +33,63 @@ interface GameControlProps {
 
 // Hardcoded for now (same as before)
 const NUMBER_NICKNAMES: { [key: number]: string } = {
-    1: "Kelly's Eye", 2: "One Little Duck", 3: "Goodness Me", 4: "Knock at the Door",
-    5: "Man Alive", 6: "Half Dozen", 7: "Lucky For Some", 8: "Garden Gate",
-    9: "Doctor's Orders", 10: "Gandhi's Golden Years", 11: "Legs Eleven", 12: "One Dozen",
-    13: "Unlucky For Some", 14: "Valentines Day", 15: "Young And Keen", 16: "Sweet Sixteen",
-    17: "Dancing Queen", 18: "Voting Age", 19: "Goodbye Teens", 20: "Blind Twenty",
-    21: "Key Of The Door", 22: "Two Little Ducks", 23: "Thee And Me", 24: "A Dozen Twos",
-    25: "Duck And Dive", 26: "Pick And Mix", 27: "Gateway To Heaven", 28: "In A State",
-    29: "Rise And Shine", 30: "Dirty Gertie", 31: "Get Up And Run", 32: "Buckle My Shoe",
-    33: "All The Threes", 34: "Ask For More", 35: "Jumping Jack", 36: "Three Dozen",
-    37: "A Flea In Heaven", 38: "Christmas Cake", 39: "All The Steps", 40: "Naughty Forty",
-    41: "Life's Little Joke", 42: "Winnie The Pooh", 43: "Down On Your Knees", 44: "All The Fours",
-    45: "Halfway There", 46: "Up To Tricks", 47: "Four And Seven", 48: "Four Dozen",
-    49: "PC", 50: "Half A Century", 51: "Tweak Of The Thumb", 52: "Danny La Rue",
-    53: "Stuck In The Tree", 54: "Clean The Floor", 55: "All The Fives", 56: "Shotts Bus",
-    57: "Heinz Varieties", 58: "Make Them Wait", 59: "Brighton Line", 60: "Five Dozen",
-    61: "Bakers Bun", 62: "Tickety Boo", 63: "Tickle Me", 64: "Red Hot Pokers",
-    65: "Old Age Pension", 66: "Clickety Click", 67: "Made In Heaven", 68: "Saving Grace",
-    69: "Any Way Up", 70: "Three Score And Ten", 71: "Bang On The Drum", 72: "A Crutch And A Tube",
-    73: "Queen B", 74: "Candy Store", 75: "Strive And Strive", 76: "Trombones",
-    77: "All The Sevens", 78: "Heaven's Gate", 79: "One More Time", 80: "Gandhi's Breakfast",
-    81: "Stop And Run", 82: "Fat Lady Sings", 83: "Time For Tea", 84: "Last Four",
-    85: "Staying Alive", 86: "Between The Sticks", 87: "Fat Lady And A Crutch", 88: "Two Fat Ladies",
-    89: "All But One", 90: "Top Of The Shop"
+    1: "Kelly's Eye",
+    2: "One Little Duck",
+    3: "Goodness Me",
+    4: "Knock at the Door",
+    5: "Man Alive",
+    6: "Half Dozen",
+    7: "Lucky For Some",
+    8: "Garden Gate",
+    9: "Doctor's Orders",
+    11: "Legs Eleven",
+    12: "One Dozen",
+    13: "Unlucky For Some",
+    14: "Valentines Day",
+    15: "Young And Keen",
+    16: "Sweet Sixteen",
+    17: "Dancing Queen",
+    20: "Blind Twenty",
+    22: "Two Little Ducks",
+    25: "Duck And Dive",
+    26: "Pick And Mix",
+    27: "Gateway To Heaven",
+    28: "In A State",
+    29: "Rise And Shine",
+    30: "Dirty Gertie",
+    31: "Get Up And Run",
+    32: "Buckle My Shoe",
+    33: "All The Threes",
+    34: "Ask For More",
+    36: "Three Dozen",
+    40: "Naughty Forty",
+    42: "Winnie The Pooh",
+    44: "All The Fours",
+    45: "Halfway There",
+    46: "Up To Tricks",
+    47: "Four And Seven",
+    48: "Four Dozen",
+    51: "Tweak Of The Thumb",
+    52: "Danny La Rue",
+    53: "Stuck In The Tree",
+    54: "Clean The Floor",
+    55: "All The Fives",
+    57: "Heinz Varieties",
+    58: "Make Them Wait",
+    59: "Brighton Line",
+    61: "Bakers Bun",
+    62: "Tickety Boo",
+    63: "Tickle Me",
+    66: "Clickety Click",
+    67: "Made In Heaven",
+    69: "Any Way Up",
+    73: "Queen B",
+    77: "All The Sevens",
+    81: "Stop And Run",
+    83: "Time For Tea",
+    85: "Staying Alive",
+    88: "Two Fat Ladies",
+    90: "Top Of The Shop"
 };
 
 const DISPLAY_SYNC_BUFFER_MS = 200;
@@ -82,6 +117,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [showManualSnowballModal, setShowManualSnowballModal] = useState(false);
     const [showPostWinModal, setShowPostWinModal] = useState(false);
     const [showSessionWinnersModal, setShowSessionWinnersModal] = useState(false);
+    const [showCashJackpotModal, setShowCashJackpotModal] = useState(false);
+    const [cashJackpotAmount, setCashJackpotAmount] = useState('');
+    const [cashJackpotGameName, setCashJackpotGameName] = useState('Jackpot Game');
+    const [cashJackpotMode, setCashJackpotMode] = useState<'next' | 'break'>('next');
+    const [isSubmittingCashJackpot, setIsSubmittingCashJackpot] = useState(false);
     const [displaySyncRemainingMs, setDisplaySyncRemainingMs] = useState(0);
     const [winnerName, setWinnerName] = useState('');
     const [prizeGiven, setPrizeGiven] = useState(false);
@@ -208,6 +248,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const currentStageName = game.stage_sequence[currentGameState.current_stage_index];
     const currentStagePrize = getPlannedPrize(currentGameState.current_stage_index) || 'Standard Prize';
     const requiredSelectionCount = getRequiredSelectionCount(currentStageName);
+    const snowballCallsLabel = currentSnowballPot
+        ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+        : null;
+    const isSnowballJackpotWindowOpen = !!(
+        currentSnowballPot &&
+        isSnowballJackpotEligible(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    );
 
     useEffect(() => {
         const isCallableState =
@@ -363,6 +410,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError(result?.error || "Failed to move to next game.");
             return;
         }
+        if (result.data?.requiresCashJackpotAmount) {
+            setCashJackpotMode('next');
+            setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
+            setCashJackpotAmount('');
+            setShowCashJackpotModal(true);
+            setShowPostWinModal(false);
+            return;
+        }
         setShowPostWinModal(false);
         setShowValidationModal(false);
         handleClearSelection();
@@ -377,10 +432,57 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError(result?.error || "Failed to move to next game break.");
             return;
         }
+        if (result.data?.requiresCashJackpotAmount) {
+            setCashJackpotMode('break');
+            setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
+            setCashJackpotAmount('');
+            setShowCashJackpotModal(true);
+            setShowPostWinModal(false);
+            return;
+        }
         setShowPostWinModal(false);
         setShowValidationModal(false);
         handleClearSelection();
         router.push(result.data?.redirectTo || '/host');
+    };
+
+    const handleConfirmCashJackpotAndContinue = async () => {
+        if (!isController) return;
+        if (!cashJackpotAmount.trim()) {
+            setActionError("Enter a cash jackpot amount before continuing.");
+            return;
+        }
+
+        setIsSubmittingCashJackpot(true);
+        setActionError(null);
+        const transitionResult = cashJackpotMode === 'break'
+            ? await moveToNextGameOnBreak(gameId, sessionId, cashJackpotAmount)
+            : await moveToNextGameAfterWin(gameId, sessionId, cashJackpotAmount);
+
+        setIsSubmittingCashJackpot(false);
+
+        if (!transitionResult?.success) {
+            setActionError(transitionResult?.error || "Failed to continue to next game.");
+            return;
+        }
+
+        setShowCashJackpotModal(false);
+        setShowValidationModal(false);
+        handleClearSelection();
+        router.push(transitionResult.data?.redirectTo || '/host');
+    };
+
+    const handleCancelCashJackpotModal = () => {
+        if (isSubmittingCashJackpot) return;
+        setShowCashJackpotModal(false);
+        setCashJackpotAmount('');
+
+        if (currentGameState.status === 'completed') {
+            router.push('/host');
+            return;
+        }
+
+        setShowPostWinModal(true);
     };
 
     const handleToggleNumber = (num: number) => {
@@ -426,7 +528,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         if (validation?.valid) {
             const currentStage = currentStageName;
             const isSnowballGame = game.type === 'snowball' && currentStage === 'Full House';
-            const isJackpot = isSnowballGame && currentSnowballPot && currentGameState.numbers_called_count <= currentSnowballPot.current_max_calls;
+            const isJackpot = isSnowballGame && isSnowballJackpotWindowOpen;
 
             const announceResult = await announceWin(gameId, isJackpot ? 'snowball' : currentStage);
             if (!announceResult?.success) {
@@ -572,7 +674,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         )}
                     </div>
 
-                    {currentNumber && (
+                    {currentNickname && (
                         <h2 className="text-3xl font-bold text-white mb-4 animate-in fade-in slide-in-from-bottom-4">{currentNickname}</h2>
                     )}
 
@@ -592,6 +694,16 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             <span className="text-xl font-bold text-white">{currentStagePrize}</span>
                         </div>
                     </div>
+                    {game.type === 'snowball' && currentSnowballPot && snowballCallsLabel && (
+                        <div className="mt-4 w-full rounded-xl border border-[#a57626]/70 bg-[#005131]/65 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                            <p className="text-white font-semibold">
+                                Snowball Jackpot: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
+                            </p>
+                            <p className="text-white/90 font-semibold">
+                                {snowballCallsLabel}
+                            </p>
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 
@@ -889,6 +1001,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             onChange={(e) => setPrizeDescription(e.target.value)}
                             placeholder="e.g. £10 Cash"
                         />
+                        {game.type === 'snowball' && currentStageName === 'Full House' && currentSnowballPot && (
+                            <p className="text-xs text-white/75 mt-2">
+                                {isSnowballJackpotWindowOpen
+                                    ? `Jackpot is live (${snowballCallsLabel}). Snowball Jackpot £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))} is added automatically.`
+                                    : `Jackpot is closed (${snowballCallsLabel}). This will record the normal game prize only.`}
+                            </p>
+                        )}
                     </div>
                     <div className="flex items-center gap-2 pt-2">
                         <input
@@ -939,6 +1058,48 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </div>
             </Modal>
 
+            <Modal
+                isOpen={showCashJackpotModal}
+                onClose={handleCancelCashJackpotModal}
+                title="Set Cash Jackpot"
+                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+            >
+                <div className="space-y-4">
+                    <p className="text-sm text-white/90">
+                        Enter tonight&apos;s cash jackpot amount for <span className="font-bold">{cashJackpotGameName}</span> before this game starts.
+                    </p>
+                    <div>
+                        <label className="text-sm text-white/85 block mb-1">Cash Jackpot Amount</label>
+                        <Input
+                            type="number"
+                            inputMode="decimal"
+                            min="0"
+                            step="0.01"
+                            placeholder="e.g. 250"
+                            value={cashJackpotAmount}
+                            onChange={(e) => setCashJackpotAmount(e.target.value)}
+                            autoFocus
+                        />
+                    </div>
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                    <Button
+                        variant="secondary"
+                        onClick={handleCancelCashJackpotModal}
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="primary"
+                        className="bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
+                        onClick={handleConfirmCashJackpotAndContinue}
+                        disabled={isSubmittingCashJackpot}
+                    >
+                        {isSubmittingCashJackpot ? "Starting..." : "Set Amount & Start"}
+                    </Button>
+                </div>
+            </Modal>
+
             {/* Manual Snowball Win Modal */}
             <Modal isOpen={showManualSnowballModal} onClose={() => setShowManualSnowballModal(false)} title="Manual Snowball Award" className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
@@ -981,8 +1142,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 winnerName,
                                 prizeDescription,
                                 currentGameState.numbers_called_count,
-                                // true, // isJackpot = true, now determined server-side
-                                true // Prize given immediately? Assume yes for manual award or make optional. Let's default true for "Close out".
+                                true, // Prize given immediately? Assume yes for manual award or make optional. Let's default true for "Close out".
+                                true // Force snowball jackpot override for manual award path.
                             );
 
                             if (!result?.success) {

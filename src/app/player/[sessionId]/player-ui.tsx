@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
 import { useWakeLock } from '@/hooks/wake-lock';
+import { formatPounds, getSnowballCallsLabel } from '@/lib/snowball';
 
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
@@ -240,6 +241,9 @@ export default function PlayerUI({
 
   const backgroundColor = currentActiveGame?.background_colour || '#005131';
   const isSnowballGame = currentActiveGame?.type === 'snowball';
+  const snowballCallsLabel = currentSnowballPot && currentGameState
+    ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    : null;
 
   return (
     <div
@@ -347,11 +351,11 @@ export default function PlayerUI({
               <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 flex justify-between items-center shadow-lg shadow-black/25">
                 <div>
                   <span className="text-white text-xs font-bold uppercase block">Snowball Jackpot</span>
-                  <span className="text-2xl font-bold text-white">£{currentSnowballPot.current_jackpot_amount}</span>
+                  <span className="text-2xl font-bold text-white">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-white text-xs block">Win in</span>
-                  <span className="text-xl font-bold text-white">{currentSnowballPot.current_max_calls} calls</span>
+                  <span className="text-white text-xs block">Status</span>
+                  <span className="text-xl font-bold text-white">{snowballCallsLabel}</span>
                 </div>
               </div>
             )}

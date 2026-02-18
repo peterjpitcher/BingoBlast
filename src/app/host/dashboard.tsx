@@ -7,6 +7,8 @@ import { startGame } from './actions';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { Modal } from '@/components/ui/modal';
+import { Input } from '@/components/ui/input';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {
@@ -21,9 +23,35 @@ interface HostDashboardProps {
 export default function HostDashboard({ sessions }: HostDashboardProps) {
   const router = useRouter();
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const [cashJackpotPrompt, setCashJackpotPrompt] = useState<{ sessionId: string; gameId: string; gameName: string } | null>(null);
+  const [cashJackpotAmount, setCashJackpotAmount] = useState('');
+  const [isSubmittingCashJackpot, setIsSubmittingCashJackpot] = useState(false);
 
   const toggleSession = (sessionId: string) => {
     setExpandedSessionId(expandedSessionId === sessionId ? null : sessionId);
+  };
+
+  const startSelectedGame = async (sessionId: string, gameId: string, cashJackpotInput?: string) => {
+    const result = await startGame(sessionId, gameId, cashJackpotInput);
+    if (!result?.success) {
+      alert("Error starting game: " + (result?.error || "Unknown error"));
+      return false;
+    }
+
+    if (result.data?.requiresCashJackpotAmount) {
+      setCashJackpotPrompt({
+        sessionId,
+        gameId,
+        gameName: result.data.gameName || 'Jackpot Game',
+      });
+      setCashJackpotAmount('');
+      return false;
+    }
+
+    if (result.redirectTo) {
+      router.push(result.redirectTo);
+    }
+    return true;
   };
 
   return (
@@ -147,12 +175,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                         }
                                         
                                         try {
-                                            const result = await startGame(session.id, game.id);
-                                            if (!result?.success) {
-                                                alert("Error starting game: " + (result?.error || "Unknown error"));
-                                            } else if (result.redirectTo) {
-                                                router.push(result.redirectTo);
-                                            }
+                                            await startSelectedGame(session.id, game.id);
                                         } catch (err) {
                                             console.error(err);
                                             alert("An unexpected error occurred: " + (err instanceof Error ? err.message : String(err)));
@@ -184,6 +207,73 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
           })}
         </div>
       )}
+
+      <Modal
+        isOpen={!!cashJackpotPrompt}
+        onClose={() => {
+          if (isSubmittingCashJackpot) return;
+          setCashJackpotPrompt(null);
+          setCashJackpotAmount('');
+        }}
+        title="Set Cash Jackpot"
+        className="max-w-md bg-[#003f27] border border-[#1f7c58]"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-white/85">
+            Enter tonight&apos;s cash jackpot for <span className="font-bold text-white">{cashJackpotPrompt?.gameName}</span>. This will be shown as the game prize.
+          </p>
+          <div>
+            <label className="text-sm text-white/90 block mb-1">Cash Jackpot Amount</label>
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              placeholder="e.g. 250"
+              value={cashJackpotAmount}
+              onChange={(event) => setCashJackpotAmount(event.target.value)}
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (isSubmittingCashJackpot) return;
+              setCashJackpotPrompt(null);
+              setCashJackpotAmount('');
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            className="bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
+            onClick={async () => {
+              if (!cashJackpotPrompt) return;
+              if (!cashJackpotAmount.trim()) {
+                alert('Enter a cash jackpot amount first.');
+                return;
+              }
+
+              setIsSubmittingCashJackpot(true);
+              try {
+                const started = await startSelectedGame(cashJackpotPrompt.sessionId, cashJackpotPrompt.gameId, cashJackpotAmount);
+                if (started) {
+                  setCashJackpotPrompt(null);
+                  setCashJackpotAmount('');
+                }
+              } finally {
+                setIsSubmittingCashJackpot(false);
+              }
+            }}
+            disabled={isSubmittingCashJackpot}
+          >
+            {isSubmittingCashJackpot ? 'Starting...' : 'Set Amount & Start'}
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }

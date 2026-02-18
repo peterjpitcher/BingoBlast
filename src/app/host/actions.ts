@@ -7,6 +7,8 @@ import type { Database } from '@/types/database'
 import type { ActionResult } from '@/types/actions'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
+import { formatPounds, isSnowballJackpotEligible } from '@/lib/snowball'
+import { formatCashJackpotPrize, isCashJackpotGame, parseCashJackpotAmount } from '@/lib/jackpot'
 
 type HostAuthResult =
   | { authorized: false; error: string }
@@ -130,32 +132,29 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
     if (!potData) return;
 
     if (jackpotWon) {
-        // Reset Pot (if needed)
-         if (potData.current_jackpot_amount > potData.base_jackpot_amount || potData.current_max_calls > potData.base_max_calls) {
-            const resetUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
-                current_max_calls: potData.base_max_calls,
-                current_jackpot_amount: potData.base_jackpot_amount,
-                last_awarded_at: new Date().toISOString()
-            };
-            const { error: potError } = await supabase
-              .from('snowball_pots')
-              .update(resetUpdate)
-              .eq('id', potData.id);
+        const resetUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
+            current_max_calls: potData.base_max_calls,
+            current_jackpot_amount: potData.base_jackpot_amount,
+            last_awarded_at: new Date().toISOString()
+        };
+        const { error: potError } = await supabase
+          .from('snowball_pots')
+          .update(resetUpdate)
+          .eq('id', potData.id);
 
-             if (potError) {
-                console.error("Failed to reset snowball pot:", potError);
-            } else {
-                const jackpotHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
-                    snowball_pot_id: potData.id,
-                    change_type: 'jackpot_won',
-                    old_val_max: potData.current_max_calls,
-                    new_val_max: potData.base_max_calls,
-                    old_val_jackpot: potData.current_jackpot_amount,
-                    new_val_jackpot: potData.base_jackpot_amount,
-                };
-                await supabase.from('snowball_pot_history').insert(jackpotHistory);
-            }
-         }
+        if (potError) {
+            console.error("Failed to reset snowball pot:", potError);
+        } else {
+            const jackpotHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
+                snowball_pot_id: potData.id,
+                change_type: 'jackpot_won',
+                old_val_max: potData.current_max_calls,
+                new_val_max: potData.base_max_calls,
+                old_val_jackpot: potData.current_jackpot_amount,
+                new_val_jackpot: potData.base_jackpot_amount,
+            };
+            await supabase.from('snowball_pot_history').insert(jackpotHistory);
+        }
     } else {
         // Rollover
         const newMaxCalls = potData.current_max_calls + potData.calls_increment;
@@ -226,13 +225,28 @@ async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionI
     }
 }
 
-export async function startGame(sessionId: string, gameId: string): Promise<ActionResult> {
+export async function startGame(
+  sessionId: string,
+  gameId: string,
+  cashJackpotAmountInput?: string
+): Promise<ActionResult<{ requiresCashJackpotAmount?: boolean; gameName?: string }>> {
   try {
       const supabase = await createClient()
       const authResult = await authorizeHost(supabase)
       if (!authResult.authorized) return { success: false, error: authResult.error }
 
       const dbClient = getServiceRoleClient() || supabase;
+
+      const { data: gameDetailsForStart, error: gameDetailsError } = await dbClient
+        .from('games')
+        .select('name, type, stage_sequence, prizes')
+        .eq('id', gameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'name' | 'type' | 'stage_sequence' | 'prizes'>>();
+
+      if (gameDetailsError || !gameDetailsForStart) {
+        console.error("Error fetching game details for start:", gameDetailsError);
+        return { success: false, error: gameDetailsError?.message || "Game not found." };
+      }
 
       // 1. Check if game_state already exists
       const { data: existingGameState, error: fetchGameStateError } = await dbClient
@@ -244,6 +258,40 @@ export async function startGame(sessionId: string, gameId: string): Promise<Acti
       if (fetchGameStateError && fetchGameStateError.code !== 'PGRST116') {
         console.error("Error fetching existing game state:", fetchGameStateError);
         return { success: false, error: fetchGameStateError.message };
+      }
+
+      const isFirstStartAttempt = !existingGameState || existingGameState.status === 'not_started';
+      const requiresCashJackpotAmount = isFirstStartAttempt && isCashJackpotGame(gameDetailsForStart.name, gameDetailsForStart.type);
+      const providedCashJackpotAmount = cashJackpotAmountInput?.trim();
+
+      if (requiresCashJackpotAmount && !providedCashJackpotAmount) {
+        return { success: true, data: { requiresCashJackpotAmount: true, gameName: gameDetailsForStart.name } };
+      }
+
+      if (requiresCashJackpotAmount && providedCashJackpotAmount) {
+        const parsedAmount = parseCashJackpotAmount(providedCashJackpotAmount);
+        if (parsedAmount === null) {
+          return { success: false, error: "Please enter a valid cash jackpot amount." };
+        }
+
+        const jackpotPrizeText = formatCashJackpotPrize(parsedAmount);
+        const updatedPrizes = { ...(gameDetailsForStart.prizes || {}) };
+        for (const stage of gameDetailsForStart.stage_sequence || []) {
+          updatedPrizes[stage] = jackpotPrizeText;
+        }
+
+        const gamePrizeUpdate: Database['public']['Tables']['games']['Update'] = {
+          prizes: updatedPrizes,
+        };
+        const { error: gamePrizeError } = await dbClient
+          .from('games')
+          .update(gamePrizeUpdate)
+          .eq('id', gameId);
+
+        if (gamePrizeError) {
+          console.error("Error updating jackpot game prize:", gamePrizeError);
+          return { success: false, error: gamePrizeError.message };
+        }
       }
 
       const nowIso = new Date().toISOString();
@@ -699,7 +747,11 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
     return { success: true };
 }
 
-export async function moveToNextGameOnBreak(currentGameId: string, sessionId: string): Promise<ActionResult<{ redirectTo: string }>> {
+export async function moveToNextGameOnBreak(
+    currentGameId: string,
+    sessionId: string,
+    cashJackpotAmountInput?: string
+): Promise<ActionResult<{ redirectTo?: string; requiresCashJackpotAmount?: boolean; gameName?: string }>> {
     const supabase = await createClient();
     const controlResult = await requireController(supabase, currentGameId);
     if (!controlResult.authorized) return { success: false, error: controlResult.error };
@@ -722,17 +774,38 @@ export async function moveToNextGameOnBreak(currentGameId: string, sessionId: st
 
     const nextGameId = sessionGames[currentGamePosition + 1]?.id;
 
-    const endResult = await endGame(currentGameId, sessionId);
-    if (!endResult.success) {
-        return { success: false, error: endResult.error || "Failed to complete current game." };
+    const { data: currentGameState, error: currentStateError } = await supabase
+        .from('game_states')
+        .select('status')
+        .eq('game_id', currentGameId)
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'status'>>();
+
+    if (currentStateError || !currentGameState) {
+        return { success: false, error: currentStateError?.message || "Could not read current game state." };
+    }
+
+    if (currentGameState.status !== 'completed') {
+        const endResult = await endGame(currentGameId, sessionId);
+        if (!endResult.success) {
+            return { success: false, error: endResult.error || "Failed to complete current game." };
+        }
     }
     if (!nextGameId) {
         return { success: true, data: { redirectTo: '/host' } };
     }
 
-    const startResult = await startGame(sessionId, nextGameId);
+    const startResult = await startGame(sessionId, nextGameId, cashJackpotAmountInput);
     if (!startResult.success) {
         return { success: false, error: startResult.error || "Failed to start next game." };
+    }
+    if (startResult.data?.requiresCashJackpotAmount) {
+        return {
+            success: true,
+            data: {
+                requiresCashJackpotAmount: true,
+                gameName: startResult.data.gameName,
+            },
+        };
     }
 
     const breakResult = await toggleBreak(nextGameId, true);
@@ -746,7 +819,11 @@ export async function moveToNextGameOnBreak(currentGameId: string, sessionId: st
     return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}` } };
 }
 
-export async function moveToNextGameAfterWin(currentGameId: string, sessionId: string): Promise<ActionResult<{ redirectTo: string }>> {
+export async function moveToNextGameAfterWin(
+    currentGameId: string,
+    sessionId: string,
+    cashJackpotAmountInput?: string
+): Promise<ActionResult<{ redirectTo?: string; requiresCashJackpotAmount?: boolean; gameName?: string }>> {
     const supabase = await createClient();
     const controlResult = await requireController(supabase, currentGameId);
     if (!controlResult.authorized) return { success: false, error: controlResult.error };
@@ -769,18 +846,39 @@ export async function moveToNextGameAfterWin(currentGameId: string, sessionId: s
 
     const nextGameId = sessionGames[currentGamePosition + 1]?.id;
 
-    const endResult = await endGame(currentGameId, sessionId);
-    if (!endResult.success) {
-        return { success: false, error: endResult.error || "Failed to complete current game." };
+    const { data: currentGameState, error: currentStateError } = await supabase
+        .from('game_states')
+        .select('status')
+        .eq('game_id', currentGameId)
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'status'>>();
+
+    if (currentStateError || !currentGameState) {
+        return { success: false, error: currentStateError?.message || "Could not read current game state." };
+    }
+
+    if (currentGameState.status !== 'completed') {
+        const endResult = await endGame(currentGameId, sessionId);
+        if (!endResult.success) {
+            return { success: false, error: endResult.error || "Failed to complete current game." };
+        }
     }
 
     if (!nextGameId) {
         return { success: true, data: { redirectTo: '/host' } };
     }
 
-    const startResult = await startGame(sessionId, nextGameId);
+    const startResult = await startGame(sessionId, nextGameId, cashJackpotAmountInput);
     if (!startResult.success) {
         return { success: false, error: startResult.error || "Failed to start next game." };
+    }
+    if (startResult.data?.requiresCashJackpotAmount) {
+        return {
+            success: true,
+            data: {
+                requiresCashJackpotAmount: true,
+                gameName: startResult.data.gameName,
+            },
+        };
     }
 
     revalidatePath(`/host/${sessionId}/${nextGameId}`);
@@ -830,7 +928,7 @@ export async function announceWin(gameId: string, stage: WinStage | 'snowball'):
 
     if (stage === 'snowball') {
         displayWinType = 'snowball';
-        displayWinText = 'JACKPOT WIN!';
+        displayWinText = 'SNOWBALL JACKPOT WIN!';
     } else {
         switch (stage) {
             case 'Line':
@@ -961,19 +1059,34 @@ export async function recordWinner(
     prizeDescription: string | null,
     callCountAtWin: number,
     // isSnowballJackpot: boolean, // Removed, calculated server-side
-    prizeGiven: boolean = false
+    prizeGiven: boolean = false,
+    forceSnowballJackpot: boolean = false
 ): Promise<ActionResult> {
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
+    let resolvedCallCountAtWin = callCountAtWin;
+    const { data: liveGameState, error: gameStateError } = await supabase
+        .from('game_states')
+        .select('numbers_called_count')
+        .eq('game_id', gameId)
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'numbers_called_count'>>();
+
+    if (gameStateError) {
+        console.error("Error fetching live call count for winner record:", gameStateError.message);
+    } else if (liveGameState) {
+        resolvedCallCountAtWin = liveGameState.numbers_called_count;
+    }
+
     // Re-calculate isSnowballJackpot on the server for security
     let actualIsSnowballJackpot = false;
+    let snowballJackpotAmount: number | null = null;
     const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('type, snowball_pot_id, stage_sequence')
+        .select('type, snowball_pot_id')
         .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id' | 'stage_sequence'>>();
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id'>>();
     
     if (gameError) {
         console.error("Error fetching game for snowball check:", gameError.message);
@@ -983,17 +1096,32 @@ export async function recordWinner(
     if (game && game.type === 'snowball' && stage === 'Full House' && game.snowball_pot_id) {
         const { data: snowballPot, error: potError } = await supabase
             .from('snowball_pots')
-            .select('current_max_calls')
+            .select('current_max_calls, current_jackpot_amount')
             .eq('id', game.snowball_pot_id)
-            .single<Pick<Database['public']['Tables']['snowball_pots']['Row'], 'current_max_calls'>>();
+            .single<Pick<Database['public']['Tables']['snowball_pots']['Row'], 'current_max_calls' | 'current_jackpot_amount'>>();
 
         if (potError) {
             console.error("Error fetching snowball pot for jackpot check:", potError.message);
             // Continue, but actualIsSnowballJackpot remains false
         }
 
-        if (snowballPot && callCountAtWin <= snowballPot.current_max_calls) {
+        if (
+            snowballPot &&
+            (forceSnowballJackpot || isSnowballJackpotEligible(resolvedCallCountAtWin, snowballPot.current_max_calls))
+        ) {
             actualIsSnowballJackpot = true;
+            snowballJackpotAmount = Number(snowballPot.current_jackpot_amount);
+        }
+    }
+
+    const normalizedPrizeDescription = prizeDescription?.trim() || null;
+    let finalPrizeDescription = normalizedPrizeDescription;
+    if (actualIsSnowballJackpot && snowballJackpotAmount !== null) {
+        const jackpotDescription = `Snowball Jackpot £${formatPounds(snowballJackpotAmount)}`;
+        if (!normalizedPrizeDescription) {
+            finalPrizeDescription = jackpotDescription;
+        } else if (!normalizedPrizeDescription.toLowerCase().includes('snowball')) {
+            finalPrizeDescription = `${normalizedPrizeDescription} + ${jackpotDescription}`;
         }
     }
 
@@ -1003,8 +1131,8 @@ export async function recordWinner(
         game_id: gameId,
         stage,
         winner_name: winnerName,
-        prize_description: prizeDescription,
-        call_count_at_win: callCountAtWin,
+        prize_description: finalPrizeDescription,
+        call_count_at_win: resolvedCallCountAtWin,
         is_snowball_jackpot: actualIsSnowballJackpot, // Use server-calculated value
         prize_given: prizeGiven,
     };
@@ -1022,7 +1150,7 @@ export async function recordWinner(
     let displayWinText: string;
     if (actualIsSnowballJackpot) {
         displayWinType = 'snowball';
-        displayWinText = 'JACKPOT WIN!';
+        displayWinText = 'SNOWBALL JACKPOT WIN!';
     } else {
         switch (stage) {
             case 'Line':
