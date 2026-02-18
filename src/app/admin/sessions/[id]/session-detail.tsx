@@ -101,32 +101,53 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
 
   async function handleDeleteGame(gameId: string) {
       if (confirm("Delete this game?")) {
-          await deleteGame(gameId, session.id);
+          setActionError(null);
+          const result = await deleteGame(gameId, session.id);
+          if (!result?.success) {
+            setActionError(result?.error || "Failed to delete game.");
+            return;
+          }
           router.refresh(); // Refresh after deleting game
       }
   }
 
   async function handleDuplicateGame(gameId: string) {
-      await duplicateGame(gameId, session.id);
+      setActionError(null);
+      const result = await duplicateGame(gameId, session.id);
+      if (!result?.success) {
+        setActionError(result?.error || "Failed to clone game.");
+        return;
+      }
       router.refresh(); // Refresh after duplicating game
   }
 
   async function handleMarkAsReady() {
       if (confirm("Mark this session as Ready? It will be visible to hosts.")) {
-          await updateSessionStatus(session.id, 'ready');
+          setActionError(null);
+          const result = await updateSessionStatus(session.id, 'ready');
+          if (!result?.success) {
+            setActionError(result?.error || "Failed to update session status.");
+            return;
+          }
           router.refresh(); // Refresh after status change
       }
   }
 
   async function handleStartSession() {
       if (confirm("Ready to start this session? This will open it for the Host.")) {
-          await updateSessionStatus(session.id, 'running');
+          setActionError(null);
+          const result = await updateSessionStatus(session.id, 'running');
+          if (!result?.success) {
+            setActionError(result?.error || "Failed to start session.");
+            return;
+          }
           router.refresh(); // Refresh after status change
       }
   }
 
   async function handleResetSession() {
       if (confirm("Reset session to Ready? This will WIPE ALL HISTORY (winners, calls) for this session. Use with caution!")) {
+          setActionError(null);
           const result = await resetSession(session.id);
           if (!result?.success) {
               setActionError(result?.error || "Failed to reset session.");
@@ -140,6 +161,12 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
 
   return (
     <>
+      {actionError && !showGameModal && (
+        <div className="mb-6 rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+          {actionError}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
           <div className="md:col-span-2">
             <Card className="bg-slate-900 border-slate-800 h-full">
@@ -273,7 +300,7 @@ export default function SessionDetail({ session, initialGames, snowballPots }: S
         title={editingGame ? 'Edit Game' : 'Add Game'}
         className="max-w-2xl"
       >
-        <form onSubmit={handleGameSubmit} className="space-y-4">
+        <form key={editingGame?.id || 'new-game'} onSubmit={handleGameSubmit} className="space-y-4">
             {actionError && <div className="p-3 bg-red-900/50 text-red-200 rounded border border-red-800 text-sm">{actionError}</div>}
             
             <div className="flex gap-4">

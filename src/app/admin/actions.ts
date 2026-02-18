@@ -7,6 +7,7 @@ import type { ActionResult } from '@/types/actions'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 
 type SessionInsert = Database['public']['Tables']['sessions']['Insert']
+type SessionUpdate = Database['public']['Tables']['sessions']['Update']
 type GameRow = Database['public']['Tables']['games']['Row']
 type GameInsert = Database['public']['Tables']['games']['Insert']
 
@@ -40,8 +41,9 @@ export async function createSession(_prevState: unknown, formData: FormData): Pr
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  const name = formData.get('name') as string
-  const notes = formData.get('notes') as string
+  const name = ((formData.get('name') as string) || '').trim()
+  const notesRaw = (formData.get('notes') as string) || ''
+  const notes = notesRaw.trim() || null
   const is_test_session = formData.get('is_test_session') === 'on'
 
   if (!name) return { success: false, error: 'Session name is required' }
@@ -63,6 +65,43 @@ export async function createSession(_prevState: unknown, formData: FormData): Pr
   }
 
   revalidatePath('/admin')
+  return { success: true, redirectTo: '/admin' }
+}
+
+export async function updateSession(sessionId: string, _prevState: unknown, formData: FormData): Promise<ActionResult> {
+  const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { success: false, error: authResult.error }
+
+  const name = ((formData.get('name') as string) || '').trim()
+  const notesRaw = (formData.get('notes') as string) || ''
+  const notes = notesRaw.trim() || null
+  const is_test_session = formData.get('is_test_session') === 'on'
+
+  if (!name) return { success: false, error: 'Session name is required' }
+
+  const updates: SessionUpdate = {
+    name,
+    notes,
+    is_test_session,
+  }
+
+  const { data: updatedSession, error } = await supabase
+    .from('sessions')
+    .update(updates)
+    .eq('id', sessionId)
+    .select('id')
+    .single<{ id: string }>()
+
+  if (error) {
+    return { success: false, error: error.message }
+  }
+  if (!updatedSession) {
+    return { success: false, error: 'Session update did not apply.' }
+  }
+
+  revalidatePath('/admin')
+  revalidatePath(`/admin/sessions/${sessionId}`)
   return { success: true, redirectTo: '/admin' }
 }
 

@@ -46,12 +46,16 @@ export async function createGame(sessionId: string, _prevState: unknown, formDat
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  const name = formData.get('name') as string
+  const name = (formData.get('name') as string)?.trim()
   const type = formData.get('type') as GameType
   const game_index = Number.parseInt(formData.get('game_index') as string, 10)
   const background_colour = formData.get('background_colour') as string
   const notes = formData.get('notes') as string
   const snowball_pot_id = (formData.get('snowball_pot_id') as string) || null
+
+  if (!name) {
+    return { success: false, error: 'Game name is required.' }
+  }
 
   if (!Number.isFinite(game_index) || game_index < 1) {
     return { success: false, error: 'Game order must be a positive number.' }
@@ -120,12 +124,16 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
     return { success: false, error: fetchSessionError?.message || "Session not found." }
   }
 
-  const name = formData.get('name') as string
+  const name = (formData.get('name') as string)?.trim()
   const game_index = Number.parseInt(formData.get('game_index') as string, 10)
   const background_colour = formData.get('background_colour') as string
   const notes = formData.get('notes') as string
   const type = formData.get('type') as GameType
   const snowball_pot_id = (formData.get('snowball_pot_id') as string) || null
+
+  if (!name) {
+    return { success: false, error: 'Game name is required.' }
+  }
 
   if (!Number.isFinite(game_index) || game_index < 1) {
     return { success: false, error: 'Game order must be a positive number.' }
@@ -158,7 +166,7 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
     if (prize) prizes[stage] = prize
   })
 
-  const { error } = await supabase
+  const { data: updatedGame, error } = await supabase
     .from('games')
     .update({
       name,
@@ -171,9 +179,14 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
       prizes,
     })
     .eq('id', gameId)
+    .select('id')
+    .single<{ id: string }>()
 
   if (error) {
     return { success: false, error: error.message }
+  }
+  if (!updatedGame) {
+    return { success: false, error: 'Game update did not apply.' }
   }
 
   revalidatePath(`/admin/sessions/${sessionId}`)

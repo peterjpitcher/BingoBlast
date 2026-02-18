@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
-import { createSession, deleteSession, duplicateSession } from './actions';
+import { createSession, deleteSession, duplicateSession, updateSession } from './actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
@@ -19,32 +19,46 @@ interface AdminDashboardProps {
 
 export default function AdminDashboard({ sessions }: AdminDashboardProps) {
   const router = useRouter();
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showSessionModal, setShowSessionModal] = useState(false);
+  const [editingSession, setEditingSession] = useState<Session | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const handleClose = () => {
-    setShowCreateModal(false);
+    setShowSessionModal(false);
+    setEditingSession(null);
     setActionError(null);
-    router.refresh();
   };
 
-  const handleShow = () => setShowCreateModal(true);
+  const handleShowCreate = () => {
+    setEditingSession(null);
+    setActionError(null);
+    setShowSessionModal(true);
+  };
 
-  async function handleCreateSubmit(event: React.FormEvent<HTMLFormElement>) {
+  const handleShowEdit = (session: Session) => {
+    setEditingSession(session);
+    setActionError(null);
+    setShowSessionModal(true);
+  };
+
+  async function handleSessionSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSubmitting(true);
     setActionError(null);
 
     const formData = new FormData(event.currentTarget);
-    const result = await createSession(null, formData);
+    const result = editingSession
+      ? await updateSession(editingSession.id, null, formData)
+      : await createSession(null, formData);
 
     setIsSubmitting(false);
 
     if (!result?.success) {
-      setActionError(result?.error || "Failed to create session.");
+      setActionError(result?.error || "Failed to save session.");
     } else {
       handleClose();
+      router.refresh();
     }
   }
 
@@ -85,11 +99,16 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
       <Card className="bg-slate-900 border-slate-800">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Sessions</CardTitle>
-          <Button onClick={handleShow}>
+          <Button onClick={handleShowCreate}>
             + New Session
           </Button>
         </CardHeader>
         <CardContent>
+          {actionError && !showSessionModal && (
+            <div className="mb-4 rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+              {actionError}
+            </div>
+          )}
           {sessions.length === 0 ? (
             <div className="text-center py-12 text-slate-500">
               <p>No sessions found. Create one to get started.</p>
@@ -129,6 +148,9 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
                             Manage
                           </Button>
                         </Link>
+                        <Button variant="ghost" size="sm" className="h-8" onClick={() => handleShowEdit(session)}>
+                          Edit
+                        </Button>
                         <Button variant="secondary" size="sm" className="h-8" onClick={() => handleDuplicate(session.id)}>
                           Copy
                         </Button>
@@ -146,21 +168,26 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
       </Card>
 
       <Modal 
-        isOpen={showCreateModal} 
+        isOpen={showSessionModal} 
         onClose={handleClose} 
-        title="Create New Session"
+        title={editingSession ? "Edit Session" : "Create New Session"}
         footer={
             <>
                 <Button variant="ghost" onClick={handleClose} disabled={isSubmitting}>
                   Cancel
                 </Button>
-                <Button form="createSessionForm" type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? 'Creating...' : 'Create Session'}
+                <Button form="sessionForm" type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? 'Saving...' : (editingSession ? 'Save Changes' : 'Create Session')}
                 </Button>
             </>
         }
       >
-        <form id="createSessionForm" onSubmit={handleCreateSubmit} className="space-y-4">
+        <form
+          key={editingSession?.id || 'new-session'}
+          id="sessionForm"
+          onSubmit={handleSessionSubmit}
+          className="space-y-4"
+        >
           {actionError && (
             <div className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
               {actionError}
@@ -174,6 +201,7 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
               type="text" 
               name="name"
               placeholder="e.g. Friday Cash Bingo" 
+              defaultValue={editingSession?.name || ""}
               required 
               autoFocus
             />
@@ -184,6 +212,7 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
             <textarea 
               id="sessionNotes"
               name="notes"
+              defaultValue={editingSession?.notes || ""}
               rows={3}
               className="flex w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bingo-primary disabled:cursor-not-allowed disabled:opacity-50"
             />
@@ -194,6 +223,7 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
                 type="checkbox" 
                 id="isTestSession" 
                 name="is_test_session"
+                defaultChecked={editingSession?.is_test_session || false}
                 className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-bingo-primary focus:ring-bingo-primary"
             />
             <label htmlFor="isTestSession" className="text-sm font-medium text-slate-300">

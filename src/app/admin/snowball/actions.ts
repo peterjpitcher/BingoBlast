@@ -137,14 +137,38 @@ export async function deleteSnowballPot(id: string): Promise<ActionResult> {
     if (!authResult.authorized) return { success: false, error: authResult.error }
 
     // Check if linked to any in_progress games
-    const { data: activeGames } = await supabase
+    const { data: activeGames, error: activeGamesError } = await supabase
         .from('games')
         .select('id, game_states!inner(status)')
         .eq('snowball_pot_id', id)
         .eq('game_states.status', 'in_progress')
+
+    if (activeGamesError) {
+        return { success: false, error: activeGamesError.message }
+    }
     
     if (activeGames && activeGames.length > 0) {
         return { success: false, error: "Cannot delete pot: It is currently in use by an active game." }
+    }
+
+    // Unlink any historical/future games that still reference this pot.
+    const { error: unlinkGamesError } = await supabase
+      .from('games')
+      .update({ snowball_pot_id: null })
+      .eq('snowball_pot_id', id)
+
+    if (unlinkGamesError) {
+      return { success: false, error: unlinkGamesError.message }
+    }
+
+    // Remove audit rows first to satisfy FK constraints if cascade isn't configured.
+    const { error: deleteHistoryError } = await supabase
+      .from('snowball_pot_history')
+      .delete()
+      .eq('snowball_pot_id', id)
+
+    if (deleteHistoryError) {
+      return { success: false, error: deleteHistoryError.message }
     }
     
     const { error } = await supabase
@@ -166,11 +190,15 @@ export async function resetSnowballPot(id: string): Promise<ActionResult> {
     if (!authResult.authorized) return { success: false, error: authResult.error }
 
     // Check if linked to any in_progress games
-    const { data: activeGames } = await supabase
+    const { data: activeGames, error: activeGamesError } = await supabase
         .from('games')
         .select('id, game_states!inner(status)')
         .eq('snowball_pot_id', id)
         .eq('game_states.status', 'in_progress')
+
+    if (activeGamesError) {
+        return { success: false, error: activeGamesError.message }
+    }
     
     if (activeGames && activeGames.length > 0) {
         return { success: false, error: "Cannot reset pot: It is currently in use by an active game." }

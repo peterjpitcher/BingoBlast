@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { createSnowballPot, deleteSnowballPot, resetSnowballPot, updateSnowballPot } from './actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,6 +16,7 @@ interface SnowballListProps {
 }
 
 export default function SnowballList({ pots }: SnowballListProps) {
+  const router = useRouter();
   const [showModal, setShowModal] = useState(false);
   const [editingPot, setEditingPot] = useState<SnowballPot | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -52,18 +54,31 @@ export default function SnowballList({ pots }: SnowballListProps) {
       setActionError(result?.error || "Failed to save snowball pot.");
     } else {
       handleClose();
+      router.refresh();
     }
   }
 
   async function handleDelete(id: string) {
     if (confirm('Delete this snowball pot? This will unlink any games using it.')) {
-        await deleteSnowballPot(id);
+        setActionError(null);
+        const result = await deleteSnowballPot(id);
+        if (!result?.success) {
+          setActionError(result?.error || "Failed to delete snowball pot.");
+          return;
+        }
+        router.refresh();
     }
   }
 
   async function handleReset(id: string) {
       if (confirm('Reset this pot to its BASE values? This clears the current jackpot.')) {
-          await resetSnowballPot(id);
+          setActionError(null);
+          const result = await resetSnowballPot(id);
+          if (!result?.success) {
+            setActionError(result?.error || "Failed to reset snowball pot.");
+            return;
+          }
+          router.refresh();
       }
   }
 
@@ -77,6 +92,11 @@ export default function SnowballList({ pots }: SnowballListProps) {
           </Button>
         </CardHeader>
         <CardContent>
+          {actionError && (
+            <div className="mb-4 rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+              {actionError}
+            </div>
+          )}
           {pots.length === 0 ? (
             <div className="p-8 text-center text-slate-500">
                 <p>No snowball pots defined.</p>
