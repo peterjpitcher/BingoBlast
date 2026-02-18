@@ -189,7 +189,7 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
 async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionId: string) {
     const { data: games, error } = await supabase
         .from('games')
-        .select('id, game_states:game_states(status)')
+        .select('id')
         .eq('session_id', sessionId)
 
     if (error) {
@@ -199,10 +199,20 @@ async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionI
 
     if (!games || games.length === 0) return;
 
-    const hasIncompleteGame = games.some((game) => {
-        const state = (game as { game_states?: { status: GameStatus } | null }).game_states
-        return !state || state.status !== 'completed'
-    });
+    const gameIds = games.map((g: { id: string }) => g.id);
+    const { data: completedStates, error: completedStatesError } = await supabase
+        .from('game_states')
+        .select('game_id')
+        .in('game_id', gameIds)
+        .eq('status', 'completed');
+
+    if (completedStatesError) {
+        console.error("Error checking completed game states:", completedStatesError.message);
+        return;
+    }
+
+    const completedGameIds = new Set((completedStates || []).map((s: { game_id: string }) => s.game_id));
+    const hasIncompleteGame = gameIds.some((id: string) => !completedGameIds.has(id));
 
     if (!hasIncompleteGame) {
         const { error: updateError } = await supabase

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { callNextNumber, toggleBreak, endGame, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, advanceToNextStage, toggleWinnerPrizeGiven, takeControl, sendHeartbeat } from '@/app/host/actions';
@@ -55,6 +56,7 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
 
 
 export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole }: GameControlProps) {
+    const router = useRouter();
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
     const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
     const [isCallingNumber, setIsCallingNumber] = useState(false);
@@ -262,7 +264,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         const result = await endGame(gameId, sessionId);
         if (!result?.success) {
             setActionError(result?.error || "Failed to end game.");
+            return;
         }
+        router.push('/host');
     };
 
     const handleToggleNumber = (num: number) => {
@@ -344,6 +348,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleAdvanceStage = async () => {
         if (!isController) return;
         setActionError(null);
+        const willCompleteGame = currentGameState.current_stage_index >= game.stage_sequence.length - 1;
         const result = await advanceToNextStage(gameId);
         if (!result?.success) {
             setActionError(result?.error || "Failed to advance stage.");
@@ -351,6 +356,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setShowPostWinModal(false);
             setShowValidationModal(false);
             handleClearSelection();
+            if (willCompleteGame) {
+                router.push('/host');
+            }
         }
     };
 
