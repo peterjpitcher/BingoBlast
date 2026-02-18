@@ -785,7 +785,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             <Button
                                 variant="primary"
                                 onClick={handleCheckWin}
-                                disabled={selectedNumbers.length === 0 || (currentGameState.paused_for_validation && !validationResult)}
+                                disabled={selectedNumbers.length === 0}
                             >
                                 Check Win
                             </Button>
