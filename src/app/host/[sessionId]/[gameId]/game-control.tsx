@@ -269,6 +269,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isSnowballEligibilityStage = isSnowballGame && currentStageName === 'Full House';
     const isFinalStage = currentGameState.current_stage_index >= Math.max(0, game.stage_sequence.length - 1);
 
+    // Auto-check snowballEligible when the jackpot window is open so hosts don't accidentally miss it
+    useEffect(() => {
+        if (isSnowballJackpotWindowOpen) {
+            setSnowballEligible(true);
+        }
+    }, [isSnowballJackpotWindowOpen]);
+
     const navigateToHostPath = (targetPath?: string) => {
         const destination = targetPath || '/host';
         if (typeof window !== 'undefined') {
@@ -385,6 +392,23 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         return () => {
             supabase.removeChannel(channel);
         };
+    }, [gameId]);
+
+    // Polling fallback — re-fetch game state every 10 seconds to recover from missed Realtime events
+    useEffect(() => {
+        const supabase = createClient();
+        const interval = setInterval(async () => {
+            if (document.visibilityState !== 'visible') return;
+            const { data: freshState } = await supabase
+                .from('game_states')
+                .select('*')
+                .eq('game_id', gameId)
+                .single<GameState>();
+            if (freshState) {
+                setCurrentGameState(freshState);
+            }
+        }, 10000);
+        return () => clearInterval(interval);
     }, [gameId]);
 
     const handleCallNextNumber = async () => {
@@ -1095,6 +1119,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     </div>
                     {isSnowballEligibilityStage && currentSnowballPot && (
                         <div className="rounded-lg border border-[#a57626]/70 bg-[#005131]/60 px-3 py-2">
+                            {isSnowballJackpotWindowOpen && (
+                                <p className="text-xs font-semibold text-[#f3d59d] mb-2">
+                                    Jackpot window is OPEN — check eligibility carefully before recording winner.
+                                </p>
+                            )}
                             <div className="flex items-center gap-2">
                                 <input
                                     type="checkbox"

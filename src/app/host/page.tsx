@@ -6,6 +6,7 @@ import HostDashboard from './dashboard';
 import { Database } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import Image from 'next/image';
+import Link from 'next/link';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {
@@ -53,12 +54,13 @@ export default async function HostPage() {
     <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white pb-20">
        <header className="p-4 flex justify-between items-center border-b border-[#1f7c58] bg-[#005131]/95 backdrop-blur-sm sticky top-0 z-10">
           <div className="flex items-center gap-3">
-            <div className="relative w-32 h-10">
+            <Link href="/" className="relative w-32 h-10 block opacity-100 hover:opacity-70 transition-opacity">
               <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
-            </div>
+            </Link>
             <h1 className="font-bold text-lg text-white">Host Console</h1>
           </div>
           <div className="flex items-center gap-4">
+             <Link href="/" className="text-sm text-white/70 hover:text-white">← Home</Link>
              <span className="text-xs text-white/80 hidden sm:inline-block">{user.email}</span>
              <form action={signout}>
                 <Button variant="ghost" size="sm" className="text-white hover:bg-[#0f6846]">Sign Out</Button>

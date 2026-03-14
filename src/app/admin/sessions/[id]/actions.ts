@@ -331,7 +331,6 @@ export async function resetSession(sessionId: string): Promise<ActionResult> {
       .in('game_id', gameIds)
 
     if (deleteStatesError) {
-      console.error("Error deleting game states:", deleteStatesError)
       return { success: false, error: "Failed to reset game states: " + deleteStatesError.message }
     }
   }
@@ -343,7 +342,6 @@ export async function resetSession(sessionId: string): Promise<ActionResult> {
     .eq('session_id', sessionId)
 
   if (deleteWinnersError) {
-    console.error("Error deleting winners:", deleteWinnersError)
     return { success: false, error: "Failed to reset winners: " + deleteWinnersError.message }
   }
 
@@ -358,5 +356,29 @@ export async function resetSession(sessionId: string): Promise<ActionResult> {
   }
 
   revalidatePath(`/admin/sessions/${sessionId}`)
+  return { success: true }
+}
+
+export async function voidWinner(winnerId: string, voidReason: string): Promise<ActionResult> {
+  const supabase = await createClient()
+  const authResult = await authorizeAdmin(supabase)
+  if (!authResult.authorized) return { success: false, error: authResult.error }
+
+  if (!winnerId || winnerId.trim().length === 0) {
+    return { success: false, error: 'Winner ID is required.' }
+  }
+  if (!voidReason || voidReason.trim().length === 0) {
+    return { success: false, error: 'Void reason is required.' }
+  }
+
+  const { error } = await supabase
+    .from('winners')
+    .update({ is_void: true, void_reason: voidReason.trim() })
+    .eq('id', winnerId)
+
+  if (error) {
+    return { success: false, error: error.message }
+  }
+
   return { success: true }
 }

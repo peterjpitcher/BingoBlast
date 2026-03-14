@@ -62,9 +62,7 @@ export default function DisplayUI({
       if (newActiveGameId === currentActiveGame?.id) return;
 
       if (newActiveGameId) {
-        console.log("Switching to new game:", newActiveGameId);
-        
-        const { data: newGame, error: gameError } = await supabase.current
+          const { data: newGame, error: gameError } = await supabase.current
           .from('games')
           .select('*')
           .eq('id', newActiveGameId)
@@ -85,7 +83,6 @@ export default function DisplayUI({
             setCurrentGameState(null);
           }
         } else {
-          console.error("Error fetching new active game:", gameError?.message);
           setCurrentActiveGame(null);
           setCurrentGameState(null);
         }
@@ -105,7 +102,6 @@ export default function DisplayUI({
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
         async (payload) => {
-          console.log('Realtime session update received:', payload.new);
           setCurrentSession(payload.new);
           await refreshActiveGame(payload.new.active_game_id);
         }

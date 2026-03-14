@@ -26,7 +26,6 @@ export async function login(formData: FormData): Promise<ActionResult> {
   })
 
   if (error) {
-    console.error("Login Error:", error.message)
     return { success: false, error: error.message }
   }
 
@@ -34,25 +33,10 @@ export async function login(formData: FormData): Promise<ActionResult> {
   return { success: true, redirectTo: nextUrl }
 }
 
-export async function signup(formData: FormData): Promise<ActionResult> {
-    const supabase = await createClient()
-  
-    const email = formData.get('email') as string
-    const password = formData.get('password') as string
-    const nextUrl = sanitizeNextUrl(formData.get('next') as string | null)
-  
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-    })
-  
-    if (error) {
-      console.error("Signup Error:", error.message)
-      return { success: false, error: error.message }
-    }
-  
-    revalidatePath('/', 'layout')
-    return { success: true, redirectTo: nextUrl }
+// NOTE: Public sign-up is disabled — this project is invite-only.
+// This action is gated to prevent unauthorized account creation.
+export async function signup(_formData: FormData): Promise<ActionResult> {
+    return { success: false, error: 'Registration is invite-only. Please contact an administrator.' }
   }
 
 export async function signout() {

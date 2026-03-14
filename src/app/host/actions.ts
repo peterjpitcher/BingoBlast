@@ -89,19 +89,20 @@ function generateShuffledNumberSequence(): number[] {
 
 function getRequiredSelectionCountForStage(stage: string | undefined): number {
     if (!stage) return 5;
-    const normalized = stage.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-
-    if (normalized.includes('full') || normalized.includes('house')) return 15;
-    const isTwoLineStage =
-        (normalized.includes('two') || normalized.includes('2') || normalized.includes('double')) &&
-        normalized.includes('line');
-    if (isTwoLineStage) return 10;
-    if (normalized.includes('line')) return 5;
+    const stageCountMap: Record<WinStage, number> = {
+        'Line': 5,
+        'Two Lines': 10,
+        'Full House': 15,
+    };
+    if (stage in stageCountMap) {
+        return stageCountMap[stage as WinStage];
+    }
+    // Unknown stage — warn and fall back to 5
     return 5;
 }
 
 // Shared Snowball Logic Helper
-async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessionId: string, gameId: string) {
+async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessionId: string, gameId: string): Promise<{ success: boolean; error?: string }> {
     // 1. Check session type
     const { data: session, error: sessionError } = await supabase
         .from('sessions')
@@ -110,12 +111,11 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
         .single<Pick<Database['public']['Tables']['sessions']['Row'], 'is_test_session'>>();
 
     if (sessionError) {
-        console.error("Error checking session type for snowball logic:", sessionError.message);
+        return { success: false, error: "Error checking session type for snowball logic: " + sessionError.message };
     }
 
     if (session?.is_test_session) {
-         console.log("Test session: Snowball pot updates skipped.");
-         return;
+         return { success: true };
     }
 
     // 2. Check game type
@@ -125,7 +125,7 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
         .eq('id', gameId)
         .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id'>>();
 
-    if (gameData?.type !== 'snowball' || !gameData.snowball_pot_id) return;
+    if (gameData?.type !== 'snowball' || !gameData.snowball_pot_id) return { success: true };
 
     // 3. Check for jackpot winner
     const { count } = await supabase
@@ -133,7 +133,7 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
         .select('*', { count: 'exact', head: true })
         .eq('game_id', gameId)
         .eq('is_snowball_jackpot', true);
-    
+
     const jackpotWon = count !== null && count > 0;
 
     const { data: potData } = await supabase
@@ -141,8 +141,8 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
         .select('*')
         .eq('id', gameData.snowball_pot_id)
         .single<Database['public']['Tables']['snowball_pots']['Row']>();
-        
-    if (!potData) return;
+
+    if (!potData) return { success: true };
 
     if (jackpotWon) {
         const resetUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
@@ -156,7 +156,7 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
           .eq('id', potData.id);
 
         if (potError) {
-            console.error("Failed to reset snowball pot:", potError);
+            return { success: false, error: "Failed to reset snowball pot: " + potError.message };
         } else {
             const jackpotHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
                 snowball_pot_id: potData.id,
@@ -183,7 +183,7 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
           .eq('id', potData.id);
 
         if (potError) {
-             console.error("Failed to rollover snowball pot:", potError);
+            return { success: false, error: "Failed to rollover snowball pot: " + potError.message };
         } else {
             const rolloverHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
                 snowball_pot_id: potData.id,
@@ -196,6 +196,7 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
             await supabase.from('snowball_pot_history').insert(rolloverHistory);
         }
     }
+    return { success: true };
 }
 
 async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionId: string) {
@@ -204,12 +205,7 @@ async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionI
         .select('id')
         .eq('session_id', sessionId)
 
-    if (error) {
-        console.error("Error checking session completion:", error.message);
-        return;
-    }
-
-    if (!games || games.length === 0) return;
+    if (error || !games || games.length === 0) return;
 
     const gameIds = games.map((g: { id: string }) => g.id);
     const { data: completedStates, error: completedStatesError } = await supabase
@@ -218,23 +214,16 @@ async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionI
         .in('game_id', gameIds)
         .eq('status', 'completed');
 
-    if (completedStatesError) {
-        console.error("Error checking completed game states:", completedStatesError.message);
-        return;
-    }
+    if (completedStatesError) return;
 
     const completedGameIds = new Set((completedStates || []).map((s: { game_id: string }) => s.game_id));
     const hasIncompleteGame = gameIds.some((id: string) => !completedGameIds.has(id));
 
     if (!hasIncompleteGame) {
-        const { error: updateError } = await supabase
+        await supabase
             .from('sessions')
             .update({ status: 'completed', active_game_id: null })
             .eq('id', sessionId)
-
-        if (updateError) {
-            console.error("Error marking session completed:", updateError.message);
-        }
     }
 }
 
@@ -257,7 +246,6 @@ export async function startGame(
         .single<Pick<Database['public']['Tables']['games']['Row'], 'name' | 'type' | 'stage_sequence' | 'prizes'>>();
 
       if (gameDetailsError || !gameDetailsForStart) {
-        console.error("Error fetching game details for start:", gameDetailsError);
         return { success: false, error: gameDetailsError?.message || "Game not found." };
       }
 
@@ -269,7 +257,6 @@ export async function startGame(
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'id' | 'status' | 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'current_stage_index' | 'controlling_host_id' | 'controller_last_seen_at' | 'call_delay_seconds'>>()
 
       if (fetchGameStateError && fetchGameStateError.code !== 'PGRST116') {
-        console.error("Error fetching existing game state:", fetchGameStateError);
         return { success: false, error: fetchGameStateError.message };
       }
 
@@ -302,7 +289,6 @@ export async function startGame(
           .eq('id', gameId);
 
         if (gamePrizeError) {
-          console.error("Error updating jackpot game prize:", gamePrizeError);
           return { success: false, error: gamePrizeError.message };
         }
       }
@@ -332,7 +318,6 @@ export async function startGame(
           .eq('game_id', gameId)
 
         if (updateError) {
-          console.error("Error updating controller on in-progress game:", updateError);
           return { success: false, error: updateError.message };
         }
       } else if (existingGameState?.status === 'completed') {
@@ -351,7 +336,6 @@ export async function startGame(
           .eq('game_id', gameId)
 
         if (updateError) {
-          console.error("Error reopening completed game:", updateError);
           return { success: false, error: updateError.message };
         }
       } else {
@@ -385,7 +369,6 @@ export async function startGame(
             .eq('game_id', gameId)
 
           if (updateError) {
-            console.error("Error starting game from not_started state:", updateError);
             return { success: false, error: updateError.message };
           }
         } else {
@@ -394,7 +377,6 @@ export async function startGame(
             .insert(freshState);
 
           if (insertError) {
-            console.error("Error inserting game state:", insertError);
             return { success: false, error: insertError.message };
           }
         }
@@ -408,7 +390,6 @@ export async function startGame(
         .single<Pick<Database['public']['Tables']['sessions']['Row'], 'status' | 'active_game_id'>>()
 
       if (fetchSessionError || !session) {
-        console.error("Error fetching session to update status:", fetchSessionError);
         return { success: false, error: fetchSessionError?.message || "Session not found" };
       }
 
@@ -423,7 +404,6 @@ export async function startGame(
           .eq('id', sessionId)
         
         if (updateSessionError) {
-          console.error("Error updating session status and active_game_id:", updateSessionError);
           return { success: false, error: updateSessionError.message };
         }
       }
@@ -432,7 +412,6 @@ export async function startGame(
       revalidatePath(`/host/${sessionId}/${gameId}`);
 
   } catch (e) {
-      console.error("Server Error in startGame:", e);
       return { success: false, error: "Server Error: " + (e instanceof Error ? e.message : String(e)) };
   }
 
@@ -512,7 +491,6 @@ export async function getCurrentGameState(gameId: string): Promise<ActionResult<
         .single<Database['public']['Tables']['game_states']['Row']>();
 
     if (error && error.code !== 'PGRST116') { // PGRST116 means 'no rows found'
-        console.error("Error fetching game state:", error.message);
         return { success: false, error: error.message };
     }
 
@@ -536,7 +514,6 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
     .single<Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'status' | 'call_delay_seconds' | 'last_call_at' | 'on_break' | 'paused_for_validation'>>()
 
   if (fetchError || !gameState) {
-    console.error("Error fetching game state for next number:", fetchError?.message);
     return { success: false, error: fetchError?.message || "Game state not found." };
   }
 
@@ -588,7 +565,6 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
     .select('numbers_called_count');
 
   if (updateError) {
-    console.error("Error updating game state after call:", updateError.message);
     return { success: false, error: updateError.message };
   }
   if (!updatedRows || updatedRows.length === 0) {
@@ -611,7 +587,6 @@ export async function toggleBreak(gameId: string, onBreak: boolean): Promise<Act
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'status'>>();
     
     if (fetchError || !gameState) {
-        console.error("Error fetching game state for toggleBreak:", fetchError?.message);
         return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
@@ -633,7 +608,6 @@ export async function toggleBreak(gameId: string, onBreak: boolean): Promise<Act
         .eq('game_id', gameId);
 
     if (updateError) {
-        console.error("Error updating break status:", updateError.message);
         return { success: false, error: updateError.message };
     }
     revalidatePath(`/host/${gameId}`);
@@ -657,7 +631,6 @@ export async function pauseForValidation(gameId: string): Promise<ActionResult> 
         .eq('game_id', gameId);
 
     if (error) {
-        console.error("Error pausing for validation:", error.message);
         return { success: false, error: error.message };
     }
     
@@ -682,7 +655,6 @@ export async function resumeGame(gameId: string): Promise<ActionResult> {
         .eq('game_id', gameId);
 
     if (error) {
-        console.error("Error resuming game:", error.message);
         return { success: false, error: error.message };
     }
     
@@ -702,7 +674,6 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'status'>>();
     
     if (fetchError || !gameState) {
-        console.error("Error fetching game state for endGame:", fetchError?.message);
         return { success: false, error: fetchError?.message || "Game state not found." };
     }
 
@@ -725,7 +696,6 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
         .eq('game_id', gameId);
 
     if (updateError) {
-        console.error("Error updating game status to completed:", updateError.message);
         return { success: false, error: updateError.message };
     }
 
@@ -750,7 +720,6 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
             .eq('id', sessionId);
 
         if (clearActiveError) {
-            console.error("Error clearing active game after endGame:", clearActiveError.message);
             return { success: false, error: clearActiveError.message };
         }
     }
@@ -901,6 +870,17 @@ export async function moveToNextGameAfterWin(
 }
 
 export async function validateClaim(gameId: string, claimedNumbers: number[]): Promise<ActionResult<{ valid: boolean; invalidNumbers?: number[] }>> {
+    // Input validation
+    if (!gameId) {
+        return { success: false, error: 'Invalid game ID.' };
+    }
+    if (!Array.isArray(claimedNumbers)) {
+        return { success: false, error: 'Claimed numbers must be an array.' };
+    }
+    if (claimedNumbers.some(n => !Number.isInteger(n) || n < 1 || n > 90)) {
+        return { success: false, error: 'Each claimed number must be an integer between 1 and 90.' };
+    }
+
     const supabase = await createClient()
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
@@ -1007,7 +987,6 @@ export async function announceWin(gameId: string, stage: WinStage | 'snowball'):
         .eq('game_id', gameId);
 
     if (error) {
-        console.error("Error announcing win:", error.message);
         return { success: false, error: error.message };
     }
     
@@ -1022,12 +1001,16 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult> 
 
     const { data: currentGameState, error: fetchError } = await supabase
         .from('game_states')
-        .select('current_stage_index')
+        .select('current_stage_index, status')
         .eq('game_id', gameId)
-        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'current_stage_index'>>();
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'current_stage_index' | 'status'>>();
 
     if (fetchError || !currentGameState) {
          return { success: false, error: fetchError?.message || "Game state not found." };
+    }
+
+    if (currentGameState.status === 'completed') {
+        return { success: false, error: 'Game is already completed.' };
     }
 
     const { data: gameDetails } = await supabase
@@ -1067,29 +1050,11 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult> 
 
     // If the game is now completed, check Snowball logic (Rollover vs Reset)
     if (newGameStatus === 'completed') {
-        await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
+        const potResult = await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
+        if (!potResult.success) {
+            return { success: false, error: potResult.error || 'Failed to update snowball pot.' };
+        }
         await maybeCompleteSession(supabase, gameDetails.session_id);
-    } else {
-        // If NOT completed, but we just finished a stage, do we check for Jackpot win reset?
-        // handleSnowballPotUpdate handles "Reset if Won".
-        // So we CAN call it here even if not completed, IF we want to reset immediately upon win record.
-        // BUT `handleSnowballPotUpdate` also handles Rollover if NOT won.
-        // We do NOT want to rollover if the game is still in progress (e.g. just Line won).
-        // So we should only call it if the game is COMPLETED OR if we know a jackpot was won.
-        
-        // Check if jackpot was won specifically to trigger reset early?
-        // The helper checks "if (jackpotWon)".
-        // If jackpot won, we reset.
-        // If NOT jackpot won, we rollover.
-        // SO: We must ONLY call this if we are ready to potentially Rollover.
-        // Which is only when the game ends.
-        // What if Jackpot is won on "Full House" stage, but there are no more stages, so game ends? -> Handled by newGameStatus === 'completed'.
-        
-        // What if Jackpot is won, but for some reason there are more stages? (Unlikely for Snowball game).
-        // Snowball game usually only has Full House.
-        // So `newGameStatus` will likely be `completed`.
-        
-        // SAFE: Only call if completed.
     }
 
     revalidatePath(`/host/${gameId}`);
@@ -1108,51 +1073,60 @@ export async function recordWinner(
     forceSnowballJackpot: boolean = false,
     snowballEligible: boolean = false
 ): Promise<ActionResult> {
+    // Input validation
+    if (!winnerName || winnerName.trim().length === 0) {
+        return { success: false, error: 'Winner name is required.' };
+    }
+    const validStages: WinStage[] = ['Line', 'Two Lines', 'Full House'];
+    if (!validStages.includes(stage)) {
+        return { success: false, error: 'Invalid stage value.' };
+    }
+    if (!sessionId || !gameId) {
+        return { success: false, error: 'Invalid session or game ID.' };
+    }
+
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
     let resolvedCallCountAtWin = callCountAtWin;
-    const { data: liveGameState, error: gameStateError } = await supabase
+    const { data: liveGameState } = await supabase
         .from('game_states')
         .select('numbers_called_count')
         .eq('game_id', gameId)
         .single<Pick<Database['public']['Tables']['game_states']['Row'], 'numbers_called_count'>>();
 
-    if (gameStateError) {
-        console.error("Error fetching live call count for winner record:", gameStateError.message);
-    } else if (liveGameState) {
+    if (liveGameState) {
         resolvedCallCountAtWin = liveGameState.numbers_called_count;
     }
+
+    // Check if this is a test session — suppress snowball jackpot for test sessions
+    const { data: sessionData } = await supabase
+        .from('sessions')
+        .select('is_test_session')
+        .eq('id', sessionId)
+        .single<Pick<Database['public']['Tables']['sessions']['Row'], 'is_test_session'>>();
+
+    const isTestSession = sessionData?.is_test_session ?? false;
 
     // Re-calculate isSnowballJackpot on the server for security
     let actualIsSnowballJackpot = false;
     let snowballJackpotAmount: number | null = null;
     let isSnowballFullHouseStage = false;
     let snowballWindowOpen = false;
-    const { data: game, error: gameError } = await supabase
+    const { data: game } = await supabase
         .from('games')
         .select('type, snowball_pot_id')
         .eq('id', gameId)
         .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id'>>();
-    
-    if (gameError) {
-        console.error("Error fetching game for snowball check:", gameError.message);
-        // Continue, but actualIsSnowballJackpot remains false
-    }
 
-    if (game && game.type === 'snowball' && stage === 'Full House' && game.snowball_pot_id) {
+    if (!isTestSession && game && game.type === 'snowball' && stage === 'Full House' && game.snowball_pot_id) {
         isSnowballFullHouseStage = true;
-        const { data: snowballPot, error: potError } = await supabase
+        const { data: snowballPot } = await supabase
             .from('snowball_pots')
             .select('current_max_calls, current_jackpot_amount')
             .eq('id', game.snowball_pot_id)
             .single<Pick<Database['public']['Tables']['snowball_pots']['Row'], 'current_max_calls' | 'current_jackpot_amount'>>();
-
-        if (potError) {
-            console.error("Error fetching snowball pot for jackpot check:", potError.message);
-            // Continue, but actualIsSnowballJackpot remains false
-        }
 
         if (snowballPot) {
             snowballWindowOpen = isSnowballJackpotEligible(resolvedCallCountAtWin, snowballPot.current_max_calls);
@@ -1192,7 +1166,6 @@ export async function recordWinner(
         .insert(winnerInsert);
 
     if (winnerInsertError) {
-        console.error("Error recording winner:", winnerInsertError.message);
         return { success: false, error: winnerInsertError.message };
     }
 
@@ -1246,8 +1219,7 @@ export async function recordWinner(
         .eq('game_id', gameId);
 
     if (gameStateUpdateError) {
-        console.error("Error updating game state after winner record:", gameStateUpdateError.message);
-        return { success: false, error: gameStateUpdateError.message };
+        return { success: false, error: 'Winner recorded but failed to update game state. Please refresh and try again.' };
     }
 
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate to show updated winner info if needed
@@ -1365,7 +1337,6 @@ export async function voidLastNumber(gameId: string): Promise<ActionResult> {
         .eq('call_count_at_win', gameState.numbers_called_count);
 
     if (winnerCheckError) {
-        console.error("Error checking winners for void:", winnerCheckError.message);
         return { success: false, error: "Failed to verify winner status." };
     }
 
@@ -1390,7 +1361,6 @@ export async function voidLastNumber(gameId: string): Promise<ActionResult> {
         .eq('game_id', gameId);
 
     if (updateError) {
-        console.error("Error voiding last number:", updateError.message);
         return { success: false, error: updateError.message };
     }
 
