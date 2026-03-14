@@ -52,10 +52,10 @@ export default async function SessionDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  // Fetch Games for this session
+  // Fetch Games for this session (including game_states so UI can gate actions on status)
   const { data: games, error: gamesError } = await supabase
     .from('games')
-    .select('*')
+    .select('*, game_states(*)')
     .eq('session_id', id)
     .order('game_index', { ascending: true });
   if (gamesError) {

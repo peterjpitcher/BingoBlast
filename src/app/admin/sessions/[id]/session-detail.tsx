@@ -10,7 +10,10 @@ import { Input } from '@/components/ui/input';
 import { useRouter } from 'next/navigation'; // Import useRouter
 
 type Session = Database['public']['Tables']['sessions']['Row'];
-type Game = Database['public']['Tables']['games']['Row'];
+type GameState = Database['public']['Tables']['game_states']['Row'];
+type Game = Database['public']['Tables']['games']['Row'] & {
+  game_states?: GameState | GameState[] | null;
+};
 type SnowballPot = Pick<Database['public']['Tables']['snowball_pots']['Row'], 'id' | 'name' | 'current_jackpot_amount' | 'current_max_calls'>;
 type WinnerWithGame = Database['public']['Tables']['winners']['Row'] & {
   game: Pick<Database['public']['Tables']['games']['Row'], 'name' | 'game_index'> | null;
@@ -358,7 +361,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                       <td className="px-4 py-3 text-right space-x-2">
                         <Button variant="ghost" size="sm" className="h-8 px-2 text-slate-400 hover:text-white" onClick={() => handleDuplicateGame(game.id)} disabled={isSessionLocked}>Clone</Button>
                         <Button variant="ghost" size="sm" className="h-8 px-2 text-slate-400 hover:text-white" onClick={() => handleShowEdit(game)} disabled={isSessionLocked}>Edit</Button>
-                        <Button variant="ghost" size="sm" className="h-8 px-2 text-red-500 hover:text-red-400 hover:bg-red-900/20" onClick={() => handleDeleteGame(game.id)} disabled={isSessionLocked}>Delete</Button>
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-red-500 hover:text-red-400 hover:bg-red-900/20" onClick={() => handleDeleteGame(game.id)} disabled={isSessionLocked || (Array.isArray(game.game_states) ? game.game_states[0]?.status : game.game_states?.status) === 'completed'} title={(Array.isArray(game.game_states) ? game.game_states[0]?.status : game.game_states?.status) === 'completed' ? 'Cannot delete a completed game' : undefined}>Delete</Button>
                       </td>
                     </tr>
                   ))}

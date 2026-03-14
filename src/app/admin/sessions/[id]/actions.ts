@@ -274,6 +274,10 @@ export async function deleteGame(gameId: string, sessionId: string): Promise<Act
     return { success: false, error: "Cannot delete a game that is currently in progress." }
   }
 
+  if (gameState?.status === 'completed') {
+    return { success: false, error: "Cannot delete a completed game." }
+  }
+
   const { error } = await supabase
     .from('games')
     .delete()
