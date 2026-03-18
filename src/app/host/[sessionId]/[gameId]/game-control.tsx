@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
@@ -35,13 +35,14 @@ interface GameControlProps {
 const NUMBER_NICKNAMES: { [key: number]: string } = {
     1: "Kelly's Eye",
     2: "One Little Duck",
-    3: "Goodness Me",
+    3: "Debbie McGee",
     4: "Knock at the Door",
     5: "Man Alive",
     6: "Half Dozen",
     7: "Lucky For Some",
     8: "Garden Gate",
     9: "Doctor's Orders",
+    10: "Starmers Den",
     11: "Legs Eleven",
     12: "One Dozen",
     13: "Unlucky For Some",
@@ -64,7 +65,7 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
     36: "Three Dozen",
     40: "Naughty Forty",
     42: "Winnie The Pooh",
-    44: "All The Fours",
+    44: "Droopy Drawers",
     45: "Halfway There",
     46: "Up To Tricks",
     47: "Four And Seven",
@@ -134,6 +135,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
     const [sessionWinners, setSessionWinners] = useState<SessionWinner[]>([]);
 
+    // Singleton Supabase client — all subscriptions share one WebSocket connection
+    const supabaseRef = useRef(createClient());
+
   useWakeLock();
 
     // Controller Locking Logic
@@ -170,7 +174,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
     // Winners Subscription
     useEffect(() => {
-        const supabase = createClient();
+        const supabase = supabaseRef.current;
         const fetchWinners = async () => {
             const { data } = await supabase.from('winners').select('*').eq('game_id', gameId).order('created_at', { ascending: false });
             if (data) setCurrentWinners(data);
@@ -196,7 +200,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
     // Session-wide winners subscription so prize status can be managed after moving to later games
     useEffect(() => {
-        const supabase = createClient();
+        const supabase = supabaseRef.current;
         const fetchSessionWinners = async () => {
             const { data } = await supabase
                 .from('winners')
@@ -272,6 +276,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // Auto-check snowballEligible when the jackpot window is open so hosts don't accidentally miss it
     useEffect(() => {
         if (isSnowballJackpotWindowOpen) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setSnowballEligible(true);
         }
     }, [isSnowballJackpotWindowOpen]);
@@ -330,7 +335,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     ]);
 
     useEffect(() => {
-        const supabase = createClient();
+        const supabase = supabaseRef.current;
         let potChannel: ReturnType<typeof supabase.channel> | null = null;
 
         const fetchAndSubscribePot = async () => {
@@ -365,38 +370,67 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     }, [game.type, game.snowball_pot_id]);
 
     useEffect(() => {
-        const supabase = createClient();
+        const supabase = supabaseRef.current;
+        let isMounted = true;
+        let activeChannel: ReturnType<typeof supabase.channel> | null = null;
+        let reconnectTimeout: NodeJS.Timeout | null = null;
+        let attemptCount = 0;
 
-        const channel = supabase
-            .channel(`game_state:${gameId}`)
-            .on<GameState>(
-                'postgres_changes',
-                {
-                    event: 'UPDATE',
-                    schema: 'public',
-                    table: 'game_states',
-                    filter: `game_id=eq.${gameId}`
-                },
-                (payload) => {
-                    setCurrentGameState(payload.new);
-                }
-            )
-            .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    setIsConnected(true);
-                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                    setIsConnected(false);
-                }
-            });
+        const connect = () => {
+            if (!isMounted) return;
+
+            activeChannel = supabase
+                .channel(`game_state:${gameId}:${Date.now()}`)
+                .on<GameState>(
+                    'postgres_changes',
+                    {
+                        event: 'UPDATE',
+                        schema: 'public',
+                        table: 'game_states',
+                        filter: `game_id=eq.${gameId}`
+                    },
+                    (payload) => {
+                        if (!isMounted) return;
+                        // Guard: never regress called_numbers — a heartbeat UPDATE carries
+                        // the old called_numbers and must not overwrite a newer optimistic state.
+                        setCurrentGameState(prev =>
+                            payload.new.numbers_called_count >= prev.numbers_called_count
+                                ? payload.new
+                                : { ...payload.new, called_numbers: prev.called_numbers, numbers_called_count: prev.numbers_called_count }
+                        );
+                    }
+                )
+                .subscribe((status) => {
+                    if (!isMounted) return;
+                    if (status === 'SUBSCRIBED') {
+                        setIsConnected(true);
+                        attemptCount = 0;
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                        setIsConnected(false);
+                        if (activeChannel) {
+                            supabase.removeChannel(activeChannel);
+                            activeChannel = null;
+                        }
+                        // Exponential backoff: 1s, 2s, 4s, 8s … capped at 30s
+                        const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
+                        attemptCount += 1;
+                        reconnectTimeout = setTimeout(connect, delay);
+                    }
+                });
+        };
+
+        connect();
 
         return () => {
-            supabase.removeChannel(channel);
+            isMounted = false;
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            if (activeChannel) supabase.removeChannel(activeChannel);
         };
     }, [gameId]);
 
-    // Polling fallback — re-fetch game state every 10 seconds to recover from missed Realtime events
+    // Polling fallback — re-fetch game state every 3 seconds to recover from missed Realtime events
     useEffect(() => {
-        const supabase = createClient();
+        const supabase = supabaseRef.current;
         const interval = setInterval(async () => {
             if (document.visibilityState !== 'visible') return;
             const { data: freshState } = await supabase
@@ -405,9 +439,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 .eq('game_id', gameId)
                 .single<GameState>();
             if (freshState) {
-                setCurrentGameState(freshState);
+                // Apply same guard as Realtime: never regress called numbers
+                setCurrentGameState(prev =>
+                    freshState.numbers_called_count >= prev.numbers_called_count
+                        ? freshState
+                        : prev
+                );
             }
-        }, 10000);
+        }, 3000);
         return () => clearInterval(interval);
     }, [gameId]);
 
@@ -416,24 +455,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setIsCallingNumber(true);
         setActionError(null);
 
-        const previousState = { ...currentGameState };
-
-        if (currentGameState.number_sequence && currentGameState.numbers_called_count < currentGameState.number_sequence.length) {
-            const nextNum = currentGameState.number_sequence[currentGameState.numbers_called_count];
-
-            const optimisticState: GameState = {
-                ...currentGameState,
-                numbers_called_count: currentGameState.numbers_called_count + 1,
-                called_numbers: [...(currentGameState.called_numbers as number[]), nextNum],
-                last_call_at: new Date().toISOString()
-            };
-            setCurrentGameState(optimisticState);
-        }
-
+        // No optimistic update: the host is the author of this change, so the
+        // Realtime confirmation (~300ms) is fast enough. Optimistic updates
+        // combined with heartbeat Realtime events caused flash-then-revert.
         const result = await callNextNumber(gameId);
         if (!result?.success) {
             setActionError(result?.error || "Failed to call next number.");
-            setCurrentGameState(previousState);
         }
         setIsCallingNumber(false);
     };
