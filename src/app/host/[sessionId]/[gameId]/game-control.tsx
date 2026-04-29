@@ -391,13 +391,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     },
                     (payload) => {
                         if (!isMounted) return;
-                        // Guard: never regress called_numbers — a heartbeat UPDATE carries
-                        // the old called_numbers and must not overwrite a newer optimistic state.
-                        setCurrentGameState(prev =>
-                            payload.new.numbers_called_count >= prev.numbers_called_count
-                                ? payload.new
-                                : { ...payload.new, called_numbers: prev.called_numbers, numbers_called_count: prev.numbers_called_count }
-                        );
+                        setCurrentGameState(payload.new);
                     }
                 )
                 .subscribe((status) => {
@@ -439,12 +433,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 .eq('game_id', gameId)
                 .single<GameState>();
             if (freshState) {
-                // Apply same guard as Realtime: never regress called numbers
-                setCurrentGameState(prev =>
-                    freshState.numbers_called_count >= prev.numbers_called_count
-                        ? freshState
-                        : prev
-                );
+                setCurrentGameState(freshState);
             }
         }, 3000);
         return () => clearInterval(interval);

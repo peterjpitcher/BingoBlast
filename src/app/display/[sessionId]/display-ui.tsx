@@ -32,6 +32,8 @@ const formatStageLabel = (stage: string | undefined) => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
+const POLL_INTERVAL_MS = 3000;
+
 export default function DisplayUI({
   session,
   activeGame: initialActiveGame,
@@ -136,36 +138,66 @@ export default function DisplayUI({
   }, [session.id, currentActiveGame, refreshActiveGame]);
 
   useEffect(() => {
-      const interval = setInterval(async () => {
-          if (document.visibilityState !== 'visible') {
-              return;
-          }
-          const { data: freshSession } = await supabase.current
-              .from('sessions')
-              .select('active_game_id, status') 
-              .eq('id', session.id)
-              .single<Pick<Session, 'active_game_id' | 'status'>>();
-          
-          if (freshSession) {
-              if (freshSession.active_game_id !== currentActiveGame?.id) {
-                  await refreshActiveGame(freshSession.active_game_id);
-              } else if (currentActiveGame?.id) {
-                  // Poll game state to ensure sync
-                  const { data: freshState } = await supabase.current
-                    .from('game_states_public')
-                    .select('*')
-                    .eq('game_id', currentActiveGame.id)
-                    .single<Database['public']['Tables']['game_states_public']['Row']>();
-                  
-                  if (freshState) {
-                      setCurrentGameState(freshState);
-                  }
-              }
-          }
-      }, 10000);
+    let cancelled = false;
+    let interval: NodeJS.Timeout | null = null;
 
-      return () => clearInterval(interval);
-  }, [currentActiveGame, session.id, refreshActiveGame]);
+    const poll = async () => {
+      if (cancelled) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+
+      const { data: freshSession } = await supabase.current
+        .from('sessions')
+        .select('*')
+        .eq('id', session.id)
+        .single<Session>();
+      if (cancelled || !freshSession) return;
+
+      setCurrentSession(freshSession);
+      setIsWaitingState(!freshSession.active_game_id && freshSession.status !== 'running');
+
+      if (freshSession.active_game_id !== currentActiveGame?.id) {
+        await refreshActiveGame(freshSession.active_game_id);
+        return;
+      }
+
+      if (currentActiveGame?.id) {
+        const { data: freshState } = await supabase.current
+          .from('game_states_public')
+          .select('*')
+          .eq('game_id', currentActiveGame.id)
+          .single<GameState>();
+        if (cancelled || !freshState) return;
+
+        setCurrentGameState(freshState);
+        const stageKey = currentActiveGame.stage_sequence[freshState.current_stage_index];
+        setCurrentPrizeText(
+          currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || ''
+        );
+      }
+    };
+
+    void poll();
+    interval = setInterval(() => { void poll(); }, POLL_INTERVAL_MS);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void poll();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [
+    session.id,
+    currentActiveGame?.id,
+    currentActiveGame?.prizes,
+    currentActiveGame?.stage_sequence,
+    refreshActiveGame,
+  ]);
 
   useEffect(() => {
     const supabaseClient = supabase.current;

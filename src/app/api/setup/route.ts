@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -9,6 +10,17 @@ type SetupPayload = {
 
 function getSetupSecret() {
   return process.env.SETUP_SECRET
+}
+
+function isSetupSecretValid(providedSecret: string | null, setupSecret: string): boolean {
+  const providedDigest = createHash('sha256')
+    .update(providedSecret ?? '', 'utf8')
+    .digest()
+  const expectedDigest = createHash('sha256')
+    .update(setupSecret, 'utf8')
+    .digest()
+
+  return timingSafeEqual(providedDigest, expectedDigest)
 }
 
 export async function GET() {
@@ -25,7 +37,7 @@ export async function POST(request: NextRequest) {
   }
 
   const providedSecret = request.headers.get('x-setup-secret')
-  if (!providedSecret || providedSecret !== setupSecret) {
+  if (!isSetupSecretValid(providedSecret, setupSecret)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

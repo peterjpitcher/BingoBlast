@@ -24,6 +24,8 @@ interface PlayerUIProps {
   initialPrizeText: string;
 }
 
+const POLL_INTERVAL_MS = 3000;
+
 export default function PlayerUI({
   session,
   activeGame: initialActiveGame,
@@ -162,6 +164,67 @@ export default function PlayerUI({
       if (potChannel) supabaseClient.removeChannel(potChannel);
     };
   }, [currentActiveGame]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let interval: NodeJS.Timeout | null = null;
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+
+      const { data: freshSession } = await supabase.current
+        .from('sessions')
+        .select('*')
+        .eq('id', session.id)
+        .single<Session>();
+      if (cancelled || !freshSession) return;
+
+      setCurrentSession(freshSession);
+
+      if (freshSession.active_game_id !== currentActiveGame?.id) {
+        await refreshActiveGame(freshSession.active_game_id);
+        return;
+      }
+
+      if (currentActiveGame?.id) {
+        const { data: freshState } = await supabase.current
+          .from('game_states_public')
+          .select('*')
+          .eq('game_id', currentActiveGame.id)
+          .single<GameState>();
+        if (cancelled || !freshState) return;
+
+        setCurrentGameState(freshState);
+        const stageKey = currentActiveGame.stage_sequence[freshState.current_stage_index];
+        setCurrentPrizeText(
+          currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || ''
+        );
+      }
+    };
+
+    void poll();
+    interval = setInterval(() => { void poll(); }, POLL_INTERVAL_MS);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void poll();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [
+    session.id,
+    currentActiveGame?.id,
+    currentActiveGame?.prizes,
+    currentActiveGame?.stage_sequence,
+    refreshActiveGame,
+  ]);
 
   // --- Delay Logic (Same as Display) ---
   /* eslint-disable react-hooks/set-state-in-effect */

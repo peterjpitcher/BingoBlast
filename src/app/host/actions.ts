@@ -948,6 +948,40 @@ export async function announceWin(gameId: string, stage: WinStage | 'snowball'):
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
+    const { data: gameState, error: gameStateError } = await supabase
+        .from('game_states')
+        .select('current_stage_index, status')
+        .eq('game_id', gameId)
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'current_stage_index' | 'status'>>();
+    if (gameStateError || !gameState) {
+        return { success: false, error: gameStateError?.message || "Game state not found." };
+    }
+    if (gameState.status !== 'in_progress') {
+        return { success: false, error: "Cannot announce a winner unless the game is in progress." };
+    }
+
+    const { data: gameRow, error: gameRowError } = await supabase
+        .from('games')
+        .select('type, stage_sequence')
+        .eq('id', gameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'stage_sequence'>>();
+    if (gameRowError || !gameRow) {
+        return { success: false, error: gameRowError?.message || "Game details not found." };
+    }
+
+    const expectedStage = (gameRow.stage_sequence as string[] | null)?.[gameState.current_stage_index];
+    if (!expectedStage) {
+        return { success: false, error: "Current stage is not configured for this game." };
+    }
+
+    if (stage === 'snowball') {
+        if (gameRow.type !== 'snowball' || expectedStage !== 'Full House') {
+            return { success: false, error: "Snowball announcement is only valid during Full House of a snowball game." };
+        }
+    } else if (stage !== expectedStage) {
+        return { success: false, error: `Stage mismatch: live stage is ${expectedStage}.` };
+    }
+
     let displayWinText: string;
     let displayWinType: string;
 
@@ -1089,16 +1123,41 @@ export async function recordWinner(
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
 
-    let resolvedCallCountAtWin = callCountAtWin;
-    const { data: liveGameState } = await supabase
-        .from('game_states')
-        .select('numbers_called_count')
-        .eq('game_id', gameId)
-        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'numbers_called_count'>>();
+    void callCountAtWin;
 
-    if (liveGameState) {
-        resolvedCallCountAtWin = liveGameState.numbers_called_count;
+    const { data: liveGameRow, error: liveGameRowError } = await supabase
+        .from('games')
+        .select('session_id, type, snowball_pot_id, stage_sequence')
+        .eq('id', gameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'type' | 'snowball_pot_id' | 'stage_sequence'>>();
+    if (liveGameRowError || !liveGameRow) {
+        return { success: false, error: liveGameRowError?.message || "Game details not found." };
     }
+    if (liveGameRow.session_id !== sessionId) {
+        return { success: false, error: "Game does not belong to this session." };
+    }
+
+    const { data: liveStateRow, error: liveStateRowError } = await supabase
+        .from('game_states')
+        .select('numbers_called_count, current_stage_index, status')
+        .eq('game_id', gameId)
+        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'numbers_called_count' | 'current_stage_index' | 'status'>>();
+    if (liveStateRowError || !liveStateRow) {
+        return { success: false, error: liveStateRowError?.message || "Game state not found." };
+    }
+    if (liveStateRow.status !== 'in_progress') {
+        return { success: false, error: "Cannot record a winner unless the game is in progress." };
+    }
+
+    const expectedStage = (liveGameRow.stage_sequence as string[] | null)?.[liveStateRow.current_stage_index];
+    if (!expectedStage) {
+        return { success: false, error: "Current stage is not configured for this game." };
+    }
+    if (stage !== expectedStage) {
+        return { success: false, error: `Stage mismatch: live stage is ${expectedStage}.` };
+    }
+
+    const resolvedCallCountAtWin = liveStateRow.numbers_called_count;
 
     // Check if this is a test session — suppress snowball jackpot for test sessions
     const { data: sessionData } = await supabase
@@ -1114,13 +1173,9 @@ export async function recordWinner(
     let snowballJackpotAmount: number | null = null;
     let isSnowballFullHouseStage = false;
     let snowballWindowOpen = false;
-    const { data: game } = await supabase
-        .from('games')
-        .select('type, snowball_pot_id')
-        .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id'>>();
+    const game = liveGameRow;
 
-    if (!isTestSession && game && game.type === 'snowball' && stage === 'Full House' && game.snowball_pot_id) {
+    if (!isTestSession && game.type === 'snowball' && stage === 'Full House' && game.snowball_pot_id) {
         isSnowballFullHouseStage = true;
         const { data: snowballPot } = await supabase
             .from('snowball_pots')
@@ -1154,7 +1209,7 @@ export async function recordWinner(
         session_id: sessionId,
         game_id: gameId,
         stage,
-        winner_name: winnerName,
+        winner_name: winnerName.trim(),
         prize_description: finalPrizeDescription,
         call_count_at_win: resolvedCallCountAtWin,
         is_snowball_eligible: snowballEligible,
