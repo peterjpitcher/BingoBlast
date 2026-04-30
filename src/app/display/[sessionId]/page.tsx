@@ -40,14 +40,19 @@ export default async function DisplayPage({ params }: PageProps) {
     notFound();
   }
 
+  // Trusted origin for the join QR. Prefer the configured public origin
+  // (set in production via NEXT_PUBLIC_SITE_URL) over the incoming request
+  // headers — Vercel passes x-forwarded-host through unmodified, so an
+  // attacker who can reach the deployment with a spoofed Host header could
+  // otherwise turn the pub display QR into a phishing redirect.
+  const configuredOrigin = (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/$/, '');
   const requestHeaders = await headers();
   const forwardedHost = requestHeaders.get('x-forwarded-host');
   const host = forwardedHost || requestHeaders.get('host');
   const forwardedProto = requestHeaders.get('x-forwarded-proto');
   const protocol = forwardedProto || (host?.includes('localhost') ? 'http' : 'https');
-  const origin = host
-    ? `${protocol}://${host}`
-    : (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/$/, '');
+  const headerOrigin = host ? `${protocol}://${host}` : '';
+  const origin = configuredOrigin || headerOrigin;
   const playerJoinUrl = origin
     ? `${origin}/player/${session.id}`
     : `/player/${session.id}`;
