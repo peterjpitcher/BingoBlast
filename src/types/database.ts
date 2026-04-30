@@ -168,6 +168,7 @@ export interface Database {
           ended_at: string | null
           last_call_at: string | null
           updated_at: string
+          state_version: number // Monotonic counter bumped on every update; used to order Realtime/polling snapshots
         }
         Insert: {
           id?: string
@@ -189,6 +190,7 @@ export interface Database {
           ended_at?: string | null
           last_call_at?: string | null
           updated_at?: string
+          state_version?: number
         }
         Update: {
           id?: string
@@ -210,6 +212,7 @@ export interface Database {
           ended_at?: string | null
           last_call_at?: string | null
           updated_at?: string
+          state_version?: number
         }
         Relationships: [
           {
@@ -244,6 +247,7 @@ export interface Database {
           ended_at: string | null
           last_call_at: string | null
           updated_at: string
+          state_version: number // Mirror of game_states.state_version; copied by sync trigger
         }
         Insert: {
           game_id: string
@@ -261,6 +265,7 @@ export interface Database {
           ended_at?: string | null
           last_call_at?: string | null
           updated_at?: string
+          state_version?: number
         }
         Update: {
           game_id?: string
@@ -278,6 +283,7 @@ export interface Database {
           ended_at?: string | null
           last_call_at?: string | null
           updated_at?: string
+          state_version?: number
         }
         Relationships: [
           {

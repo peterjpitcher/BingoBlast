@@ -107,7 +107,7 @@ create table public.game_states (
   numbers_called_count int default 0,
   current_stage_index int default 0,
   status game_status default 'not_started'::game_status,
-  call_delay_seconds int default 1,
+  call_delay_seconds int default 2,
   on_break boolean default false,
   paused_for_validation boolean default false,
   display_win_type text default null, -- 'line', 'two_lines', 'full_house', 'snowball'
@@ -118,7 +118,8 @@ create table public.game_states (
   started_at timestamptz,
   ended_at timestamptz,
   last_call_at timestamptz,
-  updated_at timestamptz default now()
+  updated_at timestamptz default now(),
+  state_version bigint not null default 0 -- Monotonic counter bumped on every update; used to order Realtime/polling snapshots
 );
 alter table public.game_states enable row level security;
 create policy "Hosts/Admins can read game state" on public.game_states for select using (
@@ -144,7 +145,7 @@ create table public.game_states_public (
   numbers_called_count int default 0,
   current_stage_index int default 0,
   status game_status default 'not_started'::game_status,
-  call_delay_seconds int default 1,
+  call_delay_seconds int default 2,
   on_break boolean default false,
   paused_for_validation boolean default false,
   display_win_type text default null,
@@ -153,7 +154,8 @@ create table public.game_states_public (
   started_at timestamptz,
   ended_at timestamptz,
   last_call_at timestamptz,
-  updated_at timestamptz default now()
+  updated_at timestamptz default now(),
+  state_version bigint not null default 0 -- Mirror of game_states.state_version; copied by sync trigger
 );
 alter table public.game_states_public enable row level security;
 create policy "Read access for all" on public.game_states_public for select using (true);
@@ -181,7 +183,8 @@ begin
     started_at,
     ended_at,
     last_call_at,
-    updated_at
+    updated_at,
+    state_version
   ) values (
     new.game_id,
     new.called_numbers,
@@ -197,7 +200,8 @@ begin
     new.started_at,
     new.ended_at,
     new.last_call_at,
-    new.updated_at
+    new.updated_at,
+    new.state_version
   )
   on conflict (game_id) do update set
     called_numbers = excluded.called_numbers,
@@ -213,7 +217,8 @@ begin
     started_at = excluded.started_at,
     ended_at = excluded.ended_at,
     last_call_at = excluded.last_call_at,
-    updated_at = excluded.updated_at;
+    updated_at = excluded.updated_at,
+    state_version = excluded.state_version;
 
   return new;
 end;
@@ -226,6 +231,22 @@ for each row execute procedure public.sync_game_states_public();
 create trigger on_game_states_delete
 after delete on public.game_states
 for each row execute procedure public.sync_game_states_public();
+
+-- Bump state_version on every update to game_states so consumers can order
+-- realtime/polling snapshots (updated_at is not reliably maintained).
+create or replace function public.bump_game_state_version()
+returns trigger as $$
+begin
+  if tg_op = 'UPDATE' then
+    new.state_version := coalesce(old.state_version, 0) + 1;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger bump_game_state_version
+before update on public.game_states
+for each row execute function public.bump_game_state_version();
 
 -- Enable Realtime for game_states_public (public display/player sync)
 alter publication supabase_realtime add table public.game_states_public;
