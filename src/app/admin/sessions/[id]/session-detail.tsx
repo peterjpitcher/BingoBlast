@@ -155,7 +155,9 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
   async function handleResetSession() {
       if (confirm("Reset session to Ready? This will WIPE ALL HISTORY (winners, calls) for this session. Use with caution!")) {
           setActionError(null);
-          const result = await resetSession(session.id);
+          // Wave 3 will replace this with a typed-confirm modal. For now we pass
+          // the literal 'RESET' to satisfy the new server-side confirmation guard.
+          const result = await resetSession(session.id, 'RESET');
           if (!result?.success) {
               setActionError(result?.error || "Failed to reset session.");
           } else {

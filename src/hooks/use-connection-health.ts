@@ -23,8 +23,8 @@ export interface UseConnectionHealthApi {
 export function useConnectionHealth(): UseConnectionHealthApi {
   const [state, dispatch] = useReducer(
     (s: HealthState, e: Parameters<typeof reduceHealth>[1]) => reduceHealth(s, e),
-    Date.now(),
-    initialHealthState,
+    null,
+    () => initialHealthState(Date.now()),
   );
   const [now, setNow] = useState(() => Date.now());
 

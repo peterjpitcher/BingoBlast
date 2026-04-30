@@ -2,9 +2,10 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
-import type { Database, GameType, WinStage, GameStatus, SessionStatus, UserRole } from '@/types/database'
+import type { Database, GameType, WinStage, GameStatus, UserRole } from '@/types/database'
 import type { ActionResult } from '@/types/actions'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
+import { validateGamePrizes } from '@/lib/prize-validation'
 
 type GameInsert = Database['public']['Tables']['games']['Insert']
 
@@ -80,11 +81,24 @@ export async function createGame(sessionId: string, _prevState: unknown, formDat
     return { success: false, error: 'Snowball games must be linked to a snowball pot.' }
   }
 
-  const prizes: Record<string, string> = {}
+  // Trim every prize before saving. Empty/whitespace-only values are dropped
+  // so the validation helper sees a clean view.
+  const prizes: Partial<Record<WinStage, string>> = {}
   stage_sequence.forEach((stage) => {
-    const prize = formData.get(`prize_${stage}`) as string
-    if (prize) prizes[stage] = prize
+    const raw = formData.get(`prize_${stage}`)
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (trimmed.length > 0) prizes[stage] = trimmed
+    }
   })
+
+  const validation = validateGamePrizes({ type, stage_sequence, prizes })
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: `${name}: prize required for ${validation.missingStages.join(', ')}`,
+    }
+  }
 
   const newGame: GameInsert = {
     session_id: sessionId,
@@ -115,26 +129,30 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  // 1. Fetch original game and session status
+  // 1. Fetch original game and the per-game live status. The lock is
+  // per-game (game_states.status), not session-level, so future not_started
+  // games inside a running session remain editable.
   const { data: originalGame, error: fetchGameError } = await supabase
     .from('games')
-    .select('type, snowball_pot_id, stage_sequence')
+    .select('type, snowball_pot_id, stage_sequence, prizes')
     .eq('id', gameId)
-    .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id' | 'stage_sequence'>>()
+    .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id' | 'stage_sequence' | 'prizes'>>()
 
   if (fetchGameError || !originalGame) {
     return { success: false, error: fetchGameError?.message || "Original game not found." }
   }
 
-  const { data: session, error: fetchSessionError } = await supabase
-    .from('sessions')
+  const { data: gameStateRow, error: gameStateError } = await supabase
+    .from('game_states')
     .select('status')
-    .eq('id', sessionId)
-    .single<{ status: SessionStatus }>()
+    .eq('game_id', gameId)
+    .maybeSingle<{ status: GameStatus }>()
 
-  if (fetchSessionError || !session) {
-    return { success: false, error: fetchSessionError?.message || "Session not found." }
+  if (gameStateError) {
+    return { success: false, error: gameStateError.message }
   }
+
+  const isLocked = gameStateRow ? gameStateRow.status !== 'not_started' : false
 
   const name = (formData.get('name') as string)?.trim()
   const game_index = Number.parseInt(formData.get('game_index') as string, 10)
@@ -162,25 +180,49 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
     return { success: false, error: 'Snowball games must be linked to a snowball pot.' }
   }
 
-  // 2. Enforce rules if session is running
-  if (session.status === 'running') {
-    if (type !== originalGame.type) {
-      return { success: false, error: "Cannot change game type while session is running." }
+  // Trim prizes before saving and validation.
+  const prizes: Partial<Record<WinStage, string>> = {}
+  stage_sequence.forEach((stage) => {
+    const raw = formData.get(`prize_${stage}`)
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (trimmed.length > 0) prizes[stage] = trimmed
     }
-    if ((type === 'snowball' ? snowball_pot_id : null) !== originalGame.snowball_pot_id) {
-      return { success: false, error: "Cannot change snowball pot while session is running." }
-    }
-    // Compare stage_sequence as JSON strings or deep equality
+  })
+
+  // 2. If the game has already started, lock the structural and prize fields.
+  // Reject any attempt to edit prizes, type, snowball_pot_id, or stage_sequence.
+  if (isLocked) {
+    const desiredSnowballPotId = type === 'snowball' ? snowball_pot_id : null
+    const originalPrizes = (originalGame.prizes as Partial<Record<WinStage, string>> | null) ?? {}
+
+    const lockedFields: string[] = []
+    if (type !== originalGame.type) lockedFields.push('type')
+    if (desiredSnowballPotId !== originalGame.snowball_pot_id) lockedFields.push('snowball_pot_id')
     if (JSON.stringify(stage_sequence) !== JSON.stringify(originalGame.stage_sequence)) {
-      return { success: false, error: "Cannot change stage sequence while session is running." }
+      lockedFields.push('stage_sequence')
+    }
+    if (JSON.stringify(prizes) !== JSON.stringify(originalPrizes)) {
+      lockedFields.push('prizes')
+    }
+
+    if (lockedFields.length > 0) {
+      return {
+        success: false,
+        error: `Cannot edit ${lockedFields.join(', ')} on a started game`,
+      }
     }
   }
 
-  const prizes: Record<string, string> = {}
-  stage_sequence.forEach((stage) => {
-    const prize = formData.get(`prize_${stage}`) as string
-    if (prize) prizes[stage] = prize
-  })
+  // 3. Validate prizes after the lock check (so the error message is the
+  // lock message, not a missing-prize message, when both apply).
+  const validation = validateGamePrizes({ type, stage_sequence, prizes })
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: `${name}: prize required for ${validation.missingStages.join(', ')}`,
+    }
+  }
 
   const { data: updatedGame, error } = await supabase
     .from('games')
@@ -189,9 +231,9 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
       game_index,
       background_colour,
       notes,
-      type, // Will be same as original if running
-      snowball_pot_id: type === 'snowball' ? snowball_pot_id : null, // Will be same as original if running
-      stage_sequence, // Will be same as original if running
+      type,
+      snowball_pot_id: type === 'snowball' ? snowball_pot_id : null,
+      stage_sequence,
       prizes,
     })
     .eq('id', gameId)
@@ -263,19 +305,38 @@ export async function deleteGame(gameId: string, sessionId: string): Promise<Act
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  // Check if game is in progress
-  const { data: gameState } = await supabase
+  // Allow deletion only when the game has no state row, OR the state row is
+  // 'not_started'. A missing row means the game has never been started.
+  const { data: gameState, error: gameStateError } = await supabase
     .from('game_states')
     .select('status')
     .eq('game_id', gameId)
-    .single<{ status: GameStatus }>()
+    .maybeSingle<{ status: GameStatus }>()
 
-  if (gameState?.status === 'in_progress') {
-    return { success: false, error: "Cannot delete a game that is currently in progress." }
+  if (gameStateError) {
+    return { success: false, error: gameStateError.message }
   }
 
-  if (gameState?.status === 'completed') {
-    return { success: false, error: "Cannot delete a completed game." }
+  if (gameState && gameState.status !== 'not_started') {
+    return {
+      success: false,
+      error: `Cannot delete a game with status ${gameState.status}.`,
+    }
+  }
+
+  // Reject deletion if the game has any recorded winners. This protects
+  // historical results even when the live state has been reset.
+  const { count: winnerCount, error: winnerCountError } = await supabase
+    .from('winners')
+    .select('id', { count: 'exact', head: true })
+    .eq('game_id', gameId)
+
+  if (winnerCountError) {
+    return { success: false, error: winnerCountError.message }
+  }
+
+  if ((winnerCount ?? 0) > 0) {
+    return { success: false, error: 'Cannot delete a game that has recorded winners.' }
   }
 
   const { error } = await supabase
@@ -309,15 +370,27 @@ export async function updateSessionStatus(sessionId: string, status: 'ready' | '
   return { success: true }
 }
 
-export async function resetSession(sessionId: string): Promise<ActionResult> {
+export async function resetSession(sessionId: string, confirmationText: string): Promise<ActionResult> {
   const supabase = await createClient()
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  // Check if session is running
+  // Read the session so we can validate the typed confirmation against the
+  // session's name. Either 'RESET' or the session name is accepted.
+  const { data: session, error: sessionError } = await supabase
+    .from('sessions')
+    .select('id, name')
+    .eq('id', sessionId)
+    .single<{ id: string; name: string }>()
 
+  if (sessionError || !session) {
+    return { success: false, error: sessionError?.message || 'Session not found.' }
+  }
 
-  // Removed blocking check for running session to allow "Unlock" functionality
+  const typed = (confirmationText ?? '').trim()
+  if (typed !== 'RESET' && typed !== session.name) {
+    return { success: false, error: 'Type RESET or the session name to confirm.' }
+  }
 
   // 1. Get all game IDs for this session to clean up game_states
   const { data: games } = await supabase
@@ -328,7 +401,7 @@ export async function resetSession(sessionId: string): Promise<ActionResult> {
   if (games && games.length > 0) {
     const gameIds = games.map((g: { id: string }) => g.id)
 
-    // 2. Delete game_states
+    // 2. Delete game_states (idempotent: a missing row is fine).
     const { error: deleteStatesError } = await supabase
       .from('game_states')
       .delete()
@@ -339,7 +412,7 @@ export async function resetSession(sessionId: string): Promise<ActionResult> {
     }
   }
 
-  // 3. Delete winners
+  // 3. Delete winners (idempotent).
   const { error: deleteWinnersError } = await supabase
     .from('winners')
     .delete()

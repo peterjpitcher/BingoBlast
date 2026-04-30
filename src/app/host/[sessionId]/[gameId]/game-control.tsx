@@ -648,10 +648,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleRecordWinner = async () => {
         if (!isController) return;
         setActionError(null);
-        if (!winnerName.trim()) {
-            setActionError("Winner name cannot be empty.");
-            return;
-        }
         const currentStage = currentStageName;
         if (!currentStage) {
             setActionError("Current stage is not available for this game.");
@@ -662,9 +658,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             sessionId,
             gameId,
             currentStage,
-            winnerName,
             prizeDescription,
-            currentGameState.numbers_called_count,
             prizeGiven,
             false,
             snowballEligible
@@ -1282,20 +1276,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     <Button
                         variant="primary"
                         onClick={async () => {
-                            if (!winnerName.trim()) {
-                                setActionError("Winner name required.");
-                                return;
-                            }
-
-                            // Force record as snowball jackpot
+                            // Force record as snowball jackpot. Winner is always
+                            // anonymous on the public surfaces; the action sets
+                            // winner_name='Anonymous' server-side.
                             const result = await recordWinner(
                                 sessionId,
                                 gameId,
                                 'Full House', // Assume Snowball is always FH
-                                winnerName,
                                 prizeDescription,
-                                currentGameState.numbers_called_count,
-                                true, // Prize given immediately? Assume yes for manual award or make optional. Let's default true for "Close out".
+                                true, // Prize given immediately for manual close-out.
                                 true, // Force snowball jackpot override for manual award path.
                                 true
                             );

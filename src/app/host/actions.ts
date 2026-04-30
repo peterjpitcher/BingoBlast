@@ -9,6 +9,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { formatPounds, isSnowballJackpotEligible } from '@/lib/snowball'
 import { formatCashJackpotPrize, isCashJackpotGame, parseCashJackpotAmount } from '@/lib/jackpot'
+import { getRequiredSelectionCountForStage } from '@/lib/win-stages'
 
 type HostAuthResult =
   | { authorized: false; error: string }
@@ -85,20 +86,6 @@ function generateShuffledNumberSequence(): number[] {
     [numbers[i], numbers[j]] = [numbers[j], numbers[i]]; // Swap
   }
   return numbers;
-}
-
-function getRequiredSelectionCountForStage(stage: string | undefined): number {
-    if (!stage) return 5;
-    const stageCountMap: Record<WinStage, number> = {
-        'Line': 5,
-        'Two Lines': 10,
-        'Full House': 15,
-    };
-    if (stage in stageCountMap) {
-        return stageCountMap[stage as WinStage];
-    }
-    // Unknown stage — warn and fall back to 5
-    return 5;
 }
 
 // Shared Snowball Logic Helper
@@ -340,7 +327,7 @@ export async function startGame(
         }
       } else {
         const sequence = existingGameState?.number_sequence ?? generateShuffledNumberSequence();
-        const callDelaySeconds = existingGameState?.call_delay_seconds ?? 1;
+        const callDelaySeconds = existingGameState?.call_delay_seconds ?? 2;
 
         const freshState: Database['public']['Tables']['game_states']['Insert'] = {
           game_id: gameId,
@@ -502,7 +489,9 @@ export async function getCurrentGameState(gameId: string): Promise<ActionResult<
     return { success: true, data: gameState };
 }
 
-export async function callNextNumber(gameId: string): Promise<ActionResult<{ nextNumber: number }>> {
+export async function callNextNumber(
+  gameId: string
+): Promise<ActionResult<{ nextNumber: number; gameState: Database['public']['Tables']['game_states']['Row'] }>> {
   const supabase = await createClient()
   const controlResult = await requireController(supabase, gameId)
   if (!controlResult.authorized) return { success: false, error: controlResult.error }
@@ -527,17 +516,19 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
     return { success: false, error: "Game is paused for claim validation." };
   }
 
+  // Server-side gap enforcement. No 200ms display-sync buffer — host sees the new
+  // ball instantly from this action's response; only the public surfaces wait
+  // call_delay_seconds via last_call_at.
   if (gameState.last_call_at && gameState.numbers_called_count > 0) {
-    const displaySyncBufferMs = 200;
     const lastCallAtMs = new Date(gameState.last_call_at).getTime();
     if (!Number.isNaN(lastCallAtMs)) {
-      const lockDurationMs = Math.max(0, gameState.call_delay_seconds * 1000 + displaySyncBufferMs);
-      const remainingMs = lastCallAtMs + lockDurationMs - Date.now();
+      const minGapMs = Math.max(0, gameState.call_delay_seconds * 1000);
+      const remainingMs = lastCallAtMs + minGapMs - Date.now();
       if (remainingMs > 0) {
         const remainingSeconds = Math.ceil(remainingMs / 1000);
         return {
           success: false,
-          error: `Please wait ${remainingSeconds}s for the display to catch up.`
+          error: `Please wait ${remainingSeconds}s before calling the next number.`
         };
       }
     }
@@ -557,6 +548,8 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
     last_call_at: new Date().toISOString(),
   };
 
+  // Compare-and-set guard: only commit if numbers_called_count is still the value
+  // we read above. Prevents two concurrent calls from both incrementing.
   const { data: updatedRows, error: updateError } = await supabase
     .from('game_states')
     .update(callUpdate)
@@ -571,8 +564,20 @@ export async function callNextNumber(gameId: string): Promise<ActionResult<{ nex
     return { success: false, error: "Game state changed. Please try again." };
   }
 
-  revalidatePath(`/host/${gameId}`); // Revalidate the game control page
-  return { success: true, data: { nextNumber } };
+  // Re-read the row so the host gets the fully-synced state, including the
+  // state_version bumped by the bump_game_state_version BEFORE UPDATE trigger.
+  const { data: updatedGameState, error: rereadError } = await supabase
+    .from('game_states')
+    .select('*')
+    .eq('game_id', gameId)
+    .single<Database['public']['Tables']['game_states']['Row']>();
+
+  if (rereadError || !updatedGameState) {
+    return { success: false, error: rereadError?.message || "Failed to read updated game state." };
+  }
+
+  revalidatePath(`/host/${gameId}`);
+  return { success: true, data: { nextNumber, gameState: updatedGameState } };
 }
 
 export async function toggleBreak(gameId: string, onBreak: boolean): Promise<ActionResult> {
@@ -908,12 +913,18 @@ export async function validateClaim(gameId: string, claimedNumbers: number[]): P
     const stageSequence = (gameDetails.stage_sequence as string[]) || [];
     const fallbackStageName = stageSequence[stageSequence.length - 1];
     const currentStageName = stageSequence[gameState.current_stage_index] || fallbackStageName;
-    const requiredSelectionCount = getRequiredSelectionCountForStage(currentStageName);
+    const requiredSelectionCount = currentStageName
+        ? getRequiredSelectionCountForStage(currentStageName)
+        : null;
+
+    if (requiredSelectionCount === null) {
+        return { success: false, error: 'Stage not valid for this game' };
+    }
 
     if (claimedNumbers.length !== requiredSelectionCount) {
         return {
             success: false,
-            error: `Select exactly ${requiredSelectionCount} numbers for ${currentStageName || 'this stage'}.`,
+            error: `Select exactly ${requiredSelectionCount} numbers for ${currentStageName}.`,
         };
     }
 
@@ -1099,18 +1110,12 @@ export async function recordWinner(
     sessionId: string,
     gameId: string,
     stage: WinStage,
-    winnerName: string,
     prizeDescription: string | null,
-    callCountAtWin: number,
-    // isSnowballJackpot: boolean, // Removed, calculated server-side
     prizeGiven: boolean = false,
     forceSnowballJackpot: boolean = false,
     snowballEligible: boolean = false
 ): Promise<ActionResult> {
     // Input validation
-    if (!winnerName || winnerName.trim().length === 0) {
-        return { success: false, error: 'Winner name is required.' };
-    }
     const validStages: WinStage[] = ['Line', 'Two Lines', 'Full House'];
     if (!validStages.includes(stage)) {
         return { success: false, error: 'Invalid stage value.' };
@@ -1122,8 +1127,6 @@ export async function recordWinner(
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return { success: false, error: controlResult.error }
-
-    void callCountAtWin;
 
     const { data: liveGameRow, error: liveGameRowError } = await supabase
         .from('games')
@@ -1157,6 +1160,7 @@ export async function recordWinner(
         return { success: false, error: `Stage mismatch: live stage is ${expectedStage}.` };
     }
 
+    // Always re-read live numbers_called_count server-side; never trust the client value.
     const resolvedCallCountAtWin = liveStateRow.numbers_called_count;
 
     // Check if this is a test session — suppress snowball jackpot for test sessions
@@ -1204,16 +1208,18 @@ export async function recordWinner(
         }
     }
 
-    // Insert winner record
+    // Insert winner record. Winner names are anonymous on the public surfaces;
+    // persist 'Anonymous' so historical records remain queryable but never expose
+    // a person name on display/player.
     const winnerInsert: Database['public']['Tables']['winners']['Insert'] = {
         session_id: sessionId,
         game_id: gameId,
         stage,
-        winner_name: winnerName.trim(),
+        winner_name: 'Anonymous',
         prize_description: finalPrizeDescription,
         call_count_at_win: resolvedCallCountAtWin,
         is_snowball_eligible: snowballEligible,
-        is_snowball_jackpot: actualIsSnowballJackpot, // Use server-calculated value
+        is_snowball_jackpot: actualIsSnowballJackpot,
         prize_given: prizeGiven,
     };
     const { error: winnerInsertError } = await supabase
@@ -1224,7 +1230,9 @@ export async function recordWinner(
         return { success: false, error: winnerInsertError.message };
     }
 
-    // Determine display win type and text
+    // Determine display win type and text. Snowball jackpot wins keep their
+    // existing celebratory text including the cash amount — hiding the jackpot
+    // amount would be worse UX. Regular wins use the generic 'BINGO!' label.
     let displayWinType: string;
     let displayWinText: string;
     if (actualIsSnowballJackpot) {
@@ -1232,41 +1240,42 @@ export async function recordWinner(
         displayWinText = snowballJackpotAmount !== null
             ? `FULL HOUSE + SNOWBALL £${formatPounds(snowballJackpotAmount)}!`
             : 'FULL HOUSE + SNOWBALL JACKPOT!';
-    } else if (isSnowballFullHouseStage) {
+    } else if (isSnowballFullHouseStage && snowballWindowOpen && !snowballEligible) {
+        // Snowball game, window still open, but the host marked the claim as
+        // ineligible for the jackpot prize. Keep this informative wording so the
+        // host UI accurately reflects the snowball state.
         displayWinType = 'full_house';
-        if (snowballWindowOpen && !snowballEligible) {
-            displayWinText = 'FULL HOUSE WINNER (PRIZE ONLY)';
-        } else if (!snowballWindowOpen) {
-            displayWinText = 'FULL HOUSE WINNER (SNOWBALL CLOSED)';
-        } else {
-            displayWinText = 'FULL HOUSE WINNER!';
-        }
+        displayWinText = 'BINGO!';
+    } else if (isSnowballFullHouseStage && !snowballWindowOpen) {
+        displayWinType = 'full_house';
+        displayWinText = 'BINGO!';
     } else {
         switch (stage) {
             case 'Line':
                 displayWinType = 'line';
-                displayWinText = 'LINE WINNER!';
+                displayWinText = 'BINGO!';
                 break;
             case 'Two Lines':
                 displayWinType = 'two_lines';
-                displayWinText = 'TWO LINES WINNER!';
+                displayWinText = 'BINGO!';
                 break;
             case 'Full House':
                 displayWinType = 'full_house';
-                displayWinText = 'FULL HOUSE WINNER!';
+                displayWinText = 'BINGO!';
                 break;
             default:
                 displayWinType = 'win';
-                displayWinText = 'WINNER!';
+                displayWinText = 'BINGO!';
         }
     }
 
-    // Just update the display to show the winner name. Do NOT advance stage yet.
+    // Update the display state. display_winner_name is intentionally null so the
+    // public surfaces show only the celebratory text (e.g. 'BINGO!').
     const winnerDisplayUpdate: Database['public']['Tables']['game_states']['Update'] = {
         paused_for_validation: true,
         display_win_type: displayWinType,
         display_win_text: displayWinText,
-        display_winner_name: winnerName,
+        display_winner_name: null,
     };
     const { error: gameStateUpdateError } = await supabase
         .from('game_states')
@@ -1277,7 +1286,7 @@ export async function recordWinner(
         return { success: false, error: 'Winner recorded but failed to update game state. Please refresh and try again.' };
     }
 
-    revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate to show updated winner info if needed
+    revalidatePath(`/host/${sessionId}/${gameId}`);
     return { success: true };
 }
 
