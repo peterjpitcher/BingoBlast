@@ -3,7 +3,7 @@
 import React, { Suspense, useState, useTransition } from 'react';
 import Image from 'next/image';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { login, signup } from './actions';
+import { login } from './actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,7 @@ function LoginPageContent() {
   const searchParams = useSearchParams();
   const next = searchParams.get('next') || '/';
   const router = useRouter();
-  
+
   const [isPending, startTransition] = useTransition();
   const missingSupabaseConfig = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const [error, setError] = useState<string | null>(
@@ -20,18 +20,16 @@ function LoginPageContent() {
       ? "Configuration Error: Missing Supabase Environment Variables. Please check your .env.local file."
       : null
   );
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
-    
+
     const formData = new FormData(event.currentTarget);
     formData.append('next', next);
 
     startTransition(async () => {
-      const action = mode === 'login' ? login : signup;
-      const result = await action(formData);
+      const result = await login(formData);
       if (!result?.success) {
         setError(result?.error || "Authentication failed. Please try again.");
       } else if (result.redirectTo) {
@@ -43,10 +41,10 @@ function LoginPageContent() {
   return (
     <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 bg-gradient-to-b from-[#005131] to-[#003f27]">
       <div className="mb-8 relative w-56 h-24">
-         <Image 
-          src="/the-anchor-pub-logo-white-transparent.png" 
-          alt="The Anchor" 
-          fill 
+         <Image
+          src="/the-anchor-pub-logo-white-transparent.png"
+          alt="The Anchor"
+          fill
           className="object-contain"
           priority
         />
@@ -55,7 +53,7 @@ function LoginPageContent() {
       <Card className="w-full max-w-md border-[#1f7c58] shadow-2xl shadow-black/30 bg-[#005131]/90 backdrop-blur-sm">
         <CardHeader>
           <CardTitle className="text-center text-2xl text-[#f5f1e6] font-bold">
-            {mode === 'login' ? 'Welcome Back' : 'Join the Party'}
+            Welcome Back
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -64,18 +62,18 @@ function LoginPageContent() {
               {error}
             </div>
           )}
-          
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium text-emerald-50/90" htmlFor="email">
                 Email address
               </label>
-              <Input 
+              <Input
                 id="email"
-                name="email" 
-                type="email" 
-                placeholder="Enter email" 
-                required 
+                name="email"
+                type="email"
+                placeholder="Enter email"
+                required
                 className="bg-[#003f27]/70 border-[#2f8f6a] focus:border-[#a57626]"
               />
             </div>
@@ -84,33 +82,25 @@ function LoginPageContent() {
               <label className="text-sm font-medium text-emerald-50/90" htmlFor="password">
                 Password
               </label>
-              <Input 
+              <Input
                 id="password"
-                name="password" 
-                type="password" 
-                placeholder="Password" 
-                required 
+                name="password"
+                type="password"
+                placeholder="Password"
+                required
                 className="bg-[#003f27]/70 border-[#2f8f6a] focus:border-[#a57626]"
               />
             </div>
 
             <div className="pt-2 space-y-3">
-              <Button 
-                type="submit" 
-                className="w-full" 
+              <Button
+                type="submit"
+                className="w-full"
                 size="lg"
                 isLoading={isPending}
               >
-                {mode === 'login' ? 'Sign In' : 'Sign Up'}
+                Sign In
               </Button>
-              
-              <button
-                type="button"
-                className="w-full text-sm text-emerald-100/80 hover:text-[#f5f1e6] transition-colors"
-                onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
-              >
-                {mode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
-              </button>
             </div>
           </form>
         </CardContent>

@@ -1,14 +1,15 @@
-# CLAUDE.md — BingoBlast
+# CLAUDE.md — Anchor Bingo
 
 This file provides project-specific guidance. See the workspace-level `CLAUDE.md` one directory up for shared conventions.
 
 ## Quick Profile
 
-- **Framework**: Next.js 16.1, React 19.2
+- **Framework**: Next.js 16.1, React 19.2 (App Router)
+- **Styling**: Tailwind CSS v4 with local UI primitives in `src/components/ui/`
 - **Test runner**: Node.js native test runner (see `npm test`)
-- **Database**: Supabase (PostgreSQL + RLS)
-- **Key integrations**: QR codes (qrcode.react), Video player (react-player), No-sleep library (prevent screen dimming), Bingo game logic
-- **Size**: ~43 files in src/
+- **Database**: Supabase (PostgreSQL + RLS + Realtime)
+- **Key integrations**: `@supabase/ssr` (cookie-based SSR), `qrcode.react` (display QR for player follower URL), `nosleep.js` (screen-keep-awake on host/display), `zod` (server-action input validation)
+- **Size**: ~43 files in `src/`
 
 ## Commands
 
@@ -20,40 +21,63 @@ npm run lint             # ESLint check
 npm test                 # Node.js native test runner (node --test --import tsx)
 ```
 
-Note: Uses native Node.js test runner (no Jest/Vitest). Tests are minimal.
+Note: Uses native Node.js test runner (no Jest/Vitest). Tests cover the shared lib helpers — UI is not unit-tested.
+
+## What This Application Is
+
+A **90-ball pub bingo control system** for The Anchor. There are no digital cards, no per-player marking, and no QR-driven join into a card. Players use physical paper bingo books at the table. The app exists to:
+
+1. Help the host call numbers and pace the game.
+2. Manage the snowball jackpot across sessions.
+3. Validate winners on demand.
+4. Drive a public big-screen TV display showing the live game state.
+5. Drive a public mobile follower screen for guests at the table.
+
+Three classes of user:
+
+| User | Routes | Auth |
+|------|--------|------|
+| Admin / host (staff) | `/admin/*`, `/host/*` | Supabase Auth (cookie session) |
+| Big-screen pub TV | `/display`, `/display/[sessionId]` | Public |
+| Guest mobile follower | `/player/[sessionId]` | Public, guest-friendly |
 
 ## Architecture
 
-**Route Structure**: App Router optimized for mobile bingo gameplay. Key sections:
-- `/` — Bingo lobby and game selection
-- `/game/[id]` — Live bingo game (real-time card marking)
-- `/admin` — Host view (manage games, call numbers)
-- `/api/` — Real-time game state and number calling
+**Route structure** (App Router):
 
-**Auth**: Supabase Auth optional (guest mode supported). Players can join without creating account. Hosts use Supabase Auth.
+| URL | Purpose |
+|-----|---------|
+| `/` | Public landing page |
+| `/login` | Staff login (invite-only — no public sign-up) |
+| `/admin` | Sessions list |
+| `/admin/sessions/[id]` | Session detail / game CRUD |
+| `/admin/snowball` | Snowball pot management |
+| `/admin/history` | Past sessions / winners |
+| `/admin/backup` | Export tool |
+| `/host` | Host dashboard |
+| `/host/[sessionId]/[gameId]` | Live host control |
+| `/display` | Auto-redirects to active session's display |
+| `/display/[sessionId]` | Big-screen TV view |
+| `/player/[sessionId]` | Mobile follower view |
 
-**Database**: Supabase PostgreSQL. Minimal schema: games, cards, called_numbers, scores.
+**Auth proxy**: `src/proxy.ts` registers Next.js middleware via `proxy()` and a tightly scoped matcher running `updateSession()` (in `src/utils/supabase/middleware.ts`) only on `/admin/:path*`, `/host/:path*`, and `/login`. Public routes (`/display/*`, `/player/*`, `/`) bypass the middleware entirely. Defence in depth: every protected `page.tsx` server component also calls `supabase.auth.getUser()` and redirects to `/login` if absent.
 
-**Key Integrations**:
-- **QR Codes**: Share game codes and join links via QR
-- **react-player**: Optional video/audio for game theme or number announcements
-- **nosleep.js**: Prevent device screen from dimming during gameplay
-- **Real-time**: Supabase Realtime or polling for number updates
+**Database**: Supabase PostgreSQL. Core tables: `sessions`, `games`, `game_states`, `game_states_public`, `winners`, `snowball_pots`, `snowball_pot_history`, `profiles`. Both `game_states` and `game_states_public` carry a `state_version bigint` bumped by the `bump_game_state_version` BEFORE UPDATE trigger on every write; the `sync_game_states_public()` trigger keeps the public mirror in step.
 
-**Data Flow**: Host creates game → players join via code/QR → host calls numbers → player cards update in real-time → first player to complete card wins.
+**Data flow**: Admin defines a session and games. Host opens a game, calls numbers (server-side gap-enforced), pauses for validation, records winners. Display and player pages subscribe to `game_states_public` via Supabase Realtime with polling fallback, using `state_version` to discard stale payloads.
 
 ## Key Files
 
 | Path | Purpose |
 |------|---------|
-| `src/types/` | TypeScript definitions (game, card, player, number) |
-| `src/lib/` | Bingo logic, game state, validation |
-| `src/app/` | Next.js routes (lobby, game, admin) |
-| `src/components/` | Bingo card, number announcer, leaderboard |
-| `src/hooks/` | Custom hooks (useGameState, useCard) |
-| `src/utils/` | Utilities (QR generation, card generation, scoring) |
-| `src/proxy.ts` | Supabase client initialization |
-| `supabase/migrations/` | Database schema (games, cards, numbers) |
+| `src/types/` | Shared TS types incl. generated `Database` |
+| `src/lib/` | Shared logic — `connection-health`, `game-state-version`, `prize-validation`, `win-stages`, `jackpot`, `snowball`, `log-error`, `utils` |
+| `src/hooks/` | `use-connection-health`, `wake-lock` |
+| `src/components/` | `connection-banner`, `header`, `layout-content`, `ui/*` |
+| `src/app/` | Next.js routes (admin, host, display, player, login, api/setup) |
+| `src/utils/supabase/` | Supabase client variants — `client.ts`, `server.ts`, `middleware.ts` |
+| `src/proxy.ts` | Next.js middleware export — calls `updateSession()` on auth routes |
+| `supabase/migrations/` | DB schema (sessions, games, game_states, winners, snowball_pots, etc.) |
 
 ## Environment Variables
 
@@ -62,129 +86,112 @@ Note: Uses native Node.js test runner (no Jest/Vitest). Tests are minimal.
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (public) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key (public) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service-role key (server-only) |
-| `SETUP_SECRET` | Secret key for admin setup endpoint (prevent unauthorized game creation) |
+| `SETUP_SECRET` | Secret for `/api/setup` admin bootstrap endpoint |
+| `NEXT_PUBLIC_SITE_URL` | Public origin (e.g. `https://bingo.theanchor.pub`) — fallback for the player-follower QR URL when request headers are unavailable |
 
 ## Project-Specific Rules / Gotchas
 
 ### Game Flow
-1. **Host creates game**: Game ID generated, empty card deck created
-2. **Players join**: Scan QR code or enter code → bingo card generated (randomized 75-ball or 90-ball UK)
-3. **Host calls numbers**: Host interface shows random number generator → number broadcast to all players in real-time
-4. **Player marks card**: Tap number on card to mark (tap again to unmark)
-5. **Win detection**: System detects horizontal, vertical, diagonal line (regular) or all squares (coverall)
-6. **Winner confirmation**: Host confirms winner → game ends → leaderboard shown
 
-### Bingo Card Generation
-- Standard 75-ball (5x5) or 90-ball (UK) format
-- Numbers randomly distributed (no duplicates on single card)
-- Each column has range: B (1-15), I (16-30), N (31-45), G (46-60), O (61-75)
-- Center square always FREE in 75-ball
-- Store card state (marked/unmarked squares) in Supabase or browser state
+1. **Admin** creates a session, then defines games inside it (regular line / two lines / full house, optionally with a snowball jackpot).
+2. **Host** picks a session/game from `/host`, starts it, and the host page takes the controller heartbeat lock.
+3. **Host** clicks "Call next number". The server enforces a delay between calls (`call_delay_seconds`) and uses a compare-and-set guard against the previous `numbers_called_count` to prevent double-calls under contention.
+4. When a punter shouts BINGO, the host pauses for validation, types the claimed numbers, and the server validates them against the called set including the most recent ball.
+5. On a valid win, the host records the winner (anonymously — the app does not store player names) and the snowball pot updates if applicable.
+6. After the final stage of the final game, the host ends the game/session.
 
-### Win Detection
-- Check for: horizontal line, vertical line, diagonal, four corners, coverall
-- Validate win before awarding points
-- Support multiple winners (tie scenario)
-- Log timestamp of win for leaderboard sorting
+### What This App Does NOT Do
 
-### Real-Time Updates
-- Use Supabase Realtime subscriptions or polling (2-3 second intervals)
-- Broadcast number call to all players in game
-- Update called_numbers table with timestamp
-- Cards update optimistically (tap to mark, sync with server)
+- It does **not** generate digital bingo cards.
+- It does **not** mark squares for players.
+- It does **not** support a "join via QR" card-issue flow. The QR on the display goes to the read-only **follower** view of the session, which simply mirrors what's already on the big screen.
+- It does **not** support 75-ball bingo. Only 90-ball.
+- It does **not** broadcast number announcements with audio (no `react-player`).
 
-### QR Codes
-- Generate QR for game join URL: `yourdomain.com/game/[game-id]?join=true`
-- Display QR on host screen for players to scan
-- Also provide text code (e.g., "BINGO123") for manual entry
-- QR size: 200x200px or larger on mobile
+### Win Detection (Server-Side Validation)
 
-### Mobile Optimization
-- Full-screen game view (no navigation bar during play)
-- Landscape and portrait orientation support
-- Large touch targets for number marking (min 40x40px)
-- No hover states (use active/focus instead)
+- The host pauses the game and types in the punter's claimed numbers from their paper book.
+- `validateClaim` server action: confirms the claimed list includes the most recently called number, then checks every claimed number is in the called set. The required claim count comes from `getRequiredSelectionCountForStage` in `src/lib/win-stages.ts`.
+- The action returns `{ valid: true }` or `{ valid: false, invalidNumbers }`. Multiple winners per stage are valid (tie scenario).
 
-### Screen Keep-Awake
-- Use `nosleep.js` library to prevent screen dimming
-- Enable on game start: `enable()` when player joins
-- Disable on game end or pause
-- Graceful fallback if feature not supported
+### Realtime Updates
 
-### react-player Integration
-- Optional audio/video for number announcements
-- Mute by default (user-controlled)
-- Support YouTube, MP3, or local video URLs
-- Stream or embed announcements (e.g., "Number 47: Three and four, 44")
+- Supabase Realtime on `game_states_public` plus a polling fallback on a short interval. The "Reconnecting…" banner (`src/components/connection-banner.tsx`) is shown when both stall.
+- **Use `state_version` for ordering, never `updated_at`.** `isFreshGameState()` in `src/lib/game-state-version.ts` is the canonical comparator for incoming payloads.
+
+### Display QR
+
+- The big-screen display renders a QR via `qrcode.react` pointing at `/player/[sessionId]` so a punter at the table can scan it on their phone and follow along.
+- The QR URL is built from the `Host` header where available, falling back to `NEXT_PUBLIC_SITE_URL` in production.
+
+### Mobile / Display Optimisation
+
+- Host, display, and player game pages use `LayoutContent` (client component) to hide app chrome.
+- `wake-lock.ts` (`nosleep.js`-backed) keeps the screen awake on host and display during a live game.
 
 ### Game State Management
-- Minimal server state (just called numbers)
-- Card state can be client-side (localStorage) or server-side (Supabase)
-- Host view needs list of all cards for current game
-- Player count and join status tracked in Supabase
+
+- Server is the source of truth for `game_states` and the public mirror.
+- `getCurrentGameState` and Realtime payloads return the full row including `state_version`.
+- Host actions persist all changes through `game_states` writes; the trigger maintains `game_states_public` automatically.
 
 ### Database Schema
-- `games`: id, host_id, code, started_at, ended_at, winner_id, game_type (75-ball/90-ball)
-- `cards`: id, game_id, player_id, numbers (JSON array), marked (JSON boolean array), created_at
-- `called_numbers`: id, game_id, number, called_at
-- `leaderboard`: id, game_id, player_id, position, marked_at (win timestamp)
+
+| Table | Purpose |
+|-------|---------|
+| `sessions` | Top-level container (status: ready / running / completed) |
+| `games` | Games within a session (type, stages, prizes, snowball pot link) |
+| `game_states` | Live state per game (host/admin readable, has `state_version`) |
+| `game_states_public` | Public-readable mirror of `game_states` (has `state_version`, kept in sync by `sync_game_states_public()`) |
+| `winners` | Audit row per recorded win (`winner_name = 'Anonymous'`) |
+| `snowball_pots` / `snowball_pot_history` | Cross-session jackpot pots and audit trail |
+| `profiles` | User role lookup (`'admin'` vs others) |
 
 ### Security
-- Validate game code before allowing join
-- RLS: players can only see own card and public game info
-- Host authentication required to call numbers
-- Rate limit number calling (prevent spam)
-- SETUP_SECRET required for admin endpoints (set in env, validate on server)
+
+- Staff sign-up is **disabled** — the login page does not offer a sign-up toggle. New staff accounts are created out-of-band by an admin.
+- RLS is on for all tables. Public clients only see `game_states_public`.
+- Host actions re-verify auth and check `profiles.role`. `recordWinner` uses the service-role client for the privileged insert.
+- Server-side number-call gap enforcement (don't move client-side).
+- `validateClaim` re-reads the called-numbers list server-side; never trusts client input.
+- Delete-protection: started/completed games cannot be deleted; sessions with non-`not_started` games or recorded winners cannot be deleted.
+- `SETUP_SECRET` required for `/api/setup`.
 
 ### Performance
-- Load only current game data (not all games)
-- Lazy-load leaderboard/results
-- Preload next game when host presses "continue"
-- QR generation fast (< 100ms)
-- Keep game state compact (avoid sending full card to players repeatedly)
 
-### Guest Mode
-- Allow players to join without auth (optional)
-- Store player name as session data
-- Use session ID as player_id (not user_id)
-- Clear session data when game ends or browser closes
+- Public routes deliberately bypass the proxy/middleware to keep the display + player pages fast.
+- The `state_version`-based stale-payload check prevents UI thrash when Realtime and polling overlap.
+
+### Anonymous Winners
+
+- `winners.winner_name` is always `'Anonymous'`. There is no UI input for a winner name and no plan to add one.
 
 ### Accessibility
-- Bingo card has clear grid layout
-- Number marking toggles (not keyboard-only)
-- Color not sole indicator (use checkmarks)
-- Win announcements audible (if using react-player)
-- Focus visible on all buttons
+
+- Display has high-contrast number readout for the back of the room.
+- All interactive elements have visible focus styles.
+- "Reconnecting…" banner uses `aria-live="polite"`.
 
 ### Testing
-- Native Node.js test runner (no Jest/Vitest)
-- Test card generation logic (randomness, no duplicates)
-- Test win detection (all patterns)
-- Test QR code generation
-- Minimal test coverage (business logic only)
+
+- Native Node.js test runner. Tests live alongside source: `src/lib/*.test.ts`.
+- Existing coverage: `connection-health`, `game-state-version`, `log-error`, `prize-validation`, `win-stages`, plus a handful of small utility tests.
+- Mock Supabase — don't hit a real database from tests.
 
 ### Deployment
-- Environment variables required: Supabase URL/keys, SETUP_SECRET
-- Enable Supabase Realtime for live number updates
-- Consider CDN caching for static assets (QR generators, player avatars)
-- Monitor real-time connection performance
+
+- Required env: Supabase URL + keys, `SETUP_SECRET`, `NEXT_PUBLIC_SITE_URL` (for the production join QR fallback).
+- Enable Supabase Realtime on `game_states_public`.
 
 ### Common Patterns
-- Game creation: host enters name → game_id generated → display QR → wait for players
-- Player join: scan QR or enter code → card generated → card displayed
-- Game play: host calls number → players mark cards → check for wins → leaderboard
-- Multiple games: support multiple concurrent games with different hosts
+
+- Admin → game CRUD → host flow → display + player follower views.
+- Concurrent sessions are not supported in practice — a single live session at a time.
 
 ### Gotchas
-- QR code URL must include full domain (not relative path)
-- Card marking state must sync with server (prevent cheating)
-- Win detection must be fast (<500ms) to feel responsive
-- Nosleep.js doesn't work on all devices/browsers (graceful fallback)
-- Real-time updates may lag on poor network (show loading indicator)
-- Bingo card numbers are randomized per card (standard behavior)
 
-### Guest Session Management
-- Use anonymous Supabase auth or custom session ID
-- Store in `player_sessions` table with expiry
-- Clean up expired sessions periodically
-- Allow guest to convert to registered account after game
+- **Don't broaden the proxy matcher.** It is intentionally `/admin/:path*`, `/host/:path*`, `/login` only. Adding `/display/*` or `/player/*` makes a Supabase round-trip on every TV / phone refresh.
+- **Don't reintroduce a sign-up affordance.** Staff are invite-only.
+- **Don't trust `updated_at` for ordering.** Use `state_version`.
+- **Don't store player-identifying info.** Winners are anonymised by policy.
+- **Don't drop the server-side number-call gap.** It's the only thing preventing double-calls under contention.

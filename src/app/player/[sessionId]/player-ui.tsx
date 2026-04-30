@@ -10,6 +10,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
 import { useWakeLock } from '@/hooks/wake-lock';
 import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining } from '@/lib/snowball';
+import { isFreshGameState } from '@/lib/game-state-version';
+import { useConnectionHealth } from '@/hooks/use-connection-health';
+import { ConnectionBanner } from '@/components/connection-banner';
+import type { RealtimeStatus } from '@/lib/connection-health';
+import { logError } from '@/lib/log-error';
 
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
@@ -23,6 +28,14 @@ interface PlayerUIProps {
   initialGameState: GameState | null;
   initialPrizeText: string;
 }
+
+// Explicit narrow column lists keep public surfaces from leaking unintended
+// fields and document exactly what the UI consumes from each table.
+const SESSION_SELECT = 'id, name, status, active_game_id';
+const GAME_SELECT =
+  'id, session_id, game_index, name, type, stage_sequence, background_colour, prizes, snowball_pot_id';
+const GAME_STATE_PUBLIC_SELECT =
+  'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -43,13 +56,27 @@ export default function PlayerUI({
   const [currentNumberDelayed, setCurrentNumberDelayed] = useState<number | null>(null);
   const [delayedNumbers, setDelayedNumbers] = useState<number[]>([]);
   const [showFullHistory, setShowFullHistory] = useState(false);
+  // Tracks whether we have applied any usable game state (initial render or
+  // first poll/realtime payload). Used to gate the "Connecting to game…" skeleton.
+  const [hasLoaded, setHasLoaded] = useState<boolean>(initialActiveGameState != null);
 
   const numberCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const currentGameStateRef = useRef<GameState | null>(currentGameState);
 
+  // Connection health: drives the reconnecting banner + auto-refresh.
+  const health = useConnectionHealth();
+  const { markPollSuccess, markPollFailure, markRealtimeStatus } = health;
+
+  // Polling guards: monotonic sequence + in-flight flag prevent stale poll
+  // results from clobbering newer state when responses arrive out-of-order.
+  const pollSeqRef = useRef(0);
+  const pollInFlightRef = useRef(false);
+
+  // Stable ref so subscription callbacks can read the active game without
+  // re-running this effect every time the game object identity changes.
+  const currentActiveGameRef = useRef(currentActiveGame);
   useEffect(() => {
-    currentGameStateRef.current = currentGameState;
-  }, [currentGameState]);
+    currentActiveGameRef.current = currentActiveGame;
+  }, [currentActiveGame]);
 
   const { isLocked: isWakeLockActive } = useWakeLock();
 
@@ -62,7 +89,7 @@ export default function PlayerUI({
     if (newActiveGameId) {
       const { data: newGame } = await supabase.current
         .from('games')
-        .select('*')
+        .select(GAME_SELECT)
         .eq('id', newActiveGameId)
         .single<Database['public']['Tables']['games']['Row']>();
 
@@ -70,12 +97,13 @@ export default function PlayerUI({
         setCurrentActiveGame(newGame);
         const { data: newGameState } = await supabase.current
           .from('game_states_public')
-          .select('*')
+          .select(GAME_STATE_PUBLIC_SELECT)
           .eq('game_id', newGame.id)
           .single<Database['public']['Tables']['game_states_public']['Row']>();
 
         if (newGameState) {
           setCurrentGameState(newGameState);
+          setHasLoaded(true);
           setCurrentPrizeText(newGame.prizes?.[newGame.stage_sequence[newGameState.current_stage_index] as keyof typeof newGame.prizes] || '');
         } else {
           setCurrentGameState(null);
@@ -88,8 +116,9 @@ export default function PlayerUI({
       setCurrentActiveGame(null);
       setCurrentGameState(null);
     }
-  }, [currentActiveGame]);
+  }, [currentActiveGame?.id]);
 
+  // Session-level realtime: track changes to active_game_id / status.
   useEffect(() => {
     const supabaseClient = supabase.current;
 
@@ -105,30 +134,78 @@ export default function PlayerUI({
       )
       .subscribe();
 
-    let gameStateChannel: ReturnType<typeof supabaseClient.channel> | null = null;
-    if (currentActiveGame?.id) {
-      // Listen for game state changes
-      gameStateChannel = supabaseClient
-        .channel(`game_state_public_updates_player:${currentActiveGame.id}`)
-        .on<GameState>(
-          'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${currentActiveGame.id}` },
-          (payload) => {
-            const newState = payload.new;
-            setCurrentGameState(newState);
-            setCurrentPrizeText(currentActiveGame?.prizes?.[currentActiveGame.stage_sequence[newState.current_stage_index] as keyof typeof currentActiveGame.prizes] || '');
-          }
-        )
-        .subscribe();
-    }
-
     return () => {
       supabaseClient.removeChannel(sessionChannel);
-      if (gameStateChannel) {
-        supabaseClient.removeChannel(gameStateChannel);
-      }
     };
-  }, [session.id, currentActiveGame, refreshActiveGame]);
+  }, [session.id, refreshActiveGame]);
+
+  // Game state realtime with exponential-backoff auto-reconnect.
+  // Each reconnect tears down the previous channel before creating the next
+  // (ordering matters — Supabase rejects subscribe() against a torn channel).
+  useEffect(() => {
+    const supabaseClient = supabase.current;
+    const activeGameId = currentActiveGame?.id;
+    if (!activeGameId) return;
+
+    let isMounted = true;
+    let activeChannel: ReturnType<typeof supabaseClient.channel> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attemptCount = 0;
+
+    const connect = async () => {
+      if (!isMounted) return;
+      if (activeChannel) {
+        await supabaseClient.removeChannel(activeChannel);
+        activeChannel = null;
+      }
+      if (!isMounted) return;
+
+      const channel = supabaseClient
+        .channel(`game_state_public_updates_player:${activeGameId}:${Date.now()}`)
+        .on<GameState>(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${activeGameId}` },
+          (payload) => {
+            if (!isMounted) return;
+            const incoming = payload.new as GameState;
+            // Freshness gate: ignore older snapshots that may arrive after a
+            // reconnect or out-of-order broadcast (state_version is monotonic).
+            setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
+            setHasLoaded(true);
+            const game = currentActiveGameRef.current;
+            if (game) {
+              const stageKey = game.stage_sequence[incoming.current_stage_index];
+              setCurrentPrizeText(game.prizes?.[stageKey as keyof typeof game.prizes] || '');
+            }
+          }
+        )
+        .subscribe((status) => {
+          if (!isMounted) return;
+          markRealtimeStatus(status as RealtimeStatus);
+          if (status === 'SUBSCRIBED') {
+            attemptCount = 0;
+            return;
+          }
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            // Exponential backoff: 1s, 2s, 4s … capped at 30s.
+            const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
+            attemptCount += 1;
+            reconnectTimer = setTimeout(() => { void connect(); }, delay);
+          }
+        });
+
+      activeChannel = channel;
+    };
+
+    void connect();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (activeChannel) void supabaseClient.removeChannel(activeChannel);
+    };
+  }, [currentActiveGame?.id, markRealtimeStatus]);
 
   useEffect(() => {
     const supabaseClient = supabase.current;
@@ -165,6 +242,8 @@ export default function PlayerUI({
     };
   }, [currentActiveGame]);
 
+  // Polling fallback — re-fetches session + game state every 3 seconds with
+  // request-order guards so out-of-order responses cannot clobber newer state.
   useEffect(() => {
     let cancelled = false;
     let interval: NodeJS.Timeout | null = null;
@@ -172,34 +251,64 @@ export default function PlayerUI({
     const poll = async () => {
       if (cancelled) return;
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (pollInFlightRef.current) return;
 
-      const { data: freshSession } = await supabase.current
-        .from('sessions')
-        .select('*')
-        .eq('id', session.id)
-        .single<Session>();
-      if (cancelled || !freshSession) return;
+      pollInFlightRef.current = true;
+      const seq = ++pollSeqRef.current;
 
-      setCurrentSession(freshSession);
+      try {
+        const { data: freshSession, error: sessionError } = await supabase.current
+          .from('sessions')
+          .select(SESSION_SELECT)
+          .eq('id', session.id)
+          .single<Session>();
+        if (cancelled || seq !== pollSeqRef.current) return;
+        if (sessionError || !freshSession) {
+          logError('player', sessionError ?? new Error('Polling sessions returned no row'));
+          markPollFailure();
+          return;
+        }
 
-      if (freshSession.active_game_id !== currentActiveGame?.id) {
-        await refreshActiveGame(freshSession.active_game_id);
-        return;
-      }
+        setCurrentSession(freshSession);
 
-      if (currentActiveGame?.id) {
-        const { data: freshState } = await supabase.current
-          .from('game_states_public')
-          .select('*')
-          .eq('game_id', currentActiveGame.id)
-          .single<GameState>();
-        if (cancelled || !freshState) return;
+        const activeGame = currentActiveGameRef.current;
+        if (freshSession.active_game_id !== activeGame?.id) {
+          await refreshActiveGame(freshSession.active_game_id);
+          markPollSuccess();
+          return;
+        }
 
-        setCurrentGameState(freshState);
-        const stageKey = currentActiveGame.stage_sequence[freshState.current_stage_index];
-        setCurrentPrizeText(
-          currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || ''
-        );
+        if (activeGame?.id) {
+          const { data: freshState, error: stateError } = await supabase.current
+            .from('game_states_public')
+            .select(GAME_STATE_PUBLIC_SELECT)
+            .eq('game_id', activeGame.id)
+            .single<GameState>();
+          if (cancelled || seq !== pollSeqRef.current) return;
+          if (stateError || !freshState) {
+            logError('player', stateError ?? new Error('Polling game_states_public returned no row'));
+            markPollFailure();
+            return;
+          }
+
+          // Freshness-gated apply: discard stale snapshots that lost a race
+          // with a more recent realtime event or earlier poll response.
+          setCurrentGameState((current) => (isFreshGameState(current, freshState) ? freshState : current));
+          setHasLoaded(true);
+          const stageKey = activeGame.stage_sequence[freshState.current_stage_index];
+          setCurrentPrizeText(
+            activeGame.prizes?.[stageKey as keyof typeof activeGame.prizes] || ''
+          );
+        }
+
+        markPollSuccess();
+      } catch (err) {
+        if (!cancelled) {
+          logError('player', err);
+          markPollFailure();
+        }
+      } finally {
+        pollInFlightRef.current = false;
       }
     };
 
@@ -218,16 +327,9 @@ export default function PlayerUI({
       if (interval) clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [
-    session.id,
-    currentActiveGame?.id,
-    currentActiveGame?.prizes,
-    currentActiveGame?.stage_sequence,
-    refreshActiveGame,
-  ]);
+  }, [session.id, currentActiveGame?.id, refreshActiveGame, markPollSuccess, markPollFailure]);
 
   // --- Delay Logic (Same as Display) ---
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (numberCallTimeoutRef.current) {
       clearTimeout(numberCallTimeoutRef.current);
@@ -292,7 +394,6 @@ export default function PlayerUI({
       }
     };
   }, [currentActiveGame, currentGameState, currentNumberDelayed, delayedNumbers]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
 
   // --- UI States ---
@@ -312,6 +413,16 @@ export default function PlayerUI({
     ? getSnowballCallsRemaining(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
     : null;
 
+  // Initial load skeleton: show until first poll/realtime payload completes.
+  if (!hasLoaded) {
+    return (
+      <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
+        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-current mr-3" />
+        Connecting to game…
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -319,6 +430,7 @@ export default function PlayerUI({
       )}
       style={{ backgroundColor: backgroundColor }}
     >
+      <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Header */}
       <div className="bg-[#003f27]/80 p-4 border-b border-[#1f7c58] flex items-center justify-between sticky top-0 z-20 shadow-md">
         <div>
@@ -418,8 +530,13 @@ export default function PlayerUI({
               </div>
               <div className="bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]">
                 <span className="text-xs text-white uppercase block">Prize</span>
-                <span className="font-bold text-white text-lg leading-tight">
-                  {currentPrizeText || '-'}
+                <span
+                  className={cn(
+                    "font-bold text-lg leading-tight",
+                    currentPrizeText ? "text-white" : "text-red-400"
+                  )}
+                >
+                  {currentPrizeText ? currentPrizeText : '⚠️ Prize not set'}
                 </span>
               </div>
             </div>

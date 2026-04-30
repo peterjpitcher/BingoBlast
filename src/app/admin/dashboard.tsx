@@ -24,6 +24,12 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // Typed-confirm delete-session modal state
+  const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  const [deleteTyped, setDeleteTyped] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const handleClose = () => {
     setShowSessionModal(false);
     setEditingSession(null);
@@ -62,15 +68,31 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (confirm('Are you sure you want to delete this session? This cannot be undone.')) {
-        const result = await deleteSession(id);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to delete session.");
-        } else {
-            router.refresh();
-        }
+  function handleShowDelete(session: Session) {
+    setDeleteTarget(session);
+    setDeleteTyped('');
+    setDeleteError(null);
+  }
+
+  function handleCloseDelete() {
+    setDeleteTarget(null);
+    setDeleteTyped('');
+    setDeleteError(null);
+    setIsDeleting(false);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    const result = await deleteSession(deleteTarget.id);
+    setIsDeleting(false);
+    if (!result?.success) {
+      setDeleteError(result?.error || "Failed to delete session.");
+      return;
     }
+    handleCloseDelete();
+    router.refresh();
   }
 
   async function handleDuplicate(id: string) {
@@ -93,6 +115,8 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
     };
     return cn("px-2.5 py-0.5 rounded-full text-xs font-medium border border-transparent", styles[status as keyof typeof styles] || styles.draft);
   };
+
+  const isDeleteConfirmed = deleteTarget !== null && deleteTyped === deleteTarget.name;
 
   return (
     <>
@@ -144,17 +168,17 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
                       </td>
                       <td className="p-4 text-right space-x-2">
                         <Link href={`/admin/sessions/${session.id}`}>
-                          <Button variant="outline" size="sm" className="h-8">
+                          <Button variant="outline" size="sm">
                             Manage
                           </Button>
                         </Link>
-                        <Button variant="ghost" size="sm" className="h-8" onClick={() => handleShowEdit(session)}>
+                        <Button variant="ghost" size="sm" onClick={() => handleShowEdit(session)}>
                           Edit
                         </Button>
-                        <Button variant="secondary" size="sm" className="h-8" onClick={() => handleDuplicate(session.id)}>
+                        <Button variant="secondary" size="sm" onClick={() => handleDuplicate(session.id)}>
                           Copy
                         </Button>
-                        <Button variant="danger" size="sm" className="h-8" onClick={() => handleDelete(session.id)}>
+                        <Button variant="danger" size="sm" onClick={() => handleShowDelete(session)}>
                           Delete
                         </Button>
                       </td>
@@ -167,9 +191,9 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
         </CardContent>
       </Card>
 
-      <Modal 
-        isOpen={showSessionModal} 
-        onClose={handleClose} 
+      <Modal
+        isOpen={showSessionModal}
+        onClose={handleClose}
         title={editingSession ? "Edit Session" : "Create New Session"}
         footer={
             <>
@@ -193,23 +217,23 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
               {actionError}
             </div>
           )}
-          
+
           <div className="space-y-2">
             <label htmlFor="sessionName" className="text-sm font-medium text-slate-300">Session Name</label>
-            <Input 
+            <Input
               id="sessionName"
-              type="text" 
+              type="text"
               name="name"
-              placeholder="e.g. Friday Cash Bingo" 
+              placeholder="e.g. Friday Cash Bingo"
               defaultValue={editingSession?.name || ""}
-              required 
+              required
               autoFocus
             />
           </div>
 
           <div className="space-y-2">
             <label htmlFor="sessionNotes" className="text-sm font-medium text-slate-300">Notes (Optional)</label>
-            <textarea 
+            <textarea
               id="sessionNotes"
               name="notes"
               defaultValue={editingSession?.notes || ""}
@@ -219,9 +243,9 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
           </div>
 
           <div className="flex items-center space-x-2">
-            <input 
-                type="checkbox" 
-                id="isTestSession" 
+            <input
+                type="checkbox"
+                id="isTestSession"
                 name="is_test_session"
                 defaultChecked={editingSession?.is_test_session || false}
                 className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-bingo-primary focus:ring-bingo-primary"
@@ -231,6 +255,56 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
             </label>
           </div>
         </form>
+      </Modal>
+
+      {/* Typed-confirm delete-session modal */}
+      <Modal
+        isOpen={deleteTarget !== null}
+        onClose={handleCloseDelete}
+        title={deleteTarget ? `Delete session "${deleteTarget.name}"?` : 'Delete session?'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={handleCloseDelete} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleConfirmDelete}
+              disabled={!isDeleteConfirmed || isDeleting}
+            >
+              {isDeleting ? 'Deleting…' : 'Delete'}
+            </Button>
+          </>
+        }
+      >
+        {deleteTarget && (
+          <div className="space-y-4">
+            {deleteError && (
+              <div className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
+                {deleteError}
+              </div>
+            )}
+            <p className="text-sm text-white/85">
+              This will permanently delete the session and all of its games. This action cannot be undone.
+            </p>
+            <p className="text-sm text-white/85">
+              Sessions with started or completed games, or with recorded winners, cannot be deleted.
+            </p>
+            <div className="space-y-2">
+              <label htmlFor="confirmDeleteSession" className="text-sm font-medium text-white/85">
+                Type the session name <span className="font-mono text-white">{deleteTarget.name}</span> to confirm:
+              </label>
+              <Input
+                id="confirmDeleteSession"
+                type="text"
+                value={deleteTyped}
+                onChange={(e) => setDeleteTyped(e.target.value)}
+                placeholder={deleteTarget.name}
+                autoFocus
+              />
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   );

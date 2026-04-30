@@ -7,6 +7,11 @@ import { cn } from '@/lib/utils';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
 import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining } from '@/lib/snowball';
+import { isFreshGameState } from '@/lib/game-state-version';
+import { useConnectionHealth } from '@/hooks/use-connection-health';
+import { ConnectionBanner } from '@/components/connection-banner';
+import type { RealtimeStatus } from '@/lib/connection-health';
+import { logError } from '@/lib/log-error';
 
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
@@ -32,6 +37,14 @@ const formatStageLabel = (stage: string | undefined) => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
+// Explicit narrow column lists keep public surfaces from leaking unintended
+// fields and document exactly what the UI consumes from each table.
+const SESSION_SELECT = 'id, name, status, active_game_id';
+const GAME_SELECT =
+  'id, session_id, game_index, name, type, stage_sequence, background_colour, prizes, snowball_pot_id';
+const GAME_STATE_PUBLIC_SELECT =
+  'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
+
 const POLL_INTERVAL_MS = 3000;
 
 export default function DisplayUI({
@@ -52,34 +65,49 @@ export default function DisplayUI({
   const [currentNumberDelayed, setCurrentNumberDelayed] = useState<number | null>(null);
   const [delayedNumbers, setDelayedNumbers] = useState<number[]>([]);
   const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
-  
-  const numberCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const currentGameStateRef = useRef<GameState | null>(currentGameState);
+  // Tracks whether we have applied any usable game state (initial render or
+  // first poll/realtime payload). Used to gate the "Connecting to game…" skeleton.
+  const [hasLoaded, setHasLoaded] = useState<boolean>(initialActiveGameState != null);
 
+  const numberCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Connection health: drives the reconnecting banner + auto-refresh.
+  const health = useConnectionHealth();
+  const { markPollSuccess, markPollFailure, markRealtimeStatus } = health;
+
+  // Polling guards: monotonic sequence + in-flight flag prevent stale poll
+  // results from clobbering newer state when responses arrive out-of-order.
+  const pollSeqRef = useRef(0);
+  const pollInFlightRef = useRef(false);
+
+  // Stable refs for fields that the polling effect reads but should not retrigger
+  // its setup. Pairs with the `currentActiveGame?.id` dependency below.
+  const currentActiveGameRef = useRef(currentActiveGame);
   useEffect(() => {
-    currentGameStateRef.current = currentGameState;
-  }, [currentGameState]);
+    currentActiveGameRef.current = currentActiveGame;
+  }, [currentActiveGame]);
 
   const refreshActiveGame = useCallback(async (newActiveGameId: string | null) => {
       if (newActiveGameId === currentActiveGame?.id) return;
 
       if (newActiveGameId) {
-          const { data: newGame, error: gameError } = await supabase.current
+          const { data: newGame } = await supabase.current
           .from('games')
-          .select('*')
+          .select(GAME_SELECT)
           .eq('id', newActiveGameId)
           .single<Database['public']['Tables']['games']['Row']>();
-        
+
         if (newGame) {
           setCurrentActiveGame(newGame);
           const { data: newGameState } = await supabase.current
             .from('game_states_public')
-            .select('*')
+            .select(GAME_STATE_PUBLIC_SELECT)
             .eq('game_id', newGame.id)
             .single<Database['public']['Tables']['game_states_public']['Row']>();
-          
+
           if (newGameState) {
             setCurrentGameState(newGameState);
+            setHasLoaded(true);
             setCurrentPrizeText(newGame.prizes?.[newGame.stage_sequence[newGameState.current_stage_index] as keyof typeof newGame.prizes] || '');
           } else {
             setCurrentGameState(null);
@@ -95,6 +123,7 @@ export default function DisplayUI({
       setIsWaitingState(!newActiveGameId);
   }, [currentActiveGame?.id]);
 
+  // Session-level realtime: track changes to active_game_id / status.
   useEffect(() => {
     const supabaseClient = supabase.current;
 
@@ -110,33 +139,81 @@ export default function DisplayUI({
       )
       .subscribe();
 
-    let gameStateChannel: ReturnType<typeof supabaseClient.channel> | null = null;
-    if (currentActiveGame?.id) {
-      gameStateChannel = supabaseClient
-        .channel(`game_state_public_updates:${currentActiveGame.id}`)
-        .on<GameState>(
-          'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${currentActiveGame.id}` },
-          (payload) => {
-            const newState = payload.new;
-            
-            // No audio here anymore
-
-            setCurrentGameState(newState);
-            setCurrentPrizeText(currentActiveGame?.prizes?.[currentActiveGame.stage_sequence[newState.current_stage_index] as keyof typeof currentActiveGame.prizes] || '');
-          }
-        )
-        .subscribe();
-    }
-
     return () => {
       supabaseClient.removeChannel(sessionChannel);
-      if (gameStateChannel) {
-        supabaseClient.removeChannel(gameStateChannel);
-      }
     };
-  }, [session.id, currentActiveGame, refreshActiveGame]);
+  }, [session.id, refreshActiveGame]);
 
+  // Game state realtime with exponential-backoff auto-reconnect.
+  // Each reconnect tears down the previous channel before creating the next
+  // (ordering matters — Supabase rejects subscribe() against a torn channel).
+  useEffect(() => {
+    const supabaseClient = supabase.current;
+    const activeGameId = currentActiveGame?.id;
+    if (!activeGameId) return;
+
+    let isMounted = true;
+    let activeChannel: ReturnType<typeof supabaseClient.channel> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attemptCount = 0;
+
+    const connect = async () => {
+      if (!isMounted) return;
+      if (activeChannel) {
+        await supabaseClient.removeChannel(activeChannel);
+        activeChannel = null;
+      }
+      if (!isMounted) return;
+
+      const channel = supabaseClient
+        .channel(`game_state_public_updates:${activeGameId}:${Date.now()}`)
+        .on<GameState>(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${activeGameId}` },
+          (payload) => {
+            if (!isMounted) return;
+            const incoming = payload.new as GameState;
+            // Freshness gate: ignore older snapshots that may arrive after a
+            // reconnect or out-of-order broadcast (state_version is monotonic).
+            setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
+            setHasLoaded(true);
+            const game = currentActiveGameRef.current;
+            if (game) {
+              const stageKey = game.stage_sequence[incoming.current_stage_index];
+              setCurrentPrizeText(game.prizes?.[stageKey as keyof typeof game.prizes] || '');
+            }
+          }
+        )
+        .subscribe((status) => {
+          if (!isMounted) return;
+          markRealtimeStatus(status as RealtimeStatus);
+          if (status === 'SUBSCRIBED') {
+            attemptCount = 0;
+            return;
+          }
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            // Exponential backoff: 1s, 2s, 4s … capped at 30s.
+            const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
+            attemptCount += 1;
+            reconnectTimer = setTimeout(() => { void connect(); }, delay);
+          }
+        });
+
+      activeChannel = channel;
+    };
+
+    void connect();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (activeChannel) void supabaseClient.removeChannel(activeChannel);
+    };
+  }, [currentActiveGame?.id, markRealtimeStatus]);
+
+  // Polling fallback — re-fetches session + game state every 3 seconds with
+  // request-order guards so out-of-order responses cannot clobber newer state.
   useEffect(() => {
     let cancelled = false;
     let interval: NodeJS.Timeout | null = null;
@@ -144,35 +221,65 @@ export default function DisplayUI({
     const poll = async () => {
       if (cancelled) return;
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (pollInFlightRef.current) return;
 
-      const { data: freshSession } = await supabase.current
-        .from('sessions')
-        .select('*')
-        .eq('id', session.id)
-        .single<Session>();
-      if (cancelled || !freshSession) return;
+      pollInFlightRef.current = true;
+      const seq = ++pollSeqRef.current;
 
-      setCurrentSession(freshSession);
-      setIsWaitingState(!freshSession.active_game_id && freshSession.status !== 'running');
+      try {
+        const { data: freshSession, error: sessionError } = await supabase.current
+          .from('sessions')
+          .select(SESSION_SELECT)
+          .eq('id', session.id)
+          .single<Session>();
+        if (cancelled || seq !== pollSeqRef.current) return;
+        if (sessionError || !freshSession) {
+          logError('display', sessionError ?? new Error('Polling sessions returned no row'));
+          markPollFailure();
+          return;
+        }
 
-      if (freshSession.active_game_id !== currentActiveGame?.id) {
-        await refreshActiveGame(freshSession.active_game_id);
-        return;
-      }
+        setCurrentSession(freshSession);
+        setIsWaitingState(!freshSession.active_game_id && freshSession.status !== 'running');
 
-      if (currentActiveGame?.id) {
-        const { data: freshState } = await supabase.current
-          .from('game_states_public')
-          .select('*')
-          .eq('game_id', currentActiveGame.id)
-          .single<GameState>();
-        if (cancelled || !freshState) return;
+        const activeGame = currentActiveGameRef.current;
+        if (freshSession.active_game_id !== activeGame?.id) {
+          await refreshActiveGame(freshSession.active_game_id);
+          markPollSuccess();
+          return;
+        }
 
-        setCurrentGameState(freshState);
-        const stageKey = currentActiveGame.stage_sequence[freshState.current_stage_index];
-        setCurrentPrizeText(
-          currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || ''
-        );
+        if (activeGame?.id) {
+          const { data: freshState, error: stateError } = await supabase.current
+            .from('game_states_public')
+            .select(GAME_STATE_PUBLIC_SELECT)
+            .eq('game_id', activeGame.id)
+            .single<GameState>();
+          if (cancelled || seq !== pollSeqRef.current) return;
+          if (stateError || !freshState) {
+            logError('display', stateError ?? new Error('Polling game_states_public returned no row'));
+            markPollFailure();
+            return;
+          }
+
+          // Freshness-gated apply: discard stale snapshots that lost a race
+          // with a more recent realtime event or earlier poll response.
+          setCurrentGameState((current) => (isFreshGameState(current, freshState) ? freshState : current));
+          setHasLoaded(true);
+          const stageKey = activeGame.stage_sequence[freshState.current_stage_index];
+          setCurrentPrizeText(
+            activeGame.prizes?.[stageKey as keyof typeof activeGame.prizes] || ''
+          );
+        }
+
+        markPollSuccess();
+      } catch (err) {
+        if (!cancelled) {
+          logError('display', err);
+          markPollFailure();
+        }
+      } finally {
+        pollInFlightRef.current = false;
       }
     };
 
@@ -191,13 +298,7 @@ export default function DisplayUI({
       if (interval) clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [
-    session.id,
-    currentActiveGame?.id,
-    currentActiveGame?.prizes,
-    currentActiveGame?.stage_sequence,
-    refreshActiveGame,
-  ]);
+  }, [session.id, currentActiveGame?.id, refreshActiveGame, markPollSuccess, markPollFailure]);
 
   useEffect(() => {
     const supabaseClient = supabase.current;
@@ -333,18 +434,22 @@ export default function DisplayUI({
   const resolvedJoinUrl = playerJoinUrl.startsWith('http')
     ? playerJoinUrl
     : `${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`;
-  
+
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
   const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
   const houseRulesTitleClass = "text-[clamp(2.6rem,3.8vw,4rem)] font-bold text-white mb-4 border-b border-[#1f7c58] pb-3";
   const houseRulesListClass = "space-y-4 text-[clamp(1.7rem,2.35vw,2.45rem)] leading-[1.22] text-white";
   const stagePrizePreview = currentActiveGame
-    ? currentActiveGame.stage_sequence.map((stage, index) => ({
-        index,
-        stageLabel: formatStageLabel(stage),
-        prizeLabel: currentActiveGame.prizes?.[stage as keyof typeof currentActiveGame.prizes] || 'Standard Prize',
-      }))
+    ? currentActiveGame.stage_sequence.map((stage, index) => {
+        const prize = currentActiveGame.prizes?.[stage as keyof typeof currentActiveGame.prizes];
+        return {
+          index,
+          stageLabel: formatStageLabel(stage),
+          prizeLabel: prize || '',
+          prizeMissing: !prize,
+        };
+      })
     : [];
   const showPreCallStagePreview = !!(
     showActiveGame &&
@@ -377,13 +482,24 @@ export default function DisplayUI({
     </div>
   );
 
+  // Initial load skeleton: show until first poll/realtime payload completes.
+  if (!hasLoaded) {
+    return (
+      <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
+        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-current mr-3" />
+        Connecting to game…
+      </div>
+    );
+  }
+
   return (
-    <div 
+    <div
       className={cn(
           "h-screen max-h-screen w-full flex flex-col transition-colors duration-1000 ease-in-out overflow-hidden relative text-white"
       )}
       style={{ backgroundColor: displayBackgroundColor }}
     >
+      <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Top Bar */}
       <div className="h-24 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10">
          <div className="flex items-center gap-4">
@@ -399,7 +515,7 @@ export default function DisplayUI({
 
       {/* Main Content Area */}
       <div className={cn("flex-1 flex items-center justify-center relative p-6 overflow-hidden", showServiceState && "xl:pl-44")}>
-          
+
           {isWaitingState && !isSessionCompletedState && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
                 <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6">
@@ -488,7 +604,7 @@ export default function DisplayUI({
               {currentNumberDelayed ? (
                 <div className="relative animate-in zoom-in duration-300">
                    {/* Massive Main Number */}
-                  <div 
+                  <div
                     className="relative bg-[#005131] border-4 border-white rounded-full flex items-center justify-center overflow-hidden"
                     style={{
                       ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 16rem))',
@@ -524,8 +640,13 @@ export default function DisplayUI({
                             <p className="text-[clamp(1.2rem,2vw,1.8rem)] font-bold tracking-wide">
                               Stage {item.index + 1}: {item.stageLabel}
                             </p>
-                            <p className="text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold text-[#f3d59d]">
-                              {item.prizeLabel}
+                            <p
+                              className={cn(
+                                "text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold",
+                                item.prizeMissing ? "text-red-400" : "text-[#f3d59d]"
+                              )}
+                            >
+                              {item.prizeMissing ? '⚠️ Prize not set' : item.prizeLabel}
                             </p>
                           </div>
                         ))}
@@ -542,7 +663,7 @@ export default function DisplayUI({
           {/* WIN OVERLAY */}
           {showWinState && currentGameState && (
             <div className="absolute inset-0 z-[80] flex flex-col items-center justify-center bg-[#003f27]/95 backdrop-blur-md animate-in fade-in duration-300 p-8 text-center">
-              <h1 
+              <h1
                 className={cn(
                     "text-[clamp(3rem,10vw,9rem)] leading-[0.9] font-black mb-8",
                     "text-white"
@@ -569,7 +690,9 @@ export default function DisplayUI({
                       Playing for: {formatStageLabel(currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0])}
                     </p>
                     <p className={footerLeftTextClass}>
-                      Prize: {currentPrizeText || 'Standard Prize'}
+                      Prize: {currentPrizeText
+                        ? currentPrizeText
+                        : <span className="text-red-400">⚠️ Prize not set</span>}
                     </p>
                     {isSnowballGame && (
                       <p className={footerLeftTextClass}>
@@ -607,7 +730,7 @@ export default function DisplayUI({
       {/* Player Join QR Code */}
       <div className="absolute bottom-36 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
           <div className="bg-white p-2 rounded-lg">
-             <QRCodeSVG 
+             <QRCodeSVG
                 value={resolvedJoinUrl}
                 size={100}
                 level="H"

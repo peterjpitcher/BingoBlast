@@ -12,7 +12,12 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { BingoBall } from '@/components/ui/bingo-ball';
 import { useWakeLock } from '@/hooks/wake-lock';
+import { useConnectionHealth } from '@/hooks/use-connection-health';
+import { ConnectionBanner } from '@/components/connection-banner';
 import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining, isSnowballJackpotEligible } from '@/lib/snowball';
+import { isFreshGameState } from '@/lib/game-state-version';
+import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
+import { logError } from '@/lib/log-error';
 
 type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -93,29 +98,12 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
     90: "Top Of The Shop"
 };
 
-const DISPLAY_SYNC_BUFFER_MS = 200;
-
-const getRequiredSelectionCount = (stage: string | undefined): number => {
-    if (!stage) return 5;
-    const normalized = stage.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-
-    if (normalized.includes('full') || normalized.includes('house')) return 15;
-    const isTwoLineStage =
-        (normalized.includes('two') || normalized.includes('2') || normalized.includes('double')) &&
-        normalized.includes('line');
-    if (isTwoLineStage) return 10;
-    if (normalized.includes('line')) return 5;
-    return 5;
-};
-
-
 export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole }: GameControlProps) {
     const router = useRouter();
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
     const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
     const [isCallingNumber, setIsCallingNumber] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
-    const [isConnected, setIsConnected] = useState(true);
     const [showValidationModal, setShowValidationModal] = useState(false);
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [validationResult, setValidationResult] = useState<{ valid: boolean; invalidNumbers?: number[] } | null>(null);
@@ -128,15 +116,23 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [cashJackpotGameName, setCashJackpotGameName] = useState('Jackpot Game');
     const [cashJackpotMode, setCashJackpotMode] = useState<'next' | 'break'>('next');
     const [isSubmittingCashJackpot, setIsSubmittingCashJackpot] = useState(false);
-    const [displaySyncRemainingMs, setDisplaySyncRemainingMs] = useState(0);
-    const [winnerName, setWinnerName] = useState('');
     const [prizeGiven, setPrizeGiven] = useState(false);
     const [snowballEligible, setSnowballEligible] = useState(false);
+    const [isRecordingWinner, setIsRecordingWinner] = useState(false);
+    const [isRecordingSnowballWinner, setIsRecordingSnowballWinner] = useState(false);
     const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
     const [sessionWinners, setSessionWinners] = useState<SessionWinner[]>([]);
 
     // Singleton Supabase client — all subscriptions share one WebSocket connection
     const supabaseRef = useRef(createClient());
+
+    // Connection health: drives the reconnecting banner + auto-refresh.
+    const health = useConnectionHealth();
+
+    // Polling guards: monotonic sequence + in-flight flag prevent stale poll
+    // results from clobbering newer state when responses arrive out-of-order.
+    const pollSeqRef = useRef(0);
+    const pollInFlightRef = useRef(false);
 
   useWakeLock();
 
@@ -248,7 +244,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     };
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
+         
         setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
     }, [currentGameState.current_stage_index, getPlannedPrize]);
 
@@ -257,8 +253,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const lastNNumbers = (currentGameState.called_numbers || []).slice(-10, -1);
     const fallbackStageName = game.stage_sequence[game.stage_sequence.length - 1];
     const currentStageName = game.stage_sequence[currentGameState.current_stage_index] || fallbackStageName;
-    const currentStagePrize = getPlannedPrize(currentGameState.current_stage_index) || 'Standard Prize';
-    const requiredSelectionCount = getRequiredSelectionCount(currentStageName);
+    const plannedStagePrize = getPlannedPrize(currentGameState.current_stage_index);
+    const isStagePrizeMissing = !plannedStagePrize;
+    // Fall back to the shared 5-number default if the stage name is somehow not
+    // one of the canonical Line / Two Lines / Full House values. This mirrors
+    // the legacy behaviour while routing through the shared helper.
+    const requiredSelectionCount = getRequiredSelectionCountForStage(currentStageName) ?? 5;
     const isSnowballGame = game.type === 'snowball';
     const snowballCallsLabel = currentSnowballPot
         ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
@@ -276,7 +276,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // Auto-check snowballEligible when the jackpot window is open so hosts don't accidentally miss it
     useEffect(() => {
         if (isSnowballJackpotWindowOpen) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
+             
             setSnowballEligible(true);
         }
     }, [isSnowballJackpotWindowOpen]);
@@ -289,50 +289,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
         router.push(destination);
     };
-
-    useEffect(() => {
-        const isCallableState =
-            currentGameState.status === 'in_progress' &&
-            !currentGameState.on_break &&
-            !currentGameState.paused_for_validation;
-
-        if (!isCallableState || currentGameState.numbers_called_count === 0 || !currentGameState.last_call_at) {
-            const resetTimeout = setTimeout(() => setDisplaySyncRemainingMs(0), 0);
-            return () => clearTimeout(resetTimeout);
-        }
-
-        const lastCallAtMs = new Date(currentGameState.last_call_at).getTime();
-        if (Number.isNaN(lastCallAtMs)) {
-            const resetTimeout = setTimeout(() => setDisplaySyncRemainingMs(0), 0);
-            return () => clearTimeout(resetTimeout);
-        }
-
-        const lockDurationMs = Math.max(0, currentGameState.call_delay_seconds * 1000 + DISPLAY_SYNC_BUFFER_MS);
-        const unlockAtMs = lastCallAtMs + lockDurationMs;
-
-        const updateRemaining = () => {
-            const remainingMs = Math.max(0, unlockAtMs - Date.now());
-            setDisplaySyncRemainingMs(remainingMs);
-        };
-
-        const initialUpdateTimeout = setTimeout(updateRemaining, 0);
-        if (unlockAtMs <= Date.now()) {
-            return () => clearTimeout(initialUpdateTimeout);
-        }
-
-        const interval = setInterval(updateRemaining, 100);
-        return () => {
-            clearTimeout(initialUpdateTimeout);
-            clearInterval(interval);
-        };
-    }, [
-        currentGameState.call_delay_seconds,
-        currentGameState.last_call_at,
-        currentGameState.numbers_called_count,
-        currentGameState.on_break,
-        currentGameState.paused_for_validation,
-        currentGameState.status
-    ]);
 
     useEffect(() => {
         const supabase = supabaseRef.current;
@@ -369,6 +325,44 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         };
     }, [game.type, game.snowball_pot_id]);
 
+    // Shared poll routine — used by the polling interval, the visibility
+    // handler, and the realtime reconnect path. Tracks an in-flight flag and a
+    // monotonic sequence so a slow response can't clobber newer state.
+    const pollGameState = useCallback(async () => {
+        if (pollInFlightRef.current) return;
+        const supabase = supabaseRef.current;
+        const seq = ++pollSeqRef.current;
+        pollInFlightRef.current = true;
+        try {
+            const { data: freshState, error } = await supabase
+                .from('game_states')
+                .select('*')
+                .eq('game_id', gameId)
+                .single<GameState>();
+            if (error) {
+                health.markPollFailure();
+                logError('host-control', error);
+                return;
+            }
+            // If a newer poll has started since this one fired, drop the result.
+            if (seq !== pollSeqRef.current) return;
+            if (freshState) {
+                setCurrentGameState((current) =>
+                    isFreshGameState(current, freshState) ? freshState : current,
+                );
+                health.markPollSuccess();
+            }
+        } catch (err) {
+            health.markPollFailure();
+            logError('host-control', err);
+        } finally {
+            pollInFlightRef.current = false;
+        }
+    }, [gameId, health]);
+
+    // Stable callable so the visibility handler can force-reconnect realtime.
+    const reconnectRealtimeRef = useRef<(() => void) | null>(null);
+
     useEffect(() => {
         const supabase = supabaseRef.current;
         let isMounted = true;
@@ -378,6 +372,16 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
         const connect = () => {
             if (!isMounted) return;
+            // Clear any pending reconnect so manual reconnects don't double-up.
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+            // Tear down any existing channel first.
+            if (activeChannel) {
+                supabase.removeChannel(activeChannel);
+                activeChannel = null;
+            }
 
             activeChannel = supabase
                 .channel(`game_state:${gameId}:${Date.now()}`)
@@ -391,16 +395,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     },
                     (payload) => {
                         if (!isMounted) return;
-                        setCurrentGameState(payload.new);
+                        setCurrentGameState((current) =>
+                            isFreshGameState(current, payload.new) ? payload.new : current,
+                        );
                     }
                 )
                 .subscribe((status) => {
                     if (!isMounted) return;
+                    health.markRealtimeStatus(status);
                     if (status === 'SUBSCRIBED') {
-                        setIsConnected(true);
                         attemptCount = 0;
                     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                        setIsConnected(false);
                         if (activeChannel) {
                             supabase.removeChannel(activeChannel);
                             activeChannel = null;
@@ -413,43 +418,55 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 });
         };
 
+        reconnectRealtimeRef.current = connect;
         connect();
 
         return () => {
             isMounted = false;
+            reconnectRealtimeRef.current = null;
             if (reconnectTimeout) clearTimeout(reconnectTimeout);
             if (activeChannel) supabase.removeChannel(activeChannel);
         };
-    }, [gameId]);
+    }, [gameId, health]);
 
-    // Polling fallback — re-fetch game state every 3 seconds to recover from missed Realtime events
+    // Polling fallback — re-fetch game state every 3 seconds to recover from
+    // missed Realtime events. Skips when tab is hidden to save bandwidth.
     useEffect(() => {
-        const supabase = supabaseRef.current;
-        const interval = setInterval(async () => {
+        const interval = setInterval(() => {
             if (document.visibilityState !== 'visible') return;
-            const { data: freshState } = await supabase
-                .from('game_states')
-                .select('*')
-                .eq('game_id', gameId)
-                .single<GameState>();
-            if (freshState) {
-                setCurrentGameState(freshState);
-            }
+            void pollGameState();
         }, 3000);
         return () => clearInterval(interval);
-    }, [gameId]);
+    }, [pollGameState]);
+
+    // Force-reconnect realtime + immediate poll when the tab becomes visible
+    // again. Mobile browsers often kill background WebSockets silently.
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.visibilityState !== 'visible') return;
+            reconnectRealtimeRef.current?.();
+            void pollGameState();
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [pollGameState]);
 
     const handleCallNextNumber = async () => {
         if (!isController) return;
         setIsCallingNumber(true);
         setActionError(null);
 
-        // No optimistic update: the host is the author of this change, so the
-        // Realtime confirmation (~300ms) is fast enough. Optimistic updates
-        // combined with heartbeat Realtime events caused flash-then-revert.
+        // The host is the author of this change, so apply the server's
+        // already-synced state snapshot immediately. The freshness gate keeps
+        // a slightly older Realtime echo from clobbering it.
         const result = await callNextNumber(gameId);
         if (!result?.success) {
             setActionError(result?.error || "Failed to call next number.");
+        } else if (result.data?.gameState) {
+            const incoming = result.data.gameState;
+            setCurrentGameState((current) =>
+                isFreshGameState(current, incoming) ? incoming : current,
+            );
         }
         setIsCallingNumber(false);
     };
@@ -647,6 +664,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
     const handleRecordWinner = async () => {
         if (!isController) return;
+        if (isRecordingWinner) return; // Double-tap guard
         setActionError(null);
         const currentStage = currentStageName;
         if (!currentStage) {
@@ -654,24 +672,28 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             return;
         }
 
-        const result = await recordWinner(
-            sessionId,
-            gameId,
-            currentStage,
-            prizeDescription,
-            prizeGiven,
-            false,
-            snowballEligible
-        );
+        setIsRecordingWinner(true);
+        try {
+            const result = await recordWinner(
+                sessionId,
+                gameId,
+                currentStage,
+                prizeDescription,
+                prizeGiven,
+                false,
+                snowballEligible
+            );
 
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to record winner.");
-        } else {
-            setWinnerName('');
-            setPrizeGiven(false);
-            setSnowballEligible(false);
-            setShowWinnerModal(false);
-            setShowPostWinModal(true);
+            if (!result?.success) {
+                setActionError(result?.error || "Failed to record winner.");
+            } else {
+                setPrizeGiven(false);
+                setSnowballEligible(false);
+                setShowWinnerModal(false);
+                setShowPostWinModal(true);
+            }
+        } finally {
+            setIsRecordingWinner(false);
         }
     };
 
@@ -719,10 +741,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isGameCompleted = currentGameState.status === 'completed';
     const isGameNotInProgress = currentGameState.status !== 'in_progress';
     const isPausedForValidation = currentGameState.paused_for_validation;
-    const isDisplaySyncLocked = displaySyncRemainingMs > 0;
-    const displaySyncSeconds = Math.ceil(displaySyncRemainingMs / 1000);
 
-    const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || isDisplaySyncLocked || currentGameState.numbers_called_count >= 90;
+    const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || currentGameState.numbers_called_count >= 90;
     const isBreakToggleDisabled = !isController || isGameNotInProgress || isGameCompleted || isPausedForValidation;
     const isValidateButtonDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
     const isVoidLastNumberDisabled = !isController || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
@@ -748,19 +768,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </div>
             )}
 
-            {/* Connection Status */}
-            <div className="flex justify-center mb-4">
-                {isConnected ? (
-                    <div className="bg-[#0f6846]/70 text-white text-xs font-bold px-3 py-1 rounded-full border border-[#1f7c58] flex items-center gap-2">
-                        <div className="w-2 h-2 bg-[#a57626] rounded-full animate-pulse"></div>
-                        LIVE
-                    </div>
-                ) : (
-                    <div className="bg-[#a57626]/20 text-white text-xs font-bold px-3 py-1 rounded-full border border-[#a57626]/80">
-                        OFFLINE
-                    </div>
-                )}
-            </div>
+            {/* Connection Banner — shows during reconnect, auto-refreshes if unhealthy too long */}
+            <ConnectionBanner
+                visible={health.shouldShowBanner}
+                shouldAutoRefresh={health.shouldAutoRefresh}
+            />
 
             {/* Alerts */}
             {actionError && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center">{actionError}</div>}
@@ -785,6 +797,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <h2 className="text-3xl font-bold text-white mb-4 animate-in fade-in slide-in-from-bottom-4">{currentNickname}</h2>
                     )}
 
+                    {/* Passive label so the host knows why the displayed number isn't yet on the player screen. */}
+                    {currentGameState.last_call_at && (
+                        <p className="text-xs text-muted-foreground mb-4">
+                            Players see this in {currentGameState.call_delay_seconds ?? 2}s
+                        </p>
+                    )}
+
                     <div className="flex items-center gap-6 text-sm text-white/90 border-t border-[#1f7c58] pt-4 w-full justify-center">
                         <div>
                             <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Calls</span>
@@ -798,7 +817,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <div className="h-8 w-px bg-[#1f7c58]"></div>
                         <div>
                             <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Prize</span>
-                            <span className="text-xl font-bold text-white">{currentStagePrize}</span>
+                            {isStagePrizeMissing ? (
+                                <span className="text-xl font-bold text-destructive">⚠️ Prize not set</span>
+                            ) : (
+                                <span className="text-xl font-bold text-white">{plannedStagePrize}</span>
+                            )}
                         </div>
                     </div>
                     {isSnowballGame && (
@@ -833,7 +856,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     onClick={handleCallNextNumber}
                     disabled={isNextNumberDisabled}
                 >
-                    {isCallingNumber ? "CALLING..." : currentGameState.numbers_called_count >= 90 ? "ALL NUMBERS CALLED" : isDisplaySyncLocked ? `WAITING FOR DISPLAY (${displaySyncSeconds})` : "NEXT NUMBER"}
+                    {isCallingNumber ? "CALLING..." : currentGameState.numbers_called_count >= 90 ? "ALL NUMBERS CALLED" : "NEXT NUMBER"}
                 </Button>
 
                 <Button
@@ -856,11 +879,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     Check Claim
                 </Button>
             </div>
-            {isDisplaySyncLocked && isController && (
-                <p className="text-center text-sm text-white/80 mb-6">
-                    Next number unlocks when the previous ball is visible on the display.
-                </p>
-            )}
 
             {/* Secondary Controls */}
             <div className={cn("flex justify-center gap-4 mb-8", !isController && "opacity-50 pointer-events-none")}>
@@ -893,7 +911,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         size="sm"
                         className="bg-[#0f6846] border-[#a57626] text-white hover:bg-[#136f4b]"
                         onClick={() => {
-                            setWinnerName('');
                             setPrizeDescription(`£${currentSnowballPot.current_jackpot_amount} (Manual Snowball Win)`);
                             setShowManualSnowballModal(true);
                         }}
@@ -1100,24 +1117,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </div>
             </Modal>
 
-            {/* Record Winner Modal */}
+            {/* Record Winner Modal — winners are anonymous on public surfaces, so no name input. */}
             <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${currentStageName || 'Stage'}`} className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
-                    <div>
-                        <label className="text-sm text-white/85 block mb-1">Winner Name</label>
-                        <Input
-                            value={winnerName}
-                            onChange={(e) => setWinnerName(e.target.value)}
-                            placeholder="e.g. Dave - Table 6"
-                            autoFocus
-                        />
-                    </div>
+                    <p className="text-sm text-white/85">
+                        Winners are recorded anonymously. Confirm the prize details below to log the win.
+                    </p>
                     <div>
                         <label className="text-sm text-white/85 block mb-1">Prize Description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}
                             placeholder="e.g. £10 Cash"
+                            autoFocus
                         />
                         {isSnowballEligibilityStage && currentSnowballPot && (
                             <p className="text-xs text-white/75 mt-2">
@@ -1168,8 +1180,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     </div>
                 </div>
                 <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="secondary" onClick={() => setShowWinnerModal(false)}>Cancel</Button>
-                    <Button variant="primary" onClick={() => handleRecordWinner()}>Confirm Winner</Button>
+                    <Button variant="secondary" onClick={() => setShowWinnerModal(false)} disabled={isRecordingWinner}>Cancel</Button>
+                    <Button
+                        variant="primary"
+                        onClick={() => handleRecordWinner()}
+                        disabled={isRecordingWinner}
+                    >
+                        {isRecordingWinner ? 'Recording…' : 'Confirm Winner'}
+                    </Button>
                 </div>
             </Modal>
 
@@ -1189,7 +1207,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <div className="grid grid-cols-1 gap-3">
                             <Button variant="secondary" onClick={async () => {
                                 setShowPostWinModal(false);
-                                setWinnerName('');
                                 setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
                                 handleClearSelection();
                                 await handleBeginClaimCheck();
@@ -1247,58 +1264,65 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </div>
             </Modal>
 
-            {/* Manual Snowball Win Modal */}
+            {/* Manual Snowball Win Modal — winners are anonymous on public surfaces, so no name input. */}
             <Modal isOpen={showManualSnowballModal} onClose={() => setShowManualSnowballModal(false)} title="Manual Snowball Award" className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
                     <div className="p-3 bg-[#a57626]/20 border border-[#a57626] rounded text-white text-sm">
                         This will record a Snowball Jackpot win, display the celebration, and <strong>reset the pot</strong>.
                         Use this if the automatic trigger was missed or for special circumstances.
                     </div>
-                    <div>
-                        <label className="text-sm text-white/85 block mb-1">Winner Name</label>
-                        <Input
-                            value={winnerName}
-                            onChange={(e) => setWinnerName(e.target.value)}
-                            placeholder="e.g. Lucky Winner"
-                            autoFocus
-                        />
-                    </div>
+                    <p className="text-sm text-white/85">
+                        Winners are recorded anonymously. Confirm the prize details below to log the snowball win.
+                    </p>
                     <div>
                         <label className="text-sm text-white/85 block mb-1">Prize Description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}
+                            autoFocus
                         />
                     </div>
                 </div>
                 <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="secondary" onClick={() => setShowManualSnowballModal(false)}>Cancel</Button>
+                    <Button
+                        variant="secondary"
+                        onClick={() => setShowManualSnowballModal(false)}
+                        disabled={isRecordingSnowballWinner}
+                    >
+                        Cancel
+                    </Button>
                     <Button
                         variant="primary"
+                        disabled={isRecordingSnowballWinner}
                         onClick={async () => {
-                            // Force record as snowball jackpot. Winner is always
-                            // anonymous on the public surfaces; the action sets
-                            // winner_name='Anonymous' server-side.
-                            const result = await recordWinner(
-                                sessionId,
-                                gameId,
-                                'Full House', // Assume Snowball is always FH
-                                prizeDescription,
-                                true, // Prize given immediately for manual close-out.
-                                true, // Force snowball jackpot override for manual award path.
-                                true
-                            );
+                            if (isRecordingSnowballWinner) return; // Double-tap guard
+                            setIsRecordingSnowballWinner(true);
+                            try {
+                                // Force record as snowball jackpot. Winner is always
+                                // anonymous on the public surfaces; the action sets
+                                // winner_name='Anonymous' server-side.
+                                const result = await recordWinner(
+                                    sessionId,
+                                    gameId,
+                                    'Full House', // Assume Snowball is always FH
+                                    prizeDescription,
+                                    true, // Prize given immediately for manual close-out.
+                                    true, // Force snowball jackpot override for manual award path.
+                                    true
+                                );
 
-                            if (!result?.success) {
-                                setActionError(result?.error || "Failed to record snowball win.");
-                            } else {
-                                setShowManualSnowballModal(false);
-                                setWinnerName('');
-                                setShowPostWinModal(true);
+                                if (!result?.success) {
+                                    setActionError(result?.error || "Failed to record snowball win.");
+                                } else {
+                                    setShowManualSnowballModal(false);
+                                    setShowPostWinModal(true);
+                                }
+                            } finally {
+                                setIsRecordingSnowballWinner(false);
                             }
                         }}
                     >
-                        Confirm Snowball Win
+                        {isRecordingSnowballWinner ? 'Recording…' : 'Confirm Snowball Win'}
                     </Button>
                 </div>
             </Modal>

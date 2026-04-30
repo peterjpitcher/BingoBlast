@@ -34,10 +34,12 @@ export async function login(formData: FormData): Promise<ActionResult> {
 }
 
 // NOTE: Public sign-up is disabled — this project is invite-only.
-// This action is gated to prevent unauthorized account creation.
-export async function signup(_formData: FormData): Promise<ActionResult> {
-    return { success: false, error: 'Registration is invite-only. Please contact an administrator.' }
-  }
+// This action is gated to prevent unauthorized account creation; the login UI
+// no longer surfaces a sign-up affordance, but the export is preserved so any
+// internal/future invite flow has a stable hook to plug into.
+export async function signup(): Promise<ActionResult> {
+  return { success: false, error: 'Registration is invite-only. Please contact an administrator.' }
+}
 
 export async function signout() {
   const supabase = await createClient()
