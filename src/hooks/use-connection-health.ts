@@ -6,6 +6,7 @@ import {
   RealtimeStatus,
   initialHealthState,
   reduceHealth,
+  selectHealthy,
   selectShouldAutoRefresh,
   selectShouldShowBanner,
 } from '@/lib/connection-health';
@@ -58,7 +59,7 @@ export function useConnectionHealth(): UseConnectionHealthApi {
   }, []);
 
   return {
-    healthy: state.healthy,
+    healthy: selectHealthy(state),
     shouldShowBanner: selectShouldShowBanner(state, now),
     shouldAutoRefresh: selectShouldAutoRefresh(state, now),
     unhealthyForMs: state.unhealthySinceMs == null ? 0 : Math.max(0, now - state.unhealthySinceMs),

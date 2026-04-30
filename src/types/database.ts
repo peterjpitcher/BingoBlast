@@ -449,7 +449,24 @@ export interface Database {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      assert_is_admin: { Args: Record<string, never>; Returns: undefined }
+      delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
+      delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }
+      reset_session_safe: { Args: { p_session_id: string }; Returns: undefined }
+      update_game_safe: {
+        Args: {
+          p_game_id: string
+          p_name: string
+          p_game_index: number
+          p_background_colour: string
+          p_notes: string
+          p_type: GameType
+          p_snowball_pot_id: string | null
+          p_stage_sequence: WinStage[]
+          p_prizes: Partial<Record<WinStage, string>>
+        }
+        Returns: Database['public']['Tables']['games']['Row']
+      }
     }
     Enums: {
       [_ in never]: never

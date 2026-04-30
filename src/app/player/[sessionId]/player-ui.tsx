@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
@@ -50,7 +50,14 @@ export default function PlayerUI({
   const [currentSession, setCurrentSession] = useState<Session>(session);
   const [currentActiveGame, setCurrentActiveGame] = useState<Game | null>(initialActiveGame);
   const [currentGameState, setCurrentGameState] = useState<GameState | null>(initialActiveGameState);
-  const [currentPrizeText, setCurrentPrizeText] = useState<string>(initialPrizeText);
+  // Derived from currentActiveGame + currentGameState. currentGameState is
+  // freshness-gated by isFreshGameState in every setter path, so the prize
+  // text inherits that gating and cannot drift to a stale stage.
+  const currentPrizeText = useMemo<string>(() => {
+    if (!currentActiveGame || !currentGameState) return initialPrizeText;
+    const stageKey = currentActiveGame.stage_sequence[currentGameState.current_stage_index];
+    return currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || '';
+  }, [currentActiveGame, currentGameState, initialPrizeText]);
   const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
 
   const [currentNumberDelayed, setCurrentNumberDelayed] = useState<number | null>(null);
@@ -70,6 +77,9 @@ export default function PlayerUI({
   // results from clobbering newer state when responses arrive out-of-order.
   const pollSeqRef = useRef(0);
   const pollInFlightRef = useRef(false);
+  // refreshActiveGame request-order guard: if active_game_id flips A→B and
+  // A's fetch resolves last, the wrong game would win.
+  const refreshSeqRef = useRef(0);
 
   // Stable ref so subscription callbacks can read the active game without
   // re-running this effect every time the game object identity changes.
@@ -85,6 +95,7 @@ export default function PlayerUI({
 
   const refreshActiveGame = useCallback(async (newActiveGameId: string | null) => {
     if (newActiveGameId === currentActiveGame?.id) return;
+    const seq = ++refreshSeqRef.current;
 
     if (newActiveGameId) {
       const { data: newGame } = await supabase.current
@@ -92,6 +103,7 @@ export default function PlayerUI({
         .select(GAME_SELECT)
         .eq('id', newActiveGameId)
         .single<Database['public']['Tables']['games']['Row']>();
+      if (seq !== refreshSeqRef.current) return;
 
       if (newGame) {
         setCurrentActiveGame(newGame);
@@ -100,11 +112,11 @@ export default function PlayerUI({
           .select(GAME_STATE_PUBLIC_SELECT)
           .eq('game_id', newGame.id)
           .single<Database['public']['Tables']['game_states_public']['Row']>();
+        if (seq !== refreshSeqRef.current) return;
 
         if (newGameState) {
           setCurrentGameState(newGameState);
           setHasLoaded(true);
-          setCurrentPrizeText(newGame.prizes?.[newGame.stage_sequence[newGameState.current_stage_index] as keyof typeof newGame.prizes] || '');
         } else {
           setCurrentGameState(null);
         }
@@ -167,16 +179,16 @@ export default function PlayerUI({
           { event: '*', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${activeGameId}` },
           (payload) => {
             if (!isMounted) return;
-            const incoming = payload.new as GameState;
+            // Drop payloads for a different game (active-game switch race).
+            const incoming = payload.new as GameState | undefined;
+            const activeId = currentActiveGameRef.current?.id;
+            if (!incoming || (activeId && incoming.game_id !== activeId)) return;
             // Freshness gate: ignore older snapshots that may arrive after a
             // reconnect or out-of-order broadcast (state_version is monotonic).
+            // currentPrizeText is derived from currentGameState via useMemo,
+            // so it inherits this gating automatically.
             setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
             setHasLoaded(true);
-            const game = currentActiveGameRef.current;
-            if (game) {
-              const stageKey = game.stage_sequence[incoming.current_stage_index];
-              setCurrentPrizeText(game.prizes?.[stageKey as keyof typeof game.prizes] || '');
-            }
           }
         )
         .subscribe((status) => {
@@ -293,12 +305,10 @@ export default function PlayerUI({
 
           // Freshness-gated apply: discard stale snapshots that lost a race
           // with a more recent realtime event or earlier poll response.
+          // currentPrizeText is derived from currentGameState via useMemo,
+          // so it inherits this gating automatically.
           setCurrentGameState((current) => (isFreshGameState(current, freshState) ? freshState : current));
           setHasLoaded(true);
-          const stageKey = activeGame.stage_sequence[freshState.current_stage_index];
-          setCurrentPrizeText(
-            activeGame.prizes?.[stageKey as keyof typeof activeGame.prizes] || ''
-          );
         }
 
         markPollSuccess();

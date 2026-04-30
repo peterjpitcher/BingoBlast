@@ -190,61 +190,44 @@ export async function updateGame(gameId: string, sessionId: string, _prevState: 
     }
   })
 
-  // 2. If the game has already started, lock the structural and prize fields.
-  // Reject any attempt to edit prizes, type, snowball_pot_id, or stage_sequence.
-  if (isLocked) {
-    const desiredSnowballPotId = type === 'snowball' ? snowball_pot_id : null
-    const originalPrizes = (originalGame.prizes as Partial<Record<WinStage, string>> | null) ?? {}
-
-    const lockedFields: string[] = []
-    if (type !== originalGame.type) lockedFields.push('type')
-    if (desiredSnowballPotId !== originalGame.snowball_pot_id) lockedFields.push('snowball_pot_id')
-    if (JSON.stringify(stage_sequence) !== JSON.stringify(originalGame.stage_sequence)) {
-      lockedFields.push('stage_sequence')
-    }
-    if (JSON.stringify(prizes) !== JSON.stringify(originalPrizes)) {
-      lockedFields.push('prizes')
-    }
-
-    if (lockedFields.length > 0) {
+  // 2. Per-game lock is enforced atomically by the update_game_safe RPC: when
+  // game_states.status is anything other than 'not_started', the RPC silently
+  // preserves type, snowball_pot_id, stage_sequence, and prizes. We do not
+  // re-check those fields here because a disabled <fieldset> in the UI omits
+  // them from FormData entirely — comparing absent values to the originals
+  // would falsely flag every locked-game edit.
+  //
+  // 3. Prize validation only runs for not_started games. On started games the
+  // RPC ignores submitted prizes anyway, and the form may not have submitted
+  // the prize inputs (disabled fieldset).
+  if (!isLocked) {
+    const validation = validateGamePrizes({ type, stage_sequence, prizes })
+    if (!validation.valid) {
       return {
         success: false,
-        error: `Cannot edit ${lockedFields.join(', ')} on a started game`,
+        error: `${name}: prize required for ${validation.missingStages.join(', ')}`,
       }
     }
   }
 
-  // 3. Validate prizes after the lock check (so the error message is the
-  // lock message, not a missing-prize message, when both apply).
-  const validation = validateGamePrizes({ type, stage_sequence, prizes })
-  if (!validation.valid) {
-    return {
-      success: false,
-      error: `${name}: prize required for ${validation.missingStages.join(', ')}`,
-    }
-  }
-
-  const { data: updatedGame, error } = await supabase
-    .from('games')
-    .update({
-      name,
-      game_index,
-      background_colour,
-      notes,
-      type,
-      snowball_pot_id: type === 'snowball' ? snowball_pot_id : null,
-      stage_sequence,
-      prizes,
-    })
-    .eq('id', gameId)
-    .select('id')
-    .single<{ id: string }>()
+  // Use the security-definer RPC so the read-then-update is atomic. Even if a
+  // host starts the game between our application-layer lock check and the
+  // update, the RPC re-checks game_states.status under a row lock and falls
+  // back to a non-structural-only update.
+  const { error } = await supabase.rpc('update_game_safe', {
+    p_game_id: gameId,
+    p_name: name,
+    p_game_index: game_index,
+    p_background_colour: background_colour,
+    p_notes: notes,
+    p_type: type,
+    p_snowball_pot_id: type === 'snowball' ? snowball_pot_id : null,
+    p_stage_sequence: stage_sequence,
+    p_prizes: prizes,
+  })
 
   if (error) {
     return { success: false, error: error.message }
-  }
-  if (!updatedGame) {
-    return { success: false, error: 'Game update did not apply.' }
   }
 
   revalidatePath(`/admin/sessions/${sessionId}`)
@@ -305,44 +288,10 @@ export async function deleteGame(gameId: string, sessionId: string): Promise<Act
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  // Allow deletion only when the game has no state row, OR the state row is
-  // 'not_started'. A missing row means the game has never been started.
-  const { data: gameState, error: gameStateError } = await supabase
-    .from('game_states')
-    .select('status')
-    .eq('game_id', gameId)
-    .maybeSingle<{ status: GameStatus }>()
-
-  if (gameStateError) {
-    return { success: false, error: gameStateError.message }
-  }
-
-  if (gameState && gameState.status !== 'not_started') {
-    return {
-      success: false,
-      error: `Cannot delete a game with status ${gameState.status}.`,
-    }
-  }
-
-  // Reject deletion if the game has any recorded winners. This protects
-  // historical results even when the live state has been reset.
-  const { count: winnerCount, error: winnerCountError } = await supabase
-    .from('winners')
-    .select('id', { count: 'exact', head: true })
-    .eq('game_id', gameId)
-
-  if (winnerCountError) {
-    return { success: false, error: winnerCountError.message }
-  }
-
-  if ((winnerCount ?? 0) > 0) {
-    return { success: false, error: 'Cannot delete a game that has recorded winners.' }
-  }
-
-  const { error } = await supabase
-    .from('games')
-    .delete()
-    .eq('id', gameId)
+  // RPC performs the precheck-and-delete atomically under a row lock so a host
+  // cannot start the game (or someone insert a winner row) between the check
+  // and the delete.
+  const { error } = await supabase.rpc('delete_game_safe', { p_game_id: gameId })
 
   if (error) {
     return { success: false, error: error.message }
@@ -392,44 +341,13 @@ export async function resetSession(sessionId: string, confirmationText: string):
     return { success: false, error: 'Type RESET or the session name to confirm.' }
   }
 
-  // 1. Get all game IDs for this session to clean up game_states
-  const { data: games } = await supabase
-    .from('games')
-    .select('id')
-    .eq('session_id', sessionId)
+  // RPC wraps every destructive step (winners delete, game_states delete,
+  // session reset) in a single transaction so a partial failure cannot leave
+  // a half-reset session.
+  const { error: rpcError } = await supabase.rpc('reset_session_safe', { p_session_id: sessionId })
 
-  if (games && games.length > 0) {
-    const gameIds = games.map((g: { id: string }) => g.id)
-
-    // 2. Delete game_states (idempotent: a missing row is fine).
-    const { error: deleteStatesError } = await supabase
-      .from('game_states')
-      .delete()
-      .in('game_id', gameIds)
-
-    if (deleteStatesError) {
-      return { success: false, error: "Failed to reset game states: " + deleteStatesError.message }
-    }
-  }
-
-  // 3. Delete winners (idempotent).
-  const { error: deleteWinnersError } = await supabase
-    .from('winners')
-    .delete()
-    .eq('session_id', sessionId)
-
-  if (deleteWinnersError) {
-    return { success: false, error: "Failed to reset winners: " + deleteWinnersError.message }
-  }
-
-  // 4. Reset Session Status
-  const { error: updateSessionError } = await supabase
-    .from('sessions')
-    .update({ status: 'ready', active_game_id: null })
-    .eq('id', sessionId)
-
-  if (updateSessionError) {
-    return { success: false, error: "Failed to update session status: " + updateSessionError.message }
+  if (rpcError) {
+    return { success: false, error: 'Failed to reset session: ' + rpcError.message }
   }
 
   revalidatePath(`/admin/sessions/${sessionId}`)

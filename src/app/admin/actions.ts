@@ -2,7 +2,7 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
-import type { Database, GameStatus, UserRole } from '@/types/database'
+import type { Database, UserRole } from '@/types/database'
 import type { ActionResult } from '@/types/actions'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 
@@ -110,58 +110,10 @@ export async function deleteSession(sessionId: string): Promise<ActionResult> {
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  // Reject deletion if any game in this session has been started. We look up
-  // the game ids first, then check their game_states rows for any status
-  // other than 'not_started'.
-  const { data: gamesInSession, error: gamesError } = await supabase
-    .from('sessions')
-    .select('id, games(id)')
-    .eq('id', sessionId)
-    .single<{ id: string; games: { id: string }[] | null }>()
-
-  if (gamesError || !gamesInSession) {
-    return { success: false, error: gamesError?.message || 'Session not found.' }
-  }
-
-  const gameIds = (gamesInSession.games ?? []).map((g) => g.id)
-
-  if (gameIds.length > 0) {
-    const { data: startedStates, error: startedError } = await supabase
-      .from('game_states')
-      .select('status')
-      .in('game_id', gameIds)
-      .neq('status', 'not_started')
-      .limit(1)
-
-    if (startedError) {
-      return { success: false, error: startedError.message }
-    }
-    if (startedStates && startedStates.length > 0) {
-      const status = (startedStates[0] as { status: GameStatus }).status
-      return {
-        success: false,
-        error: `Cannot delete a session containing a ${status} game.`,
-      }
-    }
-  }
-
-  // Reject deletion if there are any winners recorded against this session.
-  const { count: winnerCount, error: winnerCountError } = await supabase
-    .from('winners')
-    .select('id', { count: 'exact', head: true })
-    .eq('session_id', sessionId)
-
-  if (winnerCountError) {
-    return { success: false, error: winnerCountError.message }
-  }
-  if ((winnerCount ?? 0) > 0) {
-    return { success: false, error: 'Cannot delete a session that has recorded winners.' }
-  }
-
-  const { error } = await supabase
-    .from('sessions')
-    .delete()
-    .eq('id', sessionId)
+  // RPC performs the precheck-and-delete atomically under a row lock so a
+  // host cannot start a game in this session (or insert a winner row)
+  // between our check and the delete.
+  const { error } = await supabase.rpc('delete_session_safe', { p_session_id: sessionId })
 
   if (error) {
     return { success: false, error: error.message }

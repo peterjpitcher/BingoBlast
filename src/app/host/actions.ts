@@ -106,30 +106,45 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
     }
 
     // 2. Check game type
-    const { data: gameData } = await supabase
+    const { data: gameData, error: gameError } = await supabase
         .from('games')
         .select('type, snowball_pot_id')
         .eq('id', gameId)
         .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id'>>();
 
-    if (gameData?.type !== 'snowball' || !gameData.snowball_pot_id) return { success: true };
+    if (gameError) {
+        return { success: false, error: 'Error reading game for snowball logic: ' + gameError.message };
+    }
+    if (!gameData) {
+        return { success: false, error: 'Game not found for snowball update' };
+    }
+    if (gameData.type !== 'snowball' || !gameData.snowball_pot_id) return { success: true };
 
     // 3. Check for jackpot winner
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
         .from('winners')
         .select('*', { count: 'exact', head: true })
         .eq('game_id', gameId)
         .eq('is_snowball_jackpot', true);
 
+    if (countError) {
+        return { success: false, error: 'Error counting jackpot winners: ' + countError.message };
+    }
+
     const jackpotWon = count !== null && count > 0;
 
-    const { data: potData } = await supabase
+    const { data: potData, error: potReadError } = await supabase
         .from('snowball_pots')
         .select('*')
         .eq('id', gameData.snowball_pot_id)
         .single<Database['public']['Tables']['snowball_pots']['Row']>();
 
-    if (!potData) return { success: true };
+    if (potReadError) {
+        return { success: false, error: 'Error reading snowball pot: ' + potReadError.message };
+    }
+    if (!potData) {
+        return { success: false, error: 'Snowball pot row missing for configured pot id' };
+    }
 
     if (jackpotWon) {
         const resetUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
@@ -144,16 +159,18 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
 
         if (potError) {
             return { success: false, error: "Failed to reset snowball pot: " + potError.message };
-        } else {
-            const jackpotHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
-                snowball_pot_id: potData.id,
-                change_type: 'jackpot_won',
-                old_val_max: potData.current_max_calls,
-                new_val_max: potData.base_max_calls,
-                old_val_jackpot: potData.current_jackpot_amount,
-                new_val_jackpot: potData.base_jackpot_amount,
-            };
-            await supabase.from('snowball_pot_history').insert(jackpotHistory);
+        }
+        const jackpotHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
+            snowball_pot_id: potData.id,
+            change_type: 'jackpot_won',
+            old_val_max: potData.current_max_calls,
+            new_val_max: potData.base_max_calls,
+            old_val_jackpot: potData.current_jackpot_amount,
+            new_val_jackpot: potData.base_jackpot_amount,
+        };
+        const { error: historyError } = await supabase.from('snowball_pot_history').insert(jackpotHistory);
+        if (historyError) {
+            return { success: false, error: "Snowball pot reset but history write failed: " + historyError.message };
         }
     } else {
         // Rollover
@@ -171,16 +188,18 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
 
         if (potError) {
             return { success: false, error: "Failed to rollover snowball pot: " + potError.message };
-        } else {
-            const rolloverHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
-                snowball_pot_id: potData.id,
-                change_type: 'rollover',
-                old_val_max: potData.current_max_calls,
-                new_val_max: newMaxCalls,
-                old_val_jackpot: potData.current_jackpot_amount,
-                new_val_jackpot: newJackpot,
-            };
-            await supabase.from('snowball_pot_history').insert(rolloverHistory);
+        }
+        const rolloverHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
+            snowball_pot_id: potData.id,
+            change_type: 'rollover',
+            old_val_max: potData.current_max_calls,
+            new_val_max: newMaxCalls,
+            old_val_jackpot: potData.current_jackpot_amount,
+            new_val_jackpot: newJackpot,
+        };
+        const { error: historyError } = await supabase.from('snowball_pot_history').insert(rolloverHistory);
+        if (historyError) {
+            return { success: false, error: "Snowball pot rolled over but history write failed: " + historyError.message };
         }
     }
     return { success: true };
