@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
 import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining } from '@/lib/snowball';
+import { HOUSE_RULES } from '@/lib/house-rules';
 import { isFreshGameState } from '@/lib/game-state-version';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { ConnectionBanner } from '@/components/connection-banner';
@@ -472,22 +473,46 @@ export default function DisplayUI({
     <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md overflow-hidden">
       <h3 className={houseRulesTitleClass}>House Rules</h3>
       <ul className={houseRulesListClass}>
-        <li className="flex gap-4 items-start">
-          <span className="text-white mt-1">➤</span>
-          <span>Claims must be called on the number they&apos;re won on - <span className="font-bold">late claims invalid</span></span>
-        </li>
-        <li className="flex gap-4 items-start">
-          <span className="text-white mt-1">➤</span>
-          <span>Multiple claims share the prize</span>
-        </li>
-        <li className="flex gap-4 items-start">
-          <span className="text-white mt-1">➤</span>
-          <span>Snowball eligibility: Players must have been here for the last three games</span>
-        </li>
-        <li className="flex gap-4 items-start pt-1">
-          <span className="text-[clamp(1.7rem,2.3vw,2.4rem)]">🎉</span>
-          <span className="font-bold italic">Enjoy the night and best of luck to everyone!</span>
-        </li>
+        {HOUSE_RULES.map((rule, i) => (
+          <li
+            key={i}
+            className={cn(
+              'flex gap-4 items-start',
+              rule.variant === 'closing' && 'pt-1'
+            )}
+          >
+            <span
+              className={
+                rule.variant === 'closing'
+                  ? 'text-[clamp(1.7rem,2.3vw,2.4rem)]'
+                  : 'text-white mt-1'
+              }
+            >
+              {rule.icon}
+            </span>
+            {rule.variant === 'closing' ? (
+              <span className="font-bold italic">
+                {rule.segments.map((seg, j) =>
+                  seg.bold ? (
+                    <span key={j} className="font-bold">{seg.text}</span>
+                  ) : (
+                    <React.Fragment key={j}>{seg.text}</React.Fragment>
+                  )
+                )}
+              </span>
+            ) : (
+              <span>
+                {rule.segments.map((seg, j) =>
+                  seg.bold ? (
+                    <span key={j} className="font-bold">{seg.text}</span>
+                  ) : (
+                    <React.Fragment key={j}>{seg.text}</React.Fragment>
+                  )
+                )}
+              </span>
+            )}
+          </li>
+        ))}
       </ul>
     </div>
   );
