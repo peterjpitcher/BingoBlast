@@ -18,6 +18,7 @@ import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining, isSnowb
 import { isFreshGameState } from '@/lib/game-state-version';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
 import { logError } from '@/lib/log-error';
+import { PreGameBriefing } from '@/components/host/pre-game-briefing';
 
 type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -34,6 +35,7 @@ interface GameControlProps {
     initialGameState: GameState;
     currentUserId: string;
     currentUserRole: UserRole;
+    isFirstGameOfSession: boolean;
 }
 
 // Hardcoded for now (same as before)
@@ -98,7 +100,7 @@ const NUMBER_NICKNAMES: { [key: number]: string } = {
     90: "Top Of The Shop"
 };
 
-export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole }: GameControlProps) {
+export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole, isFirstGameOfSession }: GameControlProps) {
     const router = useRouter();
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
     const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
@@ -750,7 +752,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
 
     return (
-        <div className="p-4 pb-32 max-w-5xl mx-auto relative text-white">
+        <div className="p-4 pb-24 max-w-5xl mx-auto relative text-white">
             {/* Controller Locked Overlay / Banner */}
             {!isController && (
                 <div className="absolute inset-x-0 top-0 z-50 p-4">
@@ -781,78 +783,91 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             {currentGameState.paused_for_validation && <div className="mb-4 p-4 bg-[#a57626]/25 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">CHECKING CLAIM...</div>}
 
             {/* Main Display Card */}
-            <Card className={cn(hostSurfaceClass, "mb-6 overflow-hidden")}>
-                <CardContent className="p-8 flex flex-col items-center text-center">
-                    <div className="mb-6 relative">
-                        {currentNumber ? (
-                            <BingoBall number={currentNumber} variant="active" className="w-40 h-40 text-7xl bg-[#005131] border-[#a57626]/70 text-white shadow-[0_0_40px_rgba(165,118,38,0.35)]" />
-                        ) : (
-                            <div className="w-40 h-40 rounded-full bg-[#005131] border-4 border-[#1f7c58] flex items-center justify-center text-white/70 text-sm font-bold">
-                                READY
+            <Card className={cn(hostSurfaceClass, "mb-4 overflow-hidden")}>
+                <CardContent className="p-5 flex flex-col items-center text-center">
+                    {currentGameState.numbers_called_count === 0 ? (
+                        // Pre-game briefing — scrolls inside its own container so primary controls stay pinned.
+                        <div className="w-full max-h-[55vh] overflow-y-auto pr-1">
+                            <PreGameBriefing
+                                game={game}
+                                currentSnowballPot={currentSnowballPot}
+                                isFirstGameOfSession={isFirstGameOfSession}
+                            />
+                        </div>
+                    ) : (
+                        <>
+                            {currentNickname && (
+                                <h2 className="text-3xl font-bold text-white mb-3 animate-in fade-in slide-in-from-top-4">
+                                    {currentNickname}
+                                </h2>
+                            )}
+                            <div className="mb-3 relative">
+                                {currentNumber ? (
+                                    <BingoBall
+                                        number={currentNumber}
+                                        variant="active"
+                                        className="w-32 h-32 text-6xl bg-[#005131] border-[#a57626]/70 text-white shadow-[0_0_40px_rgba(165,118,38,0.35)]"
+                                    />
+                                ) : (
+                                    // Edge case: numbers_called_count > 0 but no current number resolvable.
+                                    // Keep a small READY fallback for safety.
+                                    <div className="w-32 h-32 rounded-full bg-[#005131] border-4 border-[#1f7c58] flex items-center justify-center text-white/70 text-sm font-bold">
+                                        READY
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
 
-                    {currentNickname && (
-                        <h2 className="text-3xl font-bold text-white mb-4 animate-in fade-in slide-in-from-bottom-4">{currentNickname}</h2>
-                    )}
-
-                    {/* Passive label so the host knows why the displayed number isn't yet on the player screen. */}
-                    {currentGameState.last_call_at && (
-                        <p className="text-xs text-muted-foreground mb-4">
-                            Players see this in {currentGameState.call_delay_seconds ?? 2}s
-                        </p>
-                    )}
-
-                    <div className="flex items-center gap-6 text-sm text-white/90 border-t border-[#1f7c58] pt-4 w-full justify-center">
-                        <div>
-                            <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Calls</span>
-                            <span className="text-xl font-mono text-white">{currentGameState.numbers_called_count}</span>
-                        </div>
-                        <div className="h-8 w-px bg-[#1f7c58]"></div>
-                        <div>
-                            <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Playing For</span>
-                            <span className="text-xl font-bold text-white">{currentStageName || 'Finished'}</span>
-                        </div>
-                        <div className="h-8 w-px bg-[#1f7c58]"></div>
-                        <div>
-                            <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Prize</span>
-                            {isStagePrizeMissing ? (
-                                <span className="text-xl font-bold text-destructive">⚠️ Prize not set</span>
-                            ) : (
-                                <span className="text-xl font-bold text-white">{plannedStagePrize}</span>
+                            <div className="flex items-center gap-6 text-sm text-white/90 border-t border-[#1f7c58] pt-3 w-full justify-center">
+                                <div>
+                                    <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Calls</span>
+                                    <span className="text-xl font-mono text-white">{currentGameState.numbers_called_count}</span>
+                                </div>
+                                <div className="h-8 w-px bg-[#1f7c58]"></div>
+                                <div>
+                                    <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Playing For</span>
+                                    <span className="text-xl font-bold text-white">{currentStageName || 'Finished'}</span>
+                                </div>
+                                <div className="h-8 w-px bg-[#1f7c58]"></div>
+                                <div>
+                                    <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Prize</span>
+                                    {isStagePrizeMissing ? (
+                                        <span className="text-xl font-bold text-destructive">⚠️ Prize not set</span>
+                                    ) : (
+                                        <span className="text-xl font-bold text-white">{plannedStagePrize}</span>
+                                    )}
+                                </div>
+                            </div>
+                            {isSnowballGame && (
+                                <div className="mt-4 w-full rounded-xl border border-[#a57626]/70 bg-[#005131]/65 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                                    {currentSnowballPot && snowballCallsLabel ? (
+                                        <>
+                                            <p className="text-white font-semibold">
+                                                Snowball Jackpot: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
+                                            </p>
+                                            <p className="text-white/90 font-semibold text-right">
+                                                {snowballCallsLabel}
+                                                {` • ${currentGameState.numbers_called_count}/${currentSnowballPot.current_max_calls} calls`}
+                                                {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <p className="text-white/90 font-semibold">
+                                            Snowball countdown unavailable: this game is not linked to a snowball pot.
+                                        </p>
+                                    )}
+                                </div>
                             )}
-                        </div>
-                    </div>
-                    {isSnowballGame && (
-                        <div className="mt-4 w-full rounded-xl border border-[#a57626]/70 bg-[#005131]/65 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                            {currentSnowballPot && snowballCallsLabel ? (
-                                <>
-                                    <p className="text-white font-semibold">
-                                        Snowball Jackpot: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
-                                    </p>
-                                    <p className="text-white/90 font-semibold text-right">
-                                        {snowballCallsLabel}
-                                        {` • ${currentGameState.numbers_called_count}/${currentSnowballPot.current_max_calls} calls`}
-                                        {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
-                                    </p>
-                                </>
-                            ) : (
-                                <p className="text-white/90 font-semibold">
-                                    Snowball countdown unavailable: this game is not linked to a snowball pot.
-                                </p>
-                            )}
-                        </div>
+                        </>
                     )}
                 </CardContent>
             </Card>
 
             {/* Control Pad */}
-            <div className={cn("grid grid-cols-2 gap-4 mb-6", !isController && "opacity-50 pointer-events-none")}>
+            <div className={cn("grid grid-cols-2 gap-3 mb-4", !isController && "opacity-50 pointer-events-none")}>
                 <Button
                     variant="primary"
                     size="xl"
-                    className={cn("col-span-2 h-24 text-3xl bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] shadow-lg shadow-black/20", isCallingNumber && "opacity-80")}
+                    className={cn("col-span-2 h-20 text-2xl bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] shadow-lg shadow-black/20", isCallingNumber && "opacity-80")}
                     onClick={handleCallNextNumber}
                     disabled={isNextNumberDisabled}
                 >

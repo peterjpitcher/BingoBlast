@@ -40,6 +40,7 @@ export default async function GameControlPage({ params }: PageProps) {
     .from('games')
     .select('*')
     .eq('id', gameId)
+    .eq('session_id', sessionId)
     .single<Database['public']['Tables']['games']['Row']>();
 
   if (gameError || !game) {
@@ -64,8 +65,20 @@ export default async function GameControlPage({ params }: PageProps) {
 
   if (!gameStateResult.success || !gameStateResult.data) {
     console.warn(`Game ${gameId} in session ${sessionId} has no initial game state. Redirecting to host dashboard.`);
-    redirect('/host'); 
+    redirect('/host');
   }
+
+  // Determine whether this is the first game of the session — controls whether
+  // the pre-game briefing surfaces the house rules block.
+  const { data: firstGame } = await supabase
+    .from('games')
+    .select('game_index')
+    .eq('session_id', sessionId)
+    .order('game_index', { ascending: true })
+    .limit(1)
+    .single<{ game_index: number }>();
+
+  const isFirstGameOfSession = !!firstGame && game.game_index === firstGame.game_index;
 
   return (
     <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white">
@@ -98,6 +111,7 @@ export default async function GameControlPage({ params }: PageProps) {
         initialGameState={gameStateResult.data}
         currentUserId={user.id}
         currentUserRole={profile?.role || 'host'}
+        isFirstGameOfSession={isFirstGameOfSession}
       />
     </div>
   );
