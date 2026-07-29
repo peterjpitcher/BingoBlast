@@ -1,6 +1,6 @@
 import React from 'react';
 import { Database } from '@/types/database';
-import { HOUSE_RULES } from '@/lib/house-rules';
+import { HOUSE_RULES, CALL_RESPONSES } from '@/lib/house-rules';
 import { getColourName } from '@/lib/colour-name';
 import { formatPounds } from '@/lib/snowball';
 import { cn } from '@/lib/utils';
@@ -119,6 +119,28 @@ export function PreGameBriefing({
                     )}
                   </span>
                 )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Call and response prompts, first game only */}
+      {isFirstGameOfSession && (
+        <div className="border-t border-[#1f7c58] pt-3 mt-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-[#f3d59d] font-semibold mb-2">
+            Remind the room
+          </p>
+          <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {CALL_RESPONSES.map((call) => (
+              <li
+                key={call.number}
+                className="flex items-center justify-between bg-[#003f27]/70 border border-[#1f7c58] rounded-lg px-3 py-2"
+              >
+                <span className="text-sm font-bold text-white">{call.number}</span>
+                <span className="text-sm font-semibold ml-3 text-right text-[#f3d59d]">
+                  {call.response}
+                </span>
               </li>
             ))}
           </ul>

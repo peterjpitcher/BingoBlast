@@ -29,7 +29,8 @@ const BingoBall = ({ number, variant = "normal", className }: BingoBallProps) =>
   return (
     <div
       className={cn(
-        "rounded-full flex items-center justify-center transition-all duration-300",
+        // shrink-0 keeps balls round in a flex row: they overflow rather than squash.
+        "rounded-full shrink-0 flex items-center justify-center transition-all duration-300",
         variants[variant],
         variant === 'active' ? colorClass : '', // Only color the active ball for now, or maybe all white balls?
         // Let's style the text color for normal balls too

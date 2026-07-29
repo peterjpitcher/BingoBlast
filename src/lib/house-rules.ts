@@ -46,3 +46,18 @@ export const HOUSE_RULES: ReadonlyArray<Rule> = [
     variant: 'closing',
   },
 ];
+
+export type CallResponse = { number: number; response: string };
+
+/**
+ * Call-and-response prompts. Shown on the host pre-game briefing and on the
+ * public display's House Rules panel. Numeric order for scanability.
+ */
+export const CALL_RESPONSES: ReadonlyArray<CallResponse> = [
+  { number: 2, response: 'a quack' },
+  { number: 11, response: 'a wolf whistle' },
+  { number: 22, response: 'a double quack' },
+  { number: 59, response: 'tap your pen on your glass' },
+  { number: 69, response: 'an ooooooooo' },
+  { number: 88, response: 'wobble wobble' },
+];
