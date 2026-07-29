@@ -11,12 +11,22 @@
 --      rolled-back call count. It also failed to filter voided winners, which
 --      made the guard a dead end for the host.
 --   3. record_winner inserted the winner and then updated the display state as
---      two statements. A failure on the second invited a retry that inserted a
---      second winner.
+--      two statements. A failure on the second left a winner recorded with no
+--      announcement on screen.
 --
 -- These functions do the check and the mutation under a single row lock inside
 -- one transaction, so the precheck is binding for the lifetime of the mutation
--- and a partial failure leaves nothing behind to retry.
+-- and a FAILED call leaves nothing behind.
+--
+-- What that does NOT cover: a call that commits in the database but whose
+-- response is lost on the way back to the caller. Retrying it runs the whole
+-- function again against the committed state. call_next_number and
+-- void_last_number move the count they check, so the repeat is rejected or is at
+-- least visible. record_winner_atomic mutates none of the fields it checks, so
+-- every precheck passes a second time and a second winner row is inserted.
+-- Legitimate ties mean there is no unique constraint to lean on. An idempotency
+-- key for record_winner_atomic is tracked separately; until it lands, callers
+-- must not auto-retry that function.
 --
 -- Conventions follow 20260430120300_atomic_admin_mutations.sql: plpgsql,
 -- security definer, set search_path = public, row lock via "for update",
@@ -258,8 +268,13 @@ grant execute on function public.void_last_number(uuid) to authenticated;
 grant execute on function public.void_last_number(uuid) to service_role;
 
 -- record_winner_atomic: inserts the winner row and updates the display state in
--- one transaction. A failure on either half rolls both back, so there is never
--- a winner recorded without its announcement and a retry cannot duplicate it.
+-- one transaction. Either both land or neither does, so there is never a winner
+-- recorded without its announcement.
+--
+-- It is NOT idempotent. Retrying a call that already committed inserts a second
+-- winner: the function mutates none of the fields its prechecks read, and
+-- legitimate ties rule out a unique constraint on (game_id, stage). Callers must
+-- not auto-retry. An idempotency key is tracked separately.
 --
 -- Snowball eligibility is recomputed here from the locked pot row. The client's
 -- p_snowball_eligible is the host's explicit Eligible / Not eligible choice, and

@@ -307,7 +307,12 @@ export interface Database {
           call_count_at_win: number | null
           is_snowball_eligible: boolean
           is_snowball_jackpot: boolean
-          is_void: boolean
+          // Nullable in production, so typed honestly. Treat null as not void.
+          // Never filter with `eq('is_void', false)`: it silently drops the null
+          // rows, and a null-void jackpot winner would then roll the pot instead
+          // of resetting it. Use `.not('is_void', 'is', true)`, which matches
+          // `coalesce(is_void, false) = false` on the SQL side.
+          is_void: boolean | null
           void_reason: string | null
           created_at: string
         }
@@ -399,6 +404,10 @@ export interface Database {
         Row: {
           id: string
           snowball_pot_id: string
+          // The game whose end settled the pot. Unique per pot where set, which
+          // is what makes one settlement per game a database guarantee. Null on
+          // rows written before the column existed and on manual adjustments.
+          game_id: string | null
           change_type: string | null
           old_val_max: number | null
           new_val_max: number | null
@@ -410,6 +419,7 @@ export interface Database {
         Insert: {
           id?: string
           snowball_pot_id: string
+          game_id?: string | null
           change_type?: string | null
           old_val_max?: number | null
           new_val_max?: number | null
@@ -421,6 +431,7 @@ export interface Database {
         Update: {
           id?: string
           snowball_pot_id?: string
+          game_id?: string | null
           change_type?: string | null
           old_val_max?: number | null
           new_val_max?: number | null
@@ -440,6 +451,12 @@ export interface Database {
             foreignKeyName: 'snowball_pot_history_changed_by_fkey'
             columns: ['changed_by']
             referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'snowball_pot_history_game_id_fkey'
+            columns: ['game_id']
+            referencedRelation: 'games'
             referencedColumns: ['id']
           },
         ]

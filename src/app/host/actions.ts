@@ -23,6 +23,9 @@ const CONTROLLER_HEARTBEAT_TIMEOUT_MS = 30000
 const GENERIC_ACTION_ERROR = 'Something went wrong. Please try again.'
 const COULD_NOT_READ_GAME_ERROR = 'Could not read this game. Please reload.'
 const STATE_MOVED_ERROR = 'The game changed while you were acting. Refreshed now.'
+// Only ever shown when the pot genuinely did not move. A missing audit row is
+// not a missing pot update, and must never reach the host as one.
+const SNOWBALL_POT_NOT_MOVED_ERROR = 'The game finished but the snowball pot did not update. Please check the pot in Admin.'
 
 interface MappedRpcError {
   error: string
@@ -71,6 +74,32 @@ function failure(
 ): { success: false; error: string } {
   logActionFailure(action, logged)
   return { success: false, error: hostMessage }
+}
+
+/** The failure arm of ActionResult, whatever the success payload. */
+type ActionFailure = { success: false; error: string; conflict?: true; code?: ActionFailureCode }
+
+/**
+ * Rewraps an inner action's failure for a composite action.
+ *
+ * Composite actions (moveToNextGameOnBreak, moveToNextGameAfterWin) call other
+ * actions and used to rebuild the failure with `failure()`, which dropped
+ * `conflict` and `code`. The client then never refreshed on a state conflict, so
+ * the host stared at a stale screen. Both flags are carried through here.
+ */
+function relayFailure(
+  action: string,
+  inner: ActionFailure,
+  fallbackMessage: string
+): ActionFailure {
+  const hostMessage = inner.error || fallbackMessage
+  logActionFailure(action, hostMessage)
+  return {
+    success: false,
+    error: hostMessage,
+    ...(inner.conflict ? { conflict: true as const } : {}),
+    ...(inner.code ? { code: inner.code } : {}),
+  }
 }
 
 /** As `failure`, but tells the client the state moved so it should refresh. */
@@ -173,8 +202,39 @@ function generateShuffledNumberSequence(): number[] {
   return numbers;
 }
 
-// Shared Snowball Logic Helper
-async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessionId: string, gameId: string): Promise<{ success: boolean; error?: string }> {
+/** Postgres unique violation. Here it means this game is already settled. */
+const UNIQUE_VIOLATION_CODE = '23505'
+
+interface SnowballSettlementResult {
+    /**
+     * False ONLY when the pot itself demonstrably did not move. A failed audit
+     * write is not a failed pot write, so it never sets this to false.
+     */
+    success: boolean
+    /** Diagnostic detail for the log. Never shown to the host. */
+    error?: string
+}
+
+/**
+ * Settles the snowball pot for a game that has just finished: reset if the
+ * jackpot was won, rollover if it was not.
+ *
+ * Once per game, enforced by the database. The audit row in
+ * snowball_pot_history carries game_id and is written FIRST, claiming the
+ * settlement. A partial unique index on (snowball_pot_id, game_id) turns a
+ * second attempt for the same game into a unique violation, which is how a
+ * re-opened and re-ended game is stopped from inventing cash. See
+ * supabase/migrations/20260729120300_snowball_audit_and_settlement_guard.sql.
+ *
+ * The pot outcome and the audit outcome are reported separately. No path here
+ * may tell the host the pot did not move when it did.
+ *
+ * Residual risk to know about: if the claim lands and the pot update then fails,
+ * the claim blocks a retry, so that pot has to be corrected by hand on
+ * /admin/snowball. The host is told so in plain words, and a missed rollover is
+ * correctable in a way that invented cash is not.
+ */
+async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessionId: string, gameId: string): Promise<SnowballSettlementResult> {
     // 1. Check session type
     const { data: session, error: sessionError } = await supabase
         .from('sessions')
@@ -207,12 +267,15 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
 
     // 3. Check for jackpot winner. Voided winners must not count: a voided
     // jackpot winner used to reset the pot at game end, which is a money bug.
+    // is_void is nullable in production, and `eq false` would skip a NULL row
+    // and roll the pot over instead of resetting it, so match NULL as well.
+    // This mirrors coalesce(is_void, false) = false on the SQL side.
     const { count, error: countError } = await supabase
         .from('winners')
         .select('*', { count: 'exact', head: true })
         .eq('game_id', gameId)
         .eq('is_snowball_jackpot', true)
-        .eq('is_void', false);
+        .not('is_void', 'is', true);
 
     if (countError) {
         return { success: false, error: 'Error counting jackpot winners: ' + countError.message };
@@ -233,62 +296,78 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessi
         return { success: false, error: 'Snowball pot row missing for configured pot id' };
     }
 
-    if (jackpotWon) {
-        const resetUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
-            current_max_calls: potData.base_max_calls,
-            current_jackpot_amount: potData.base_jackpot_amount,
-            last_awarded_at: new Date().toISOString()
-        };
-        const { error: potError } = await supabase
-          .from('snowball_pots')
-          .update(resetUpdate)
-          .eq('id', potData.id);
+    // 4. Work out both sides of the move before writing anything, so the audit
+    // row can be written first and stand as the settlement claim.
+    const newMaxCalls = jackpotWon
+        ? potData.base_max_calls
+        : potData.current_max_calls + potData.calls_increment;
+    const newJackpot = jackpotWon
+        ? Number(potData.base_jackpot_amount)
+        : Number(potData.current_jackpot_amount) + Number(potData.jackpot_increment);
+    const settlementLabel = jackpotWon ? 'reset' : 'rollover';
 
-        if (potError) {
-            return { success: false, error: "Failed to reset snowball pot: " + potError.message };
-        }
-        const jackpotHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
-            snowball_pot_id: potData.id,
-            change_type: 'jackpot_won',
-            old_val_max: potData.current_max_calls,
-            new_val_max: potData.base_max_calls,
-            old_val_jackpot: potData.current_jackpot_amount,
-            new_val_jackpot: potData.base_jackpot_amount,
-        };
-        const { error: historyError } = await supabase.from('snowball_pot_history').insert(jackpotHistory);
-        if (historyError) {
-            return { success: false, error: "Snowball pot reset but history write failed: " + historyError.message };
-        }
-    } else {
-        // Rollover
-        const newMaxCalls = potData.current_max_calls + potData.calls_increment;
-        const newJackpot = Number(potData.current_jackpot_amount) + Number(potData.jackpot_increment);
+    // 5. Claim the settlement. The unique index on (snowball_pot_id, game_id) is
+    // the guard: if this game has already been settled, the insert fails with
+    // 23505 and the pot is left exactly where it is.
+    const historyRow: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
+        snowball_pot_id: potData.id,
+        game_id: gameId,
+        change_type: jackpotWon ? 'jackpot_won' : 'rollover',
+        old_val_max: potData.current_max_calls,
+        new_val_max: newMaxCalls,
+        old_val_jackpot: potData.current_jackpot_amount,
+        new_val_jackpot: newJackpot,
+    };
+    const { error: historyError } = await supabase
+        .from('snowball_pot_history')
+        .insert(historyRow);
 
-        const rolloverUpdate: Database['public']['Tables']['snowball_pots']['Update'] = {
-            current_max_calls: newMaxCalls,
-            current_jackpot_amount: newJackpot
-        };
-        const { error: potError } = await supabase
-          .from('snowball_pots')
-          .update(rolloverUpdate)
-          .eq('id', potData.id);
-
-        if (potError) {
-            return { success: false, error: "Failed to rollover snowball pot: " + potError.message };
-        }
-        const rolloverHistory: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
-            snowball_pot_id: potData.id,
-            change_type: 'rollover',
-            old_val_max: potData.current_max_calls,
-            new_val_max: newMaxCalls,
-            old_val_jackpot: potData.current_jackpot_amount,
-            new_val_jackpot: newJackpot,
-        };
-        const { error: historyError } = await supabase.from('snowball_pot_history').insert(rolloverHistory);
-        if (historyError) {
-            return { success: false, error: "Snowball pot rolled over but history write failed: " + historyError.message };
-        }
+    if (historyError?.code === UNIQUE_VIOLATION_CODE) {
+        // Already settled once, most likely a completed game re-opened and ended
+        // again. Report success: the pot is correct, it just moved earlier.
+        logActionFailure('handleSnowballPotUpdate', `${settlementLabel} already settled for this game, pot left unchanged`);
+        return { success: true };
     }
+
+    if (historyError) {
+        // The claim could not be written for some other reason (a transient
+        // network or RLS failure). Settle anyway and log loudly. Reasoning: a
+        // missed rollover is visible on /admin/snowball and a host can correct
+        // it, whereas a double rollover invents cash out of nothing. A transient
+        // write error is far more likely than a deliberate game re-open, so the
+        // safer bet is to settle once and leave a loud audit gap behind.
+        logActionFailure('handleSnowballPotUpdate', historyError);
+        logActionFailure('handleSnowballPotUpdate', `settling ${settlementLabel} without an audit row; check /admin/snowball`);
+    }
+
+    // 6. Move the pot. Without .select() an RLS-filtered update returns no error
+    // and no rows, which used to be reported to the host as success.
+    const potUpdate: Database['public']['Tables']['snowball_pots']['Update'] = jackpotWon
+        ? {
+            current_max_calls: newMaxCalls,
+            current_jackpot_amount: newJackpot,
+            last_awarded_at: new Date().toISOString(),
+        }
+        : {
+            current_max_calls: newMaxCalls,
+            current_jackpot_amount: newJackpot,
+        };
+    const { data: updatedPots, error: potError } = await supabase
+        .from('snowball_pots')
+        .update(potUpdate)
+        .eq('id', potData.id)
+        .select('id');
+
+    if (potError) {
+        return { success: false, error: `Failed to ${settlementLabel} the snowball pot: ${potError.message}` };
+    }
+    if (!updatedPots || updatedPots.length === 0) {
+        return {
+            success: false,
+            error: `Snowball pot ${settlementLabel} matched no rows. The signed-in account probably lacks admin rights on snowball_pots.`,
+        };
+    }
+
     return { success: true };
 }
 
@@ -401,19 +480,28 @@ export async function startGame(
           return failure('startGame', "Another host is currently controlling this game.");
         }
 
-        const { error: updateError } = await dbClient
+        // Bound to the status this branch was chosen for. Without it a delayed
+        // request could apply a takeover to a game that has since been reset.
+        const { data: takeoverRows, error: updateError } = await dbClient
           .from('game_states')
           .update({
             controlling_host_id: authResult.user!.id,
             controller_last_seen_at: nowIso,
           } satisfies Database['public']['Tables']['game_states']['Update'])
           .eq('game_id', gameId)
+          .eq('status', 'in_progress')
+          .select('id')
 
         if (updateError) {
           return failure('startGame', 'Could not take control of this game. Please try again.', updateError);
         }
+        if (!takeoverRows || takeoverRows.length === 0) {
+          return conflictFailure('startGame', STATE_MOVED_ERROR, 'takeover found no in_progress row');
+        }
       } else if (existingGameState?.status === 'completed') {
-        const { error: updateError } = await dbClient
+        // Bound to 'completed'. Without it a delayed restart could re-open a game
+        // another host has already started and is calling balls in.
+        const { data: restartRows, error: updateError } = await dbClient
           .from('game_states')
           .update({
             status: 'in_progress',
@@ -426,9 +514,14 @@ export async function startGame(
             controller_last_seen_at: nowIso,
           } satisfies Database['public']['Tables']['game_states']['Update'])
           .eq('game_id', gameId)
+          .eq('status', 'completed')
+          .select('id')
 
         if (updateError) {
           return failure('startGame', 'Could not restart this game. Please try again.', updateError);
+        }
+        if (!restartRows || restartRows.length === 0) {
+          return conflictFailure('startGame', STATE_MOVED_ERROR, 'restart found no completed row');
         }
       } else {
         const sequence = existingGameState?.number_sequence ?? generateShuffledNumberSequence();
@@ -455,13 +548,22 @@ export async function startGame(
         };
 
         if (existingGameState) {
-          const { error: updateError } = await dbClient
+          // Bound to 'not_started', and this is the destructive one: freshState
+          // zeroes called_numbers and numbers_called_count. Two host devices on
+          // the same unstarted game both read 'not_started'; the second, delayed
+          // request must not wipe a board the first has already filled.
+          const { data: freshRows, error: updateError } = await dbClient
             .from('game_states')
             .update(freshState)
             .eq('game_id', gameId)
+            .eq('status', 'not_started')
+            .select('id')
 
           if (updateError) {
             return failure('startGame', 'Could not start this game. Please try again.', updateError);
+          }
+          if (!freshRows || freshRows.length === 0) {
+            return conflictFailure('startGame', STATE_MOVED_ERROR, 'fresh start found no not_started row');
           }
         } else {
           const { error: insertError } = await dbClient
@@ -469,6 +571,11 @@ export async function startGame(
             .insert(freshState);
 
           if (insertError) {
+            // game_states.game_id is unique, so a duplicate here means another
+            // device created the state first. That is a conflict, not a failure.
+            if (insertError.code === UNIQUE_VIOLATION_CODE) {
+              return conflictFailure('startGame', STATE_MOVED_ERROR, insertError);
+            }
             return failure('startGame', 'Could not start this game. Please try again.', insertError);
           }
         }
@@ -868,7 +975,7 @@ export async function moveToNextGameOnBreak(
     if (currentGameState.status !== 'completed') {
         const endResult = await endGame(currentGameId, sessionId);
         if (!endResult.success) {
-            return failure('moveToNextGameOnBreak', endResult.error || "Could not finish the current game.");
+            return relayFailure('moveToNextGameOnBreak', endResult, "Could not finish the current game.");
         }
     }
     if (!nextGameId) {
@@ -877,7 +984,7 @@ export async function moveToNextGameOnBreak(
 
     const startResult = await startGame(sessionId, nextGameId, cashJackpotAmountInput);
     if (!startResult.success) {
-        return failure('moveToNextGameOnBreak', startResult.error || "Could not start the next game.");
+        return relayFailure('moveToNextGameOnBreak', startResult, "Could not start the next game.");
     }
     if (startResult.data?.requiresCashJackpotAmount) {
         return {
@@ -891,7 +998,7 @@ export async function moveToNextGameOnBreak(
 
     const breakResult = await toggleBreak(nextGameId, true);
     if (!breakResult.success) {
-        return failure('moveToNextGameOnBreak', breakResult.error || "Could not put the next game on a break.");
+        return relayFailure('moveToNextGameOnBreak', breakResult, "Could not put the next game on a break.");
     }
 
     revalidatePath(`/host/${sessionId}/${nextGameId}`);
@@ -940,7 +1047,7 @@ export async function moveToNextGameAfterWin(
     if (currentGameState.status !== 'completed') {
         const endResult = await endGame(currentGameId, sessionId);
         if (!endResult.success) {
-            return failure('moveToNextGameAfterWin', endResult.error || "Could not finish the current game.");
+            return relayFailure('moveToNextGameAfterWin', endResult, "Could not finish the current game.");
         }
     }
 
@@ -950,7 +1057,7 @@ export async function moveToNextGameAfterWin(
 
     const startResult = await startGame(sessionId, nextGameId, cashJackpotAmountInput);
     if (!startResult.success) {
-        return failure('moveToNextGameAfterWin', startResult.error || "Could not start the next game.");
+        return relayFailure('moveToNextGameAfterWin', startResult, "Could not start the next game.");
     }
     if (startResult.data?.requiresCashJackpotAmount) {
         return {
@@ -1201,11 +1308,13 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult<{
         return conflictFailure('advanceToNextStage', STATE_MOVED_ERROR);
     }
 
-    // If the game is now completed, check Snowball logic (Rollover vs Reset)
+    // If the game is now completed, check Snowball logic (Rollover vs Reset).
+    // This only fires when the pot itself did not move. A missing audit row is
+    // logged inside the helper and never reported to the host as a pot failure.
     if (newGameStatus === 'completed') {
         const potResult = await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
         if (!potResult.success) {
-            return failure('advanceToNextStage', 'The game finished but the snowball pot did not update. Please check the pot.', potResult.error);
+            return failure('advanceToNextStage', SNOWBALL_POT_NOT_MOVED_ERROR, potResult.error);
         }
         await maybeCompleteSession(supabase, gameDetails.session_id);
     }
@@ -1424,9 +1533,10 @@ export async function skipStage(gameId: string): Promise<ActionResult<{ gameStat
     }
 
     if (newStatus === 'completed') {
+        // As in advanceToNextStage: only a genuine pot failure reaches the host.
         const potResult = await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
         if (!potResult.success) {
-            return failure('skipStage', 'The game finished but the snowball pot did not update. Please check the pot.', potResult.error);
+            return failure('skipStage', SNOWBALL_POT_NOT_MOVED_ERROR, potResult.error);
         }
         await maybeCompleteSession(supabase, gameDetails.session_id);
     }

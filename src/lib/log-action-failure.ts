@@ -12,8 +12,15 @@
  */
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
-/** Fields worth keeping from a Supabase or Postgres error object. */
-const SAFE_ERROR_FIELDS = ['message', 'code', 'details', 'hint'] as const;
+/**
+ * Fields worth keeping from a Supabase or Postgres error object.
+ *
+ * `details` and `hint` are deliberately dropped. Postgres puts the failing row
+ * into DETAIL on a check-constraint or unique violation, so a failed winners
+ * insert would otherwise log prize_description, which carries a cash amount.
+ * `message` and `code` are enough to diagnose from the Vercel logs.
+ */
+const SAFE_ERROR_FIELDS = ['message', 'code'] as const;
 
 function redact(value: string): string {
   return value.replace(UUID_RE, '[redacted-uuid]');
