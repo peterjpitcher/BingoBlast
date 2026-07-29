@@ -71,7 +71,7 @@ Three classes of user:
 | Path | Purpose |
 |------|---------|
 | `src/types/` | Shared TS types incl. generated `Database` |
-| `src/lib/` | Shared logic — `connection-health`, `game-state-version`, `prize-validation`, `win-stages`, `jackpot`, `snowball`, `log-error`, `utils` |
+| `src/lib/` | Shared logic: `connection-health`, `game-state-version`, `prize-validation`, `win-stages`, `jackpot`, `snowball`, `log-error`, `log-action-failure`, `call-timing`, `reveal-queue`, `number-nicknames`, `house-rules`, `utils` |
 | `src/hooks/` | `use-connection-health`, `wake-lock` |
 | `src/components/` | `connection-banner`, `header`, `layout-content`, `ui/*` |
 | `src/app/` | Next.js routes (admin, host, display, player, login, api/setup) |
@@ -95,10 +95,11 @@ Three classes of user:
 
 1. **Admin** creates a session, then defines games inside it (regular line / two lines / full house, optionally with a snowball jackpot).
 2. **Host** picks a session/game from `/host`, starts it, and the host page takes the controller heartbeat lock.
-3. **Host** clicks "Call next number". The server enforces a delay between calls (`call_delay_seconds`) and uses a compare-and-set guard against the previous `numbers_called_count` to prevent double-calls under contention.
-4. When a punter shouts BINGO, the host pauses for validation, types the claimed numbers, and the server validates them against the called set including the most recent ball.
-5. On a valid win, the host records the winner (anonymously — the app does not store player names) and the snowball pot updates if applicable.
-6. After the final stage of the final game, the host ends the game/session.
+3. **Host** clicks "Call next number". The call runs through the atomic Postgres function `call_next_number`, which holds a `for update` lock on the `game_states` row so its controller, status and count prechecks are binding. The host-side gap is `HOST_MIN_CALL_GAP_MS` in `src/lib/call-timing.ts`, passed into that function as a parameter. `call_delay_seconds` is **not** the host gap, it is the public reveal delay (see the Gotchas below).
+4. Undo ("void last call") runs through `void_last_number`, which takes the same lock, refuses when a non-void winner was recorded on that ball, and leaves `last_call_at` alone. The ball goes back in the bag: the next call re-draws it.
+5. When a punter shouts BINGO, the host pauses for validation, types the claimed numbers, and the server validates them against the called set including the most recent ball.
+6. On a valid win, the host records the winner (anonymously, the app does not store player names) and the snowball pot updates if applicable.
+7. After the final stage of the final game, the host ends the game/session.
 
 ### What This App Does NOT Do
 
@@ -113,6 +114,9 @@ Three classes of user:
 - The host pauses the game and types in the punter's claimed numbers from their paper book.
 - `validateClaim` server action: confirms the claimed list includes the most recently called number, then checks every claimed number is in the called set. The required claim count comes from `getRequiredSelectionCountForStage` in `src/lib/win-stages.ts`.
 - The action returns `{ valid: true }` or `{ valid: false, invalidNumbers }`. Multiple winners per stage are valid (tie scenario).
+- `recordWinner` runs through the atomic Postgres function `record_winner_atomic`, which locks the `game_states` row `for update`, derives the call count and expected stage server-side, inserts the `winners` row and updates the win display in one transaction. A partial failure therefore leaves nothing to retry.
+- Recording a **snowball Full House while the jackpot window is open** requires an explicit eligible / not-eligible choice from the host, with no default. The window is re-checked inside `record_winner_atomic`, so an out-of-window jackpot cannot be awarded by the client.
+- Full action contract (writes, atomic boundary, return shape, client behaviour): `docs/architecture/server-actions.md`.
 
 ### Realtime Updates
 
@@ -152,7 +156,7 @@ Three classes of user:
 - Staff sign-up is **disabled** — the login page does not offer a sign-up toggle. New staff accounts are created out-of-band by an admin.
 - RLS is on for all tables. Public clients only see `game_states_public`.
 - Host actions re-verify auth and check `profiles.role`. `recordWinner` uses the service-role client for the privileged insert.
-- Server-side number-call gap enforcement (don't move client-side).
+- Server-side number-call gap enforcement: `HOST_MIN_CALL_GAP_MS` passed into `call_next_number`, plus the row lock and count check inside that function (don't move client-side).
 - `validateClaim` re-reads the called-numbers list server-side; never trusts client input.
 - Delete-protection: started/completed games cannot be deleted; sessions with non-`not_started` games or recorded winners cannot be deleted.
 - `SETUP_SECRET` required for `/api/setup`.
@@ -194,4 +198,6 @@ Three classes of user:
 - **Don't reintroduce a sign-up affordance.** Staff are invite-only.
 - **Don't trust `updated_at` for ordering.** Use `state_version`.
 - **Don't store player-identifying info.** Winners are anonymised by policy.
-- **Don't drop the server-side number-call gap.** It's the only thing preventing double-calls under contention.
+- **Never put the object returned by `useConnectionHealth()` into a React dependency array.** It is a new object on every render and the hook re-renders once a second, so any effect or `useCallback` depending on it is torn down and rebuilt every second. That is what silently killed all live updates on the host control screen: the 3 second poll never reached 3 seconds and the Realtime channel never finished subscribing. Destructure `markPollSuccess`, `markPollFailure` and `markRealtimeStatus` and depend on those instead. Read `shouldShowBanner` / `shouldAutoRefresh` inline in JSX.
+- **Don't confuse the two timings.** `call_delay_seconds` is the **public reveal delay** used by `/display` and `/player`, not the host gap. The host gap is `HOST_MIN_CALL_GAP_MS` in `src/lib/call-timing.ts`, passed into the `call_next_number` database function.
+- **Don't drop the server-side number-call gap.** It still exists, it just no longer costs seconds. Together with the `for update` row lock in `call_next_number` it is the only thing preventing double-calls under contention.

@@ -58,7 +58,7 @@ There are three classes of user:
 
 Defence in depth: every protected `page.tsx` server component also calls `supabase.auth.getUser()` and redirects to `/login` if absent.
 
-**Data flow**: Admin defines a session and its games (each with type, prizes, snowball settings). Host opens a game, calls numbers (server-side gap-enforced via `call_delay_seconds`), pauses for validation, records winners. The display and player pages subscribe via Supabase Realtime (with polling fallback) to `game_states_public` for the live ball count and announcement text.
+**Data flow**: Admin defines a session and its games (each with type, prizes, snowball settings). Host opens a game, calls numbers (server-side gap-enforced via `HOST_MIN_CALL_GAP_MS` in `src/lib/call-timing.ts`, passed into the `call_next_number` database function; `call_delay_seconds` is the public reveal delay, not the host gap), pauses for validation, records winners. The display and player pages subscribe via Supabase Realtime (with polling fallback) to `game_states_public` for the live ball count and announcement text.
 
 ## Key Files
 
@@ -97,7 +97,7 @@ Defence in depth: every protected `page.tsx` server component also calls `supaba
 
 1. **Admin** creates a session, then defines games inside it (regular line / two lines / full house, optionally with a snowball jackpot).
 2. **Host** picks a session/game from `/host`, starts it, and takes the controller heartbeat lock.
-3. **Host** clicks "Call next number" to draw a random unused ball. Each call enforces a server-side gap (`call_delay_seconds`) and a compare-and-set guard against the previous `numbers_called_count`.
+3. **Host** clicks "Call next number" to draw the next ball. The call runs through the atomic Postgres function `call_next_number`, which locks the `game_states` row `for update` so the controller, status and count prechecks are binding. The host-side gap is `HOST_MIN_CALL_GAP_MS` (`src/lib/call-timing.ts`), passed in as a parameter. `call_delay_seconds` is the **public reveal delay** for `/display` and `/player`, not the host gap. Undo runs through `void_last_number` and winner recording through `record_winner_atomic`, both under the same row lock.
 4. When a punter shouts BINGO at the table, the host **pauses for validation**, types the punter's claimed numbers, and the server checks them against the called set (including the most recent ball).
 5. On a valid win, the host **records the winner** (anonymously — the app does not store player names) and the snowball pot updates if applicable.
 6. After the final stage of the final game, the host ends the game/session.
@@ -131,7 +131,8 @@ Defence in depth: every protected `page.tsx` server component also calls `supaba
 
 ### Server-side rules to preserve
 
-- **Number-call gap** is enforced server-side from `last_call_at` + `call_delay_seconds`. Don't move this to the client.
+- **Number-call gap** is enforced server-side from `last_call_at` + `HOST_MIN_CALL_GAP_MS`, passed into `call_next_number`. `call_delay_seconds` is the public reveal delay, not this gap. Don't move the gap to the client, and don't drop it: with the `for update` row lock it is what prevents double-calls under contention.
+- **Snowball Full House eligibility** is an explicit host choice with no default whenever the jackpot window is open, and the window is re-checked inside `record_winner_atomic`.
 - **Winner validation** re-reads the called-numbers array from `game_states` server-side; never trust a client-supplied list.
 - **Prize completeness** is validated by `validateGamePrizes()` in both `createGame` and `updateGame`.
 - **Game lock-once-started**: `updateGame` rejects edits to `prizes`, `type`, `snowball_pot_id`, `stage_sequence` once a game's `game_states.status` is anything other than `'not_started'`.
@@ -159,7 +160,8 @@ Defence in depth: every protected `page.tsx` server component also calls `supaba
 
 ### Common gotchas
 
-- **Don't run middleware on public routes.** The proxy matcher is intentionally narrow — broadening it adds latency and a Supabase round-trip to every public page hit.
+- **Don't run middleware on public routes.** The proxy matcher is intentionally narrow, and broadening it adds latency and a Supabase round-trip to every public page hit.
+- **Never put the object returned by `useConnectionHealth()` into a React dependency array.** It is a new object on every render and the hook re-renders once a second, so any effect or `useCallback` depending on it is torn down and rebuilt every second. This silently killed all live updates on the host control screen: the 3 second poll never reached 3 seconds and the Realtime channel never finished subscribing. Destructure `markPollSuccess`, `markPollFailure` and `markRealtimeStatus` and depend on those; read `shouldShowBanner` / `shouldAutoRefresh` inline in JSX.
 - **Don't trust `updated_at` for client-side ordering.** Use `state_version`.
 - **Don't store player-identifying info on `winners`.** The app is anonymised by policy.
 - **The admin "Reset Session" flow requires a typed confirmation string** (`'RESET'` or the session name).

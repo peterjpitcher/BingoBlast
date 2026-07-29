@@ -6,9 +6,16 @@ import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
 import { QRCodeSVG } from 'qrcode.react';
-import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining } from '@/lib/snowball';
-import { HOUSE_RULES } from '@/lib/house-rules';
+import {
+  formatPounds,
+  getSnowballCallsLabel,
+  getSnowballCallsRemaining,
+  getSnowballWindowStatus,
+} from '@/lib/snowball';
+import { HOUSE_RULES, CALL_RESPONSES } from '@/lib/house-rules';
 import { isFreshGameState } from '@/lib/game-state-version';
+import { planReveal } from '@/lib/reveal-queue';
+import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { ConnectionBanner } from '@/components/connection-banner';
 import type { RealtimeStatus } from '@/lib/connection-health';
@@ -20,14 +27,52 @@ type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states_public']['Row'];
 type SnowballPot = Database['public']['Tables']['snowball_pots']['Row'];
 
+/**
+ * Outcome of the server-side initial read in page.tsx. 'failed' means a session,
+ * game or game-state query errored, which must never be presented to guests as
+ * "the host has not started yet".
+ */
+export type InitialLoadStatus = 'ready' | 'failed';
+
 interface DisplayUIProps {
   session: Session;
   activeGame: Game | null;
   initialGameState: GameState | null;
   initialPrizeText: string;
-  isWaitingState: boolean;
+  initialLoadStatus: InitialLoadStatus;
   playerJoinUrl: string;
 }
+
+/**
+ * What the screen is showing right now.
+ *
+ * This replaces the old "have we loaded yet" boolean, which was initialised to
+ * `initialGameState != null` and could therefore never turn true before the host
+ * started a game: there is no `game_states_public` row yet, so the pub TV sat on
+ * "Connecting to game..." for the whole pre-game period instead of showing the
+ * waiting screen with the House Rules.
+ */
+type LoadPhase = 'loading' | 'waiting' | 'active' | 'completed' | 'failed';
+
+/**
+ * The only part of the phase that is real client state. 'waiting', 'active' and
+ * 'completed' are all functions of the session status and of whether we hold a
+ * renderable game state, so storing them separately would duplicate state and
+ * let the screen disagree with itself, which is exactly how the old boolean
+ * stranded the TV on a spinner.
+ */
+type ConnectionPhase = 'loading' | 'ready' | 'failed';
+
+/**
+ * Result of `refreshActiveGame`. It used to return void and silently null the
+ * state, so an RLS, network or schema failure looked identical to "no game".
+ * 'superseded' means a newer refresh has already taken over, so the caller must
+ * leave the phase alone rather than judge the connection on a discarded read.
+ */
+type RefreshResult =
+  | { status: 'ok'; hasGame: boolean }
+  | { status: 'failed' }
+  | { status: 'superseded' };
 
 const formatStageLabel = (stage: string | undefined) => {
   if (!stage) return '-';
@@ -37,6 +82,17 @@ const formatStageLabel = (stage: string | undefined) => {
     .toLowerCase()
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
+
+/**
+ * A fresh mount, or a switch to another game, must not trickle an existing
+ * backlog out one ball at a time: forty balls at PUBLIC_MIN_DWELL_MS each would
+ * take the best part of a minute. Adopt every ball except the newest, then let
+ * planReveal gate that one on its own call time plus the public delay.
+ */
+const adoptRevealCount = (serverCount: number) => Math.max(0, serverCount - 1);
+
+const readCalledNumbers = (state: GameState | null): number[] =>
+  state && Array.isArray(state.called_numbers) ? state.called_numbers : [];
 
 // Explicit narrow column lists keep public surfaces from leaking unintended
 // fields and document exactly what the UI consumes from each table.
@@ -53,10 +109,12 @@ export default function DisplayUI({
   activeGame: initialActiveGame,
   initialGameState: initialActiveGameState,
   initialPrizeText,
-  isWaitingState: initialWaitingState,
+  initialLoadStatus,
   playerJoinUrl,
 }: DisplayUIProps) {
   const supabase = useRef(createClient());
+
+  const initialRevealCount = adoptRevealCount(readCalledNumbers(initialActiveGameState).length);
 
   const [currentSession, setCurrentSession] = useState<Session>(session);
   const [currentActiveGame, setCurrentActiveGame] = useState<Game | null>(initialActiveGame);
@@ -69,15 +127,22 @@ export default function DisplayUI({
     const stageKey = currentActiveGame.stage_sequence[currentGameState.current_stage_index];
     return currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || '';
   }, [currentActiveGame, currentGameState, initialPrizeText]);
-  const [isWaitingState, setIsWaitingState] = useState<boolean>(initialWaitingState);
-  const [currentNumberDelayed, setCurrentNumberDelayed] = useState<number | null>(null);
-  const [delayedNumbers, setDelayedNumbers] = useState<number[]>([]);
   const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
-  // Tracks whether we have applied any usable game state (initial render or
-  // first poll/realtime payload). Used to gate the "Connecting to game…" skeleton.
-  const [hasLoaded, setHasLoaded] = useState<boolean>(initialActiveGameState != null);
+  const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>(
+    initialLoadStatus === 'failed' ? 'failed' : initialActiveGameState ? 'ready' : 'loading'
+  );
+  // How many balls this client currently shows. planReveal owns the value; the
+  // displayed numbers are sliced from it so there is a single source of truth.
+  const [revealCount, setRevealCount] = useState<number>(initialRevealCount);
 
-  const numberCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const revealedCountRef = useRef<number>(initialRevealCount);
+  const lastRevealAtRef = useRef<number | null>(null);
+  const revealGameIdRef = useRef<string | null>(
+    initialActiveGameState ? initialActiveGameState.game_id : null
+  );
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Lets the visibilitychange handler force the game-state channel to rebuild.
+  const reconnectGameStateRef = useRef<(() => void) | null>(null);
 
   // Connection health: drives the reconnecting banner + auto-refresh.
   const health = useConnectionHealth();
@@ -87,7 +152,7 @@ export default function DisplayUI({
   // results from clobbering newer state when responses arrive out-of-order.
   const pollSeqRef = useRef(0);
   const pollInFlightRef = useRef(false);
-  // refreshActiveGame request-order guard: if active_game_id flips A→B and
+  // refreshActiveGame request-order guard: if active_game_id flips A to B and
   // A's fetch resolves last, the wrong game would win.
   const refreshSeqRef = useRef(0);
 
@@ -98,68 +163,119 @@ export default function DisplayUI({
     currentActiveGameRef.current = currentActiveGame;
   }, [currentActiveGame]);
 
-  const refreshActiveGame = useCallback(async (newActiveGameId: string | null) => {
-      if (newActiveGameId === currentActiveGame?.id) return;
+  const currentActiveGameId = currentActiveGame ? currentActiveGame.id : null;
+
+  const refreshActiveGame = useCallback(
+    async (newActiveGameId: string | null): Promise<RefreshResult> => {
+      if (newActiveGameId === currentActiveGameId) {
+        return { status: 'ok', hasGame: newActiveGameId !== null };
+      }
       const seq = ++refreshSeqRef.current;
 
-      if (newActiveGameId) {
-          const { data: newGame } = await supabase.current
-          .from('games')
-          .select(GAME_SELECT)
-          .eq('id', newActiveGameId)
-          .single<Database['public']['Tables']['games']['Row']>();
-          if (seq !== refreshSeqRef.current) return;
-
-        if (newGame) {
-          setCurrentActiveGame(newGame);
-          const { data: newGameState } = await supabase.current
-            .from('game_states_public')
-            .select(GAME_STATE_PUBLIC_SELECT)
-            .eq('game_id', newGame.id)
-            .single<Database['public']['Tables']['game_states_public']['Row']>();
-          if (seq !== refreshSeqRef.current) return;
-
-          if (newGameState) {
-            setCurrentGameState(newGameState);
-            setHasLoaded(true);
-          } else {
-            setCurrentGameState(null);
-          }
-        } else {
-          setCurrentActiveGame(null);
-          setCurrentGameState(null);
-        }
-      } else {
+      if (!newActiveGameId) {
         setCurrentActiveGame(null);
         setCurrentGameState(null);
+        return { status: 'ok', hasGame: false };
       }
-      setIsWaitingState(!newActiveGameId);
-  }, [currentActiveGame?.id]);
 
-  // Session-level realtime: track changes to active_game_id / status.
+      const { data: newGame, error: gameError } = await supabase.current
+        .from('games')
+        .select(GAME_SELECT)
+        .eq('id', newActiveGameId)
+        .single<Database['public']['Tables']['games']['Row']>();
+      if (seq !== refreshSeqRef.current) return { status: 'superseded' };
+      if (gameError || !newGame) {
+        logError('display', gameError ?? new Error('Active game lookup returned no row'));
+        return { status: 'failed' };
+      }
+
+      setCurrentActiveGame(newGame);
+
+      const { data: newGameState, error: stateError } = await supabase.current
+        .from('game_states_public')
+        .select(GAME_STATE_PUBLIC_SELECT)
+        .eq('game_id', newGame.id)
+        .single<Database['public']['Tables']['game_states_public']['Row']>();
+      if (seq !== refreshSeqRef.current) return { status: 'superseded' };
+      if (stateError || !newGameState) {
+        logError('display', stateError ?? new Error('Active game state lookup returned no row'));
+        setCurrentGameState(null);
+        return { status: 'failed' };
+      }
+
+      setCurrentGameState(newGameState);
+      return { status: 'ok', hasGame: true };
+    },
+    [currentActiveGameId]
+  );
+
+  // Session-level realtime: track changes to active_game_id / status, with the
+  // same exponential-backoff reconnect as the game-state channel.
   useEffect(() => {
     const supabaseClient = supabase.current;
 
-    const sessionChannel = supabaseClient
-      .channel(`session_updates:${session.id}`)
-      .on<Session>(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
-        async (payload) => {
-          setCurrentSession(payload.new);
-          await refreshActiveGame(payload.new.active_game_id);
-        }
-      )
-      .subscribe();
+    let isMounted = true;
+    let activeChannel: ReturnType<typeof supabaseClient.channel> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attemptCount = 0;
+
+    const connect = async () => {
+      if (!isMounted) return;
+      if (activeChannel) {
+        await supabaseClient.removeChannel(activeChannel);
+        activeChannel = null;
+      }
+      if (!isMounted) return;
+
+      const channel = supabaseClient
+        .channel(`session_updates:${session.id}:${Date.now()}`)
+        .on<Session>(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
+          async (payload) => {
+            if (!isMounted) return;
+            setCurrentSession(payload.new);
+            const result = await refreshActiveGame(payload.new.active_game_id);
+            if (!isMounted) return;
+            if (result.status === 'failed') setConnectionPhase('failed');
+            else if (result.status === 'ok') setConnectionPhase('ready');
+          }
+        )
+        .subscribe((status) => {
+          if (!isMounted) return;
+          // Deliberately NOT reported into useConnectionHealth. The 3 second
+          // poll already picks up game switches and session status, so this
+          // channel is non-critical and a wobble here must never put a
+          // "Reconnecting" banner on the pub TV. Only the game-state channel
+          // reports into connection health.
+          if (status === 'SUBSCRIBED') {
+            attemptCount = 0;
+            return;
+          }
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            // Exponential backoff: 1s, 2s, 4s and so on, capped at 30s.
+            const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
+            attemptCount += 1;
+            reconnectTimer = setTimeout(() => { void connect(); }, delay);
+          }
+        });
+
+      activeChannel = channel;
+    };
+
+    void connect();
 
     return () => {
-      supabaseClient.removeChannel(sessionChannel);
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (activeChannel) void supabaseClient.removeChannel(activeChannel);
     };
   }, [session.id, refreshActiveGame]);
 
   // Game state realtime with exponential-backoff auto-reconnect.
   // Each reconnect tears down the previous channel before creating the next
-  // (ordering matters — Supabase rejects subscribe() against a torn channel).
+  // (ordering matters, because Supabase rejects subscribe() on a torn channel).
   useEffect(() => {
     const supabaseClient = supabase.current;
     const activeGameId = currentActiveGame?.id;
@@ -194,11 +310,14 @@ export default function DisplayUI({
             // currentPrizeText is derived from currentGameState via useMemo,
             // so it inherits this gating automatically.
             setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
-            setHasLoaded(true);
+            setConnectionPhase('ready');
           }
         )
         .subscribe((status) => {
           if (!isMounted) return;
+          // This is the ONLY channel that reports into connection health: it is
+          // the one carrying live calls, so it is the only one whose failure
+          // guests need to know about.
           markRealtimeStatus(status as RealtimeStatus);
           if (status === 'SUBSCRIBED') {
             attemptCount = 0;
@@ -206,7 +325,7 @@ export default function DisplayUI({
           }
           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
             if (reconnectTimer) clearTimeout(reconnectTimer);
-            // Exponential backoff: 1s, 2s, 4s … capped at 30s.
+            // Exponential backoff: 1s, 2s, 4s and so on, capped at 30s.
             const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
             attemptCount += 1;
             reconnectTimer = setTimeout(() => { void connect(); }, delay);
@@ -216,16 +335,30 @@ export default function DisplayUI({
       activeChannel = channel;
     };
 
+    reconnectGameStateRef.current = () => { void connect(); };
     void connect();
 
     return () => {
       isMounted = false;
+      reconnectGameStateRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (activeChannel) void supabaseClient.removeChannel(activeChannel);
     };
   }, [currentActiveGame?.id, markRealtimeStatus]);
 
-  // Polling fallback — re-fetches session + game state every 3 seconds with
+  // Force-reconnect the game-state channel when the screen comes back into
+  // view. TV browsers and phones kill background WebSockets silently, and the
+  // poll below already re-fires on the same event.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      reconnectGameStateRef.current?.();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // Polling fallback: re-fetches session + game state every 3 seconds with
   // request-order guards so out-of-order responses cannot clobber newer state.
   useEffect(() => {
     let cancelled = false;
@@ -248,21 +381,29 @@ export default function DisplayUI({
         if (cancelled || seq !== pollSeqRef.current) return;
         if (sessionError || !freshSession) {
           logError('display', sessionError ?? new Error('Polling sessions returned no row'));
+          setConnectionPhase('failed');
           markPollFailure();
           return;
         }
 
         setCurrentSession(freshSession);
-        setIsWaitingState(!freshSession.active_game_id && freshSession.status !== 'running');
 
         const activeGame = currentActiveGameRef.current;
-        if (freshSession.active_game_id !== activeGame?.id) {
-          await refreshActiveGame(freshSession.active_game_id);
+        const knownGameId = activeGame ? activeGame.id : null;
+        if (freshSession.active_game_id !== knownGameId) {
+          const result = await refreshActiveGame(freshSession.active_game_id);
+          if (cancelled) return;
+          if (result.status === 'failed') {
+            setConnectionPhase('failed');
+            markPollFailure();
+            return;
+          }
+          if (result.status === 'ok') setConnectionPhase('ready');
           markPollSuccess();
           return;
         }
 
-        if (activeGame?.id) {
+        if (activeGame) {
           const { data: freshState, error: stateError } = await supabase.current
             .from('game_states_public')
             .select(GAME_STATE_PUBLIC_SELECT)
@@ -271,6 +412,7 @@ export default function DisplayUI({
           if (cancelled || seq !== pollSeqRef.current) return;
           if (stateError || !freshState) {
             logError('display', stateError ?? new Error('Polling game_states_public returned no row'));
+            setConnectionPhase('failed');
             markPollFailure();
             return;
           }
@@ -280,13 +422,14 @@ export default function DisplayUI({
           // currentPrizeText is derived from currentGameState via useMemo,
           // so it inherits this gating automatically.
           setCurrentGameState((current) => (isFreshGameState(current, freshState) ? freshState : current));
-          setHasLoaded(true);
         }
 
+        setConnectionPhase('ready');
         markPollSuccess();
       } catch (err) {
         if (!cancelled) {
           logError('display', err);
+          setConnectionPhase('failed');
           markPollFailure();
         }
       } finally {
@@ -324,6 +467,10 @@ export default function DisplayUI({
             .single();
             if (data) setCurrentSnowballPot(data);
 
+            // Deliberately non-critical: this channel does not report into
+            // useConnectionHealth. The pot is re-read whenever the active game
+            // changes and the jackpot figure is not time critical, so a pot
+            // channel failure must never put a "Reconnecting" banner on the TV.
             potChannel = supabaseClient
             .channel(`pot_updates:${currentActiveGame.snowball_pot_id}`)
             .on<SnowballPot>(
@@ -346,101 +493,137 @@ export default function DisplayUI({
     };
   }, [currentActiveGame]);
 
-  useEffect(() => {
-    if (numberCallTimeoutRef.current) {
-      clearTimeout(numberCallTimeoutRef.current);
-      numberCallTimeoutRef.current = null;
-    }
+  const serverNumbers = useMemo<number[]>(
+    () => readCalledNumbers(currentGameState),
+    [currentGameState]
+  );
 
-    const scheduleUpdate = (callback: () => void, delayMs: number) => {
-      numberCallTimeoutRef.current = setTimeout(callback, delayMs);
+  // Reveal pacing. planReveal is the single decision point: it never skips a
+  // ball, never shows the newest one early, and snaps to the server during a
+  // claim check or at game end. One timer at a time, re-planned on every
+  // snapshot, so the state is fully derivable after a poll or a reconnect.
+  useEffect(() => {
+    const clearRevealTimer = () => {
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
     };
+    clearRevealTimer();
 
     if (!currentActiveGame || !currentGameState) {
-      scheduleUpdate(() => {
-        setCurrentNumberDelayed(null);
-        setDelayedNumbers([]);
-      }, 0);
-    } else {
-      const serverCalledNumbers = currentGameState.called_numbers as number[];
-      const lastServerNumber =
-        serverCalledNumbers.length > 0
-          ? serverCalledNumbers[serverCalledNumbers.length - 1]
-          : null;
-
-      // Force immediate sync if paused or completed (FR-34: Fast-forward)
-      if (
-        currentGameState.paused_for_validation ||
-        currentGameState.status === 'completed'
-      ) {
-        scheduleUpdate(() => {
-          setDelayedNumbers(serverCalledNumbers);
-          setCurrentNumberDelayed(lastServerNumber);
-        }, 0);
-      } else if (serverCalledNumbers.length < delayedNumbers.length) {
-        scheduleUpdate(() => {
-          setDelayedNumbers(serverCalledNumbers);
-          setCurrentNumberDelayed(lastServerNumber);
-        }, 0);
-      } else if (currentGameState.numbers_called_count > 0) {
-        const lastCalledNumber =
-          serverCalledNumbers[currentGameState.numbers_called_count - 1];
-        const lastCallTimestamp = currentGameState.last_call_at
-          ? new Date(currentGameState.last_call_at).getTime()
-          : 0;
-        const callDelayMs = currentGameState.call_delay_seconds * 1000;
-
-        const now = Date.now();
-        const timeSinceLastCall = now - lastCallTimestamp;
-
-        if (currentNumberDelayed === lastCalledNumber) {
-          if (
-            delayedNumbers.length !== serverCalledNumbers.length &&
-            !delayedNumbers.includes(lastCalledNumber)
-          ) {
-            scheduleUpdate(() => {
-              setDelayedNumbers((prev) =>
-                prev.includes(lastCalledNumber)
-                  ? prev
-                  : [...prev, lastCalledNumber]
-              );
-            }, 0);
-          }
-        } else {
-          const delayMs = Math.max(0, callDelayMs - timeSinceLastCall);
-          scheduleUpdate(() => {
-            setCurrentNumberDelayed(lastCalledNumber);
-            setDelayedNumbers(serverCalledNumbers);
-          }, delayMs);
-        }
-      } else {
-        scheduleUpdate(() => {
-          setCurrentNumberDelayed(null);
-          setDelayedNumbers([]);
-        }, 0);
-      }
+      revealGameIdRef.current = null;
+      revealedCountRef.current = 0;
+      lastRevealAtRef.current = null;
+      setRevealCount(0);
+      return;
     }
 
-    return () => {
-      if (numberCallTimeoutRef.current) {
-        clearTimeout(numberCallTimeoutRef.current);
-        numberCallTimeoutRef.current = null;
+    if (revealGameIdRef.current !== currentGameState.game_id) {
+      const adopted = adoptRevealCount(serverNumbers.length);
+      revealGameIdRef.current = currentGameState.game_id;
+      revealedCountRef.current = adopted;
+      lastRevealAtRef.current = null;
+      setRevealCount(adopted);
+    }
+
+    const serverCount = serverNumbers.length;
+    const publicDelayMs =
+      (Number.isFinite(currentGameState.call_delay_seconds)
+        ? currentGameState.call_delay_seconds
+        : DEFAULT_PUBLIC_CALL_DELAY_SECONDS) * 1000;
+    const parsedLastCallAt = currentGameState.last_call_at
+      ? new Date(currentGameState.last_call_at).getTime()
+      : null;
+    const lastCallAtMs =
+      parsedLastCallAt !== null && Number.isFinite(parsedLastCallAt) ? parsedLastCallAt : null;
+    const snapImmediately =
+      currentGameState.paused_for_validation || currentGameState.status === 'completed';
+
+    const step = () => {
+      const plan = planReveal({
+        serverCount,
+        revealedCount: revealedCountRef.current,
+        lastCallAtMs,
+        publicDelayMs,
+        minDwellMs: PUBLIC_MIN_DWELL_MS,
+        lastRevealAtMs: lastRevealAtRef.current,
+        snapImmediately,
+        nowMs: Date.now(),
+      });
+
+      if (plan.revealCount !== revealedCountRef.current) {
+        revealedCountRef.current = plan.revealCount;
+        lastRevealAtRef.current = Date.now();
+        setRevealCount(plan.revealCount);
       }
+
+      revealTimerRef.current =
+        plan.nextTickInMs === null ? null : setTimeout(step, plan.nextTickInMs);
     };
-  }, [currentActiveGame, currentGameState, currentNumberDelayed, delayedNumbers]);
+
+    step();
+
+    return clearRevealTimer;
+  }, [currentActiveGame, currentGameState, serverNumbers]);
+
+  const delayedNumbers = useMemo<number[]>(
+    () => serverNumbers.slice(0, revealCount),
+    [serverNumbers, revealCount]
+  );
+  // The revealed count is what every public counter must use. Reading
+  // numbers_called_count would tick a counter down up to 3 seconds before the
+  // ball itself appears, spoiling the call and disagreeing with the ball strip.
+  const revealedCallCount = delayedNumbers.length;
+  const currentNumberDelayed = revealedCallCount > 0 ? delayedNumbers[revealedCallCount - 1] : null;
 
   const isSessionCompletedState = currentSession.status === 'completed';
-  const showActiveGame = currentActiveGame && currentGameState && currentGameState.status === 'in_progress' && !currentGameState.on_break && !isSessionCompletedState && !currentGameState.display_win_type && !currentGameState.paused_for_validation;
-  const showBreak = currentActiveGame && currentGameState?.on_break && !isSessionCompletedState;
-  const showPausedForValidation = currentActiveGame && currentGameState?.paused_for_validation && !isSessionCompletedState;
-  const showWinState = !!currentGameState?.display_win_type && !isSessionCompletedState;
+  /**
+   * A game only counts as active once this screen has something to put in the
+   * main area. A row that is 'not_started' or 'completed' renders nothing here,
+   * so it must fall through to the waiting screen rather than leave the pub TV
+   * blank between games.
+   */
+  const hasRenderableGame =
+    currentActiveGame !== null &&
+    currentGameState !== null &&
+    currentGameState.status === 'in_progress';
+
+  /**
+   * Phase precedence, in order and for a reason:
+   *  - a completed session is terminal, so the thank-you screen always wins;
+   *  - a renderable game beats 'failed', because a single query blip must never
+   *    rip a live game off the TV. The ConnectionBanner covers that case;
+   *  - 'failed' beats 'waiting' and 'loading', so an outage is never dressed up
+   *    as "the host has not started yet". It recovers on the next good read.
+   */
+  const loadPhase = useMemo<LoadPhase>(() => {
+    if (isSessionCompletedState) return 'completed';
+    if (hasRenderableGame) return 'active';
+    if (connectionPhase === 'failed') return 'failed';
+    if (connectionPhase === 'loading') return 'loading';
+    return 'waiting';
+  }, [isSessionCompletedState, hasRenderableGame, connectionPhase]);
+
+  const isWaitingState = loadPhase === 'waiting';
+  // Every game overlay hangs off hasRenderableGame, so the waiting screen and
+  // the live-game screens are mutually exclusive: a stale on_break or
+  // paused_for_validation flag on a finished game can never stack a break or
+  // claim-check overlay on top of the waiting screen.
+  const showActiveGame = hasRenderableGame && !currentGameState?.on_break && !isSessionCompletedState && !currentGameState?.display_win_type && !currentGameState?.paused_for_validation;
+  const showBreak = hasRenderableGame && !!currentGameState?.on_break && !isSessionCompletedState;
+  const showPausedForValidation = hasRenderableGame && !!currentGameState?.paused_for_validation && !isSessionCompletedState;
+  const showWinState = hasRenderableGame && !!currentGameState?.display_win_type && !isSessionCompletedState;
   const showServiceState = !!((isWaitingState && !isSessionCompletedState) || showBreak || isSessionCompletedState);
   const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
-    ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    ? getSnowballCallsLabel(revealedCallCount, currentSnowballPot.current_max_calls)
     : null;
   const snowballCallsRemaining = currentSnowballPot && currentGameState
-    ? getSnowballCallsRemaining(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    ? getSnowballCallsRemaining(revealedCallCount, currentSnowballPot.current_max_calls)
+    : null;
+  const snowballWindowStatus = currentSnowballPot && currentGameState
+    ? getSnowballWindowStatus(revealedCallCount, currentSnowballPot.current_max_calls)
     : null;
   const resolvedJoinUrl = playerJoinUrl.startsWith('http')
     ? playerJoinUrl
@@ -449,8 +632,38 @@ export default function DisplayUI({
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
   const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
-  const houseRulesTitleClass = "text-[clamp(2.6rem,3.8vw,4rem)] font-bold text-white mb-4 border-b border-[#1f7c58] pb-3";
-  const houseRulesListClass = "space-y-4 text-[clamp(1.7rem,2.35vw,2.45rem)] leading-[1.22] text-white";
+  // This panel is height-constrained: it lives in a fixed-height main area and is
+  // overflow-hidden, so anything that does not fit is clipped silently rather
+  // than scrolled. Sizing off vw alone (the old approach) therefore clipped the
+  // closing rule on shorter screens. These scales take min() of a width term and
+  // a height term so the binding constraint wins, and they now have to carry the
+  // Join in grid as well. Do not raise them without re-checking 1280x720 AND
+  // 1920x1080 on all three screens that render this panel.
+  // Budget: 100vh - 6rem top bar - 10rem footer - 3rem main padding. That is
+  // 416px at 1280x720, 464px at 1366x768, 776px at 1920x1080. Modelled height of
+  // this panel with the coefficients below: 402px / 421px / 550px. The previous
+  // coefficients modelled at 515px / 512px / 708px, so 720p and 768p both clipped.
+  const houseRulesTitleClass = "text-[min(2.9vw,4.4vh)] font-bold text-white mb-2 border-b border-[#1f7c58] pb-1.5";
+  // space-y-1.5 rather than space-y-2: the tighter list buys back the room the
+  // "Join in" grid needs, because this panel clips instead of scrolling.
+  const houseRulesListClass = "space-y-1.5 text-[min(2.35vw,2.85vh)] leading-[1.2] text-white";
+  // The waiting, break and session-complete screens share one left column, sized
+  // against the same budget. Break and Session Complete stack three blocks in
+  // there and modelled at 525px off vw alone, so the third card was clipped with
+  // no visual cue. Each scale now takes min() of the width term and a height
+  // term, so the shorter screen wins. Every vh term is chosen so 1080p still
+  // lands on its clamp maximum and is pixel-identical to before, and the spacing
+  // only tightens below 2xl, so 1080p is untouched. Modelled column height:
+  // 379px at 720p, 393px at 768p, 512px (unchanged) at 1080p.
+  const serviceColumnClass = "col-span-12 xl:col-span-6 flex flex-col justify-center gap-4 2xl:gap-6";
+  const serviceCardPadClass = "p-4 2xl:p-5";
+  const serviceEyebrowClass = "text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold";
+  const serviceHeadlineClass = "text-[clamp(2rem,min(4.6vw,6.5vh),4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1";
+  const serviceSubheadClass = "text-[clamp(1rem,min(1.55vw,2.1vh),1.35rem)] text-white/90 mt-2";
+  const servicePromoTitleClass = "text-[clamp(1.7rem,min(3.2vw,4.6vh),3.1rem)] font-black uppercase tracking-[0.08em] text-white animate-pulse";
+  const servicePromoBodyClass = "text-[clamp(1rem,min(1.7vw,2.3vh),1.5rem)] text-white mt-2 font-medium";
+  const serviceCardTitleClass = "text-[clamp(1.5rem,min(2.3vw,3.6vh),2.3rem)] font-bold text-white";
+  const serviceCardBodyClass = "text-[clamp(1rem,min(1.45vw,2vh),1.3rem)] text-white/90 mt-1";
   const stagePrizePreview = currentActiveGame
     ? currentActiveGame.stage_sequence.map((stage, index) => {
         const prize = currentActiveGame.prizes?.[stage as keyof typeof currentActiveGame.prizes];
@@ -465,12 +678,12 @@ export default function DisplayUI({
   const showPreCallStagePreview = !!(
     showActiveGame &&
     currentGameState &&
-    currentGameState.numbers_called_count === 0 &&
+    revealedCallCount === 0 &&
     stagePrizePreview.length > 0
   );
 
   const renderHouseRulesPanel = () => (
-    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md overflow-hidden">
+    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-left backdrop-blur-md overflow-hidden">
       <h3 className={houseRulesTitleClass}>House Rules</h3>
       <ul className={houseRulesListClass}>
         {HOUSE_RULES.map((rule, i) => (
@@ -514,15 +727,60 @@ export default function DisplayUI({
           </li>
         ))}
       </ul>
+
+      {/* Call-and-response nudges. Two columns and three rows, deliberately
+          smaller than the rules and tightly spaced: the panel is
+          overflow-hidden, so anything that does not fit is clipped silently. */}
+      <div className="mt-2 border-t border-[#1f7c58] pt-1.5">
+        <h4 className="text-[min(1.35vw,1.95vh)] font-bold uppercase tracking-[0.12em] text-white mb-1.5">
+          Join in
+        </h4>
+        <div className="grid grid-cols-2 gap-x-5 gap-y-0.5">
+          {CALL_RESPONSES.map((item) => (
+            <p
+              key={item.number}
+              className="text-[min(1.6vw,2.1vh)] leading-tight text-white"
+            >
+              <span className="font-bold text-[#f3d59d]">{item.number}</span> {item.response}
+            </p>
+          ))}
+        </div>
+      </div>
     </div>
   );
 
-  // Initial load skeleton: show until first poll/realtime payload completes.
-  if (!hasLoaded) {
+  // First server answer not in yet. Deliberately brief: unlike the old boolean
+  // gate this can always be left, because the poll below resolves the phase to
+  // waiting, active, completed or failed on its first response.
+  if (loadPhase === 'loading') {
     return (
       <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-current mr-3" />
         Connecting to game…
+      </div>
+    );
+  }
+
+  // Recoverable outage. Polling continues, and the next good read moves the
+  // screen straight on to the waiting or active phase with no reload.
+  if (loadPhase === 'failed') {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex h-screen flex-col items-center justify-center gap-5 px-10 text-center text-white"
+        style={{ backgroundColor: '#005131' }}
+      >
+        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] font-semibold text-white/85">
+          Anchor Bingo Night
+        </p>
+        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em]">
+          Reconnecting To The Game
+        </h1>
+        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90">
+          Hold on to your tickets, the screen will catch up in a moment.
+        </p>
+        <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-white" />
       </div>
     );
   }
@@ -551,18 +809,53 @@ export default function DisplayUI({
       {/* Main Content Area */}
       <div className={cn("flex-1 flex items-center justify-center relative p-6 overflow-hidden", showServiceState && "xl:pl-44")}>
 
+          {/* Snowball countdown badge. Top right so it can never collide with
+              the bottom-left join QR, and static so it needs no
+              prefers-reduced-motion opt-out. The z-70 validation overlay and
+              the z-80 win overlay cover it as they cover everything else. */}
+          {isSnowballGame && (showActiveGame || showPausedForValidation) && currentSnowballPot && snowballWindowStatus && (
+            <div className="absolute top-4 right-4 z-40 rounded-3xl border border-[#a57626] bg-[#005131]/92 px-6 py-4 text-center backdrop-blur-sm">
+              {snowballWindowStatus === 'open' ? (
+                <>
+                  <p
+                    className="font-black leading-none text-[#f3d59d]"
+                    style={{
+                      fontSize: 'clamp(3rem,6vw,5.5rem)',
+                      fontVariantNumeric: 'tabular-nums lining-nums',
+                    }}
+                  >
+                    {snowballCallsRemaining}
+                  </p>
+                  <p className="mt-1 text-[clamp(0.9rem,1.3vw,1.2rem)] font-bold uppercase tracking-[0.16em] text-white">
+                    Calls Left
+                  </p>
+                </>
+              ) : (
+                <p
+                  className="font-black uppercase leading-none text-[#f3d59d]"
+                  style={{ fontSize: 'clamp(1.6rem,3vw,2.8rem)' }}
+                >
+                  {snowballCallsLabel}
+                </p>
+              )}
+              <p className="mt-2 text-[clamp(1.1rem,1.8vw,1.6rem)] font-bold text-white">
+                £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
+              </p>
+            </div>
+          )}
+
           {isWaitingState && !isSessionCompletedState && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
-                <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6">
+                <div className={serviceColumnClass}>
                     <div className="text-center xl:text-left">
-                        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold">Anchor Bingo Night</p>
-                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Session Starts Shortly</h1>
-                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">Please have your tickets ready and watch the screen for the first call.</p>
+                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+                        <h1 className={serviceHeadlineClass}>Session Starts Shortly</h1>
+                        <p className={serviceSubheadClass}>Please have your tickets ready and watch the screen for the first call.</p>
                     </div>
 
-                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Kitchen Open Until 9pm</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
+                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
+                        <h2 className={servicePromoTitleClass}>Kitchen Open Until 9pm</h2>
+                        <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
                     </div>
                 </div>
 
@@ -574,21 +867,21 @@ export default function DisplayUI({
 
           {showBreak && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in zoom-in duration-500 items-center overflow-hidden">
-                <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6">
+                <div className={serviceColumnClass}>
                     <div className="text-center xl:text-left">
-                        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold">Anchor Bingo Night</p>
-                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Break Time</h1>
-                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">Please hold your tickets, we will resume shortly.</p>
+                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+                        <h1 className={serviceHeadlineClass}>Break Time</h1>
+                        <p className={serviceSubheadClass}>Please hold your tickets, we will resume shortly.</p>
                     </div>
 
-                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Kitchen Open Until 9pm</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
+                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
+                        <h2 className={servicePromoTitleClass}>Kitchen Open Until 9pm</h2>
+                        <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
                     </div>
 
-                    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-center xl:text-left backdrop-blur-md">
-                        <h3 className="text-[clamp(1.5rem,2.3vw,2.3rem)] font-bold text-white">We&apos;ll be back in a moment</h3>
-                        <p className="text-[clamp(1rem,1.45vw,1.3rem)] text-white/90 mt-1">Keep your tickets handy for the next call.</p>
+                    <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl text-center xl:text-left backdrop-blur-md", serviceCardPadClass)}>
+                        <h3 className={serviceCardTitleClass}>We&apos;ll be back in a moment</h3>
+                        <p className={serviceCardBodyClass}>Keep your tickets handy for the next call.</p>
                     </div>
                 </div>
 
@@ -600,21 +893,21 @@ export default function DisplayUI({
 
                   {isSessionCompletedState && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
-                <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6 text-center xl:text-left">
+                <div className={cn(serviceColumnClass, "text-center xl:text-left")}>
                     <div>
-                        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold">Anchor Bingo Night</p>
-                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Thanks For Coming!</h1>
-                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">Please book your table for our next bingo event before you leave.</p>
+                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+                        <h1 className={serviceHeadlineClass}>Thanks For Coming!</h1>
+                        <p className={serviceSubheadClass}>Please book your table for our next bingo event before you leave.</p>
                     </div>
 
-                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Book For Our Next Event</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Don&apos;t miss out. Reserve your table at the bar tonight.</p>
+                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
+                        <h2 className={servicePromoTitleClass}>Book For Our Next Event</h2>
+                        <p className={servicePromoBodyClass}>Don&apos;t miss out. Reserve your table at the bar tonight.</p>
                     </div>
 
-                    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-center xl:text-left backdrop-blur-md">
-                        <h3 className="text-[clamp(1.5rem,2.3vw,2.3rem)] font-bold text-white">Bring friends for the next one</h3>
-                        <p className="text-[clamp(1rem,1.45vw,1.3rem)] text-white/90 mt-1">Ask the team about dates and get booked in early.</p>
+                    <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl text-center xl:text-left backdrop-blur-md", serviceCardPadClass)}>
+                        <h3 className={serviceCardTitleClass}>Bring friends for the next one</h3>
+                        <p className={serviceCardBodyClass}>Ask the team about dates and get booked in early.</p>
                     </div>
                 </div>
 
@@ -626,10 +919,31 @@ export default function DisplayUI({
 
           {showPausedForValidation && (
             <div className="absolute inset-0 z-[70] flex items-center justify-center bg-[#003f27]/95 backdrop-blur-md p-8 text-center animate-in fade-in duration-300">
-                <div className="w-full max-w-4xl bg-[#005131]/90 border border-[#a57626] rounded-3xl p-10">
-                    <p className="text-[clamp(1rem,2vw,1.5rem)] uppercase tracking-[0.18em] font-bold text-[#f3d59d]">Validation In Progress</p>
-                    <h1 className="text-[clamp(2.7rem,7.2vw,6.5rem)] font-black uppercase tracking-[0.08em] text-white mt-3">Checking Claim</h1>
-                    <p className="text-[clamp(1.1rem,2.4vw,2rem)] text-white/90 mt-4">Please hold all calls while the ticket is verified.</p>
+                <div className="w-full max-w-6xl bg-[#005131]/90 border border-[#a57626] rounded-3xl p-8 flex flex-col lg:flex-row items-center justify-center gap-8">
+                    <div className="text-center lg:text-left">
+                      <p className="text-[clamp(1rem,2vw,1.5rem)] uppercase tracking-[0.18em] font-bold text-[#f3d59d]">Validation In Progress</p>
+                      <h1 className="text-[clamp(2.7rem,7.2vw,6.5rem)] leading-[1.02] font-black uppercase tracking-[0.08em] text-white mt-2">Checking Claim</h1>
+                      <p className="text-[clamp(1.1rem,2.4vw,2rem)] leading-tight text-white/90 mt-3">Please hold all calls while the ticket is verified.</p>
+                    </div>
+                    {/* The claim is validated against the last called ball, and the
+                        reveal queue snaps to the server state while paused, so this
+                        is always the true last call. */}
+                    {currentNumberDelayed !== null && (
+                      <div className="flex flex-col items-center gap-2 shrink-0">
+                        <p className="text-[clamp(0.9rem,1.5vw,1.3rem)] uppercase tracking-[0.16em] font-bold text-[#f3d59d]">Claim must include</p>
+                        <div
+                          className="flex items-center justify-center rounded-full bg-[#005131] border-4 border-white font-bold text-white leading-none shrink-0"
+                          style={{
+                            width: 'clamp(4rem,12vw,10rem)',
+                            height: 'clamp(4rem,12vw,10rem)',
+                            fontSize: 'clamp(2rem,6vw,5rem)',
+                            fontVariantNumeric: 'tabular-nums lining-nums',
+                          }}
+                        >
+                          {currentNumberDelayed}
+                        </div>
+                      </div>
+                    )}
                 </div>
             </div>
           )}
@@ -638,11 +952,18 @@ export default function DisplayUI({
             <div className="flex flex-col items-center justify-center h-full w-full">
               {currentNumberDelayed ? (
                 <div className="relative animate-in zoom-in duration-300">
-                   {/* Massive Main Number */}
+                   {/* Massive Main Number.
+                      The 19rem subtracted below is the real vertical chrome:
+                      h-24 top bar (6rem) + h-40 footer (10rem) + the main area's
+                      p-6 top and bottom (3rem) = 19rem. It used to say 18rem,
+                      which is exactly 1rem short, so at 1280x720 the calc asked
+                      for 432px against 416px available and flat-topped the ball
+                      by 8px top and bottom. Masked at 1080p only because the
+                      68vh term binds first there. */}
                   <div
                     className="relative bg-[#005131] border-4 border-white rounded-full flex items-center justify-center overflow-hidden"
                     style={{
-                      ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 16rem))',
+                      ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 19rem))',
                       width: 'var(--display-ball-size)',
                       height: 'var(--display-ball-size)',
                     } as React.CSSProperties}
@@ -716,8 +1037,12 @@ export default function DisplayUI({
           )}
       </div>
 
-      {/* Footer Info Bar */}
-      <div className="h-32 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10">
+      {/* Footer Info Bar. h-40 rather than h-32 to clear the enlarged recent
+          calls strip. Its 10rem is one of the three terms in the main ball's
+          calc(100vh - 19rem) above (6rem top bar + 10rem footer + 3rem main
+          padding), and it also sets where the QR badge sits (bottom-44).
+          Change this height and you must re-do that subtraction. */}
+      <div className="h-40 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10">
             <div className="flex flex-col justify-center border-r border-white/10 pr-8">
                 {(showActiveGame || showPausedForValidation) && (
                   <>
@@ -731,8 +1056,8 @@ export default function DisplayUI({
                     </p>
                     {isSnowballGame && (
                       <p className={footerLeftTextClass}>
-                        {currentSnowballPot && snowballCallsLabel && currentGameState
-                          ? `Snowball: £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))} - ${snowballCallsLabel} (${currentGameState.numbers_called_count}/${currentSnowballPot.current_max_calls} calls${typeof snowballCallsRemaining === 'number' ? `, ${snowballCallsRemaining} left` : ''})`
+                        {currentSnowballPot
+                          ? `Snowball: £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}`
                           : 'Snowball: countdown unavailable (no linked snowball pot)'}
                       </p>
                     )}
@@ -745,13 +1070,13 @@ export default function DisplayUI({
                     <>
                       <div className="flex justify-between items-end mb-2">
                           <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
-                          <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {delayedNumbers.length}</span>
+                          <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {revealedCallCount}</span>
                       </div>
                       <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
                           {delayedNumbers.slice().reverse().map((num, idx) => (
                               <div key={idx} className={cn(
                                   "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
-                                  idx === 0 ? "w-16 h-16 text-[36px] border-4 border-white" : "w-12 h-12 text-[27px] opacity-70"
+                                  idx === 0 ? "w-[5.6rem] h-[5.6rem] text-[50px] border-4 border-white" : "w-[4.2rem] h-[4.2rem] text-[38px] opacity-70"
                               )}>
                                   {num}
                               </div>
@@ -763,7 +1088,7 @@ export default function DisplayUI({
         </div>
 
       {/* Player Join QR Code */}
-      <div className="absolute bottom-36 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
+      <div className="absolute bottom-44 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
           <div className="bg-white p-2 rounded-lg">
              <QRCodeSVG
                 value={resolvedJoinUrl}

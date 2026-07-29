@@ -2,6 +2,7 @@ import React from 'react';
 import { createClient } from '@/utils/supabase/server';
 import { notFound } from 'next/navigation';
 import PlayerUI from './player-ui';
+import type { InitialLoadStatus } from './player-ui';
 import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
@@ -42,6 +43,10 @@ export default async function PlayerPage({ params }: PageProps) {
   let activeGame: Database['public']['Tables']['games']['Row'] | null = null;
   let initialGameState: Database['public']['Tables']['game_states_public']['Row'] | null = null;
   let prizeText: string = '';
+  // A failed read is reported to the client as its own load status. It must
+  // never be presented to guests as "the host has not started yet": the screen
+  // shows a recoverable panel and recovers on the next successful poll.
+  let initialLoadStatus: InitialLoadStatus = 'ready';
 
   if (session.active_game_id) {
     // Fetch the active game details
@@ -53,6 +58,7 @@ export default async function PlayerPage({ params }: PageProps) {
 
     if (gameError || !game) {
       logError('player', gameError ?? new Error('No active game found for session'));
+      initialLoadStatus = 'failed';
     } else {
       activeGame = game;
       // Fetch the initial game state for the active game
@@ -64,6 +70,7 @@ export default async function PlayerPage({ params }: PageProps) {
 
       if (gameStateError || !gameState) {
         logError('player', gameStateError ?? new Error('No game state found for active game'));
+        initialLoadStatus = 'failed';
       } else {
         initialGameState = gameState;
         if (game.prizes && game.stage_sequence && gameState.current_stage_index !== undefined) {
@@ -80,6 +87,7 @@ export default async function PlayerPage({ params }: PageProps) {
       activeGame={activeGame}
       initialGameState={initialGameState}
       initialPrizeText={prizeText}
+      initialLoadStatus={initialLoadStatus}
     />
   );
 }
