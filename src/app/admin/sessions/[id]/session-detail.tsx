@@ -429,6 +429,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                     <th className="px-4 py-3">Name</th>
                     <th className="px-4 py-3">Type</th>
                     <th className="px-4 py-3">Stages</th>
+                    <th className="px-4 py-3">Prizes</th>
                     <th className="px-4 py-3">Colour</th>
                     <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
@@ -459,10 +460,25 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                         </td>
                         <td className="px-4 py-3">
                             <div className="flex gap-1">
-                              {game.stage_sequence.map((stage, i) => (
-                                  <span key={i} className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-xs border border-slate-700">{stage}</span>
+                              {game.stage_sequence.map((stage) => (
+                                  <span key={stage} className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-xs border border-slate-700">{stage}</span>
                               ))}
                             </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col items-start gap-1">
+                            {game.stage_sequence.map((stage) => {
+                              const prize = game.prizes?.[stage]?.trim();
+                              return (
+                                <span key={stage} className="text-xs whitespace-nowrap">
+                                  <span className="text-slate-400">{stage}:</span>{' '}
+                                  <span className={prize ? 'font-semibold text-white' : 'text-amber-300'}>
+                                    {prize || (game.type === 'jackpot' ? 'Set by host at start' : 'Not set')}
+                                  </span>
+                                </span>
+                              );
+                            })}
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                             <div
