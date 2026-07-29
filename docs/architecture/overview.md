@@ -76,6 +76,10 @@ No `react-player`, no Stripe, no Twilio, no OpenAI/Anthropic, no Resend, no Upst
 
 `game_states` and `game_states_public` both carry a `state_version bigint` column, bumped by the `bump_game_state_version` BEFORE UPDATE trigger on every write. The `sync_game_states_public()` trigger keeps the public mirror aligned. Clients use `isFreshGameState()` (in `src/lib/game-state-version.ts`) to drop out-of-order Realtime / polling payloads — never compare on `updated_at`.
 
+## Public Reveal Model
+
+The host and the public screens are deliberately out of step. The host sees a ball as soon as the server confirms the call, with no optimistic paint. The public surfaces (`/display` and `/player`) reveal each ball no earlier than `call_delay_seconds` after its own server call time, and when several calls arrive at once the backlog is paced so no ball is ever skipped or shown out of order. The decision is made by the pure helper `planReveal()` in `src/lib/reveal-queue.ts`, from the current snapshot only, so it survives a reload, a poll or a reconnect. Two cases snap the public screens straight to the server state: a claim check (`paused_for_validation`) and game end, because a claim is validated against the last called ball. `call_delay_seconds` is the public reveal delay only; the host gap is `HOST_MIN_CALL_GAP_MS` in `src/lib/call-timing.ts`.
+
 ## Atomic Admin Mutations
 
 Recent migration `20260430120300_atomic_admin_mutations.sql` introduces four security-definer RPCs to close TOCTOU windows in admin destructive flows:
@@ -86,6 +90,8 @@ Recent migration `20260430120300_atomic_admin_mutations.sql` introduces four sec
 - `reset_session_safe(p_session_id)` — used by `resetSession`
 
 Each performs precheck-and-mutate atomically under a row lock so a host cannot start a game (or insert a winner) between the application-layer check and the destructive write.
+
+`20260729120000_atomic_host_mutations.sql` extends the same pattern to the live host path with `assert_is_host`, `call_next_number`, `void_last_number` and `record_winner_atomic`. See [[server-actions]] for the action contract and [[data-model]] for the locking behaviour.
 
 ## Cross-references
 

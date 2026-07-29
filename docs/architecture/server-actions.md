@@ -69,12 +69,38 @@ The largest action file — orchestrates live game flow. Some actions construct 
 | `validateClaim(gameId, claimedNumbers)` | `game_states` | host (validates claimed numbers vs called set — see commit `ea505e1`) |
 | `announceWin(gameId, stage)` | `game_states`, `winners` | host |
 | `advanceToNextStage(gameId)` | `game_states` | host |
-| `recordWinner(...)` | `winners`, `snowball_pots`, `snowball_pot_history` | host (uses service-role client) |
+| `recordWinner(...)` | `winners`, `game_states`, `snowball_pots`, `snowball_pot_history` | host |
 | `toggleWinnerPrizeGiven(sessionId, gameId, winnerId, prizeGiven)` | `winners` | host |
-| `skipStage(gameId, currentStageIndex, totalStages)` | `game_states` | host |
+| `skipStage(gameId)` | `game_states` | host (stage index and stage count derived server-side, never taken from the client) |
 | `voidLastNumber(gameId)` | `game_states` | host |
+| `voidWinnerFromHost(sessionId, gameId, winnerId, reason)` | `winners` | admin only (lets the host clear a blocked undo without leaving the game) |
 
-All host actions wrap mutations in auth checks and call `revalidatePath` for the host/display/player views. Live-state mutations also require `requireController` (compares `game_states.controlling_host_id` to the caller's user id).
+All host actions wrap mutations in auth checks and call `revalidatePath('/host')`, plus `revalidatePath('/host/[sessionId]/[gameId]')` in the actions that already hold a `sessionId`. Live-state mutations also require `requireController` (compares `game_states.controlling_host_id` to the caller's user id).
+
+### Action contract
+
+`ActionResult<T>` carries an optional `conflict?: true` on the failure branch, so the client can tell "you lost a race, here is fresh state" apart from "this failed". A conflict means refresh state and show the reason, not a hard error.
+
+| Action | Writes | Atomic boundary | Returns | Client behaviour |
+|--------|--------|-----------------|---------|------------------|
+| `callNextNumber` | `game_states` | RPC `call_next_number`, row lock | `game_states` row | apply via `isFreshGameState` |
+| `voidLastNumber` | `game_states` | RPC `void_last_number`, row lock, winner check inside | `game_states` row | apply, close confirm modal |
+| `recordWinner` | `winners` + `game_states` | RPC `record_winner_atomic`, one transaction | `game_states` row | apply, open Post Win |
+| `toggleBreak` | `game_states` | bound update, controller plus status | `game_states` row | apply |
+| `pauseForValidation` | `game_states` | bound update | `game_states` row | apply |
+| `resumeGame` | `game_states` | bound update | `game_states` row | apply, close validation modal |
+| `advanceToNextStage` | `game_states` | bound update on expected `current_stage_index` | `game_states` row | apply |
+| `skipStage` | `game_states` | bound update, indices derived server-side | `game_states` row | apply |
+| `announceWin` | `game_states` | bound update on expected stage | `game_states` row | apply |
+| `endGame` | `game_states`, `snowball_pots`, `sessions` | existing sequence, bound `game_states` update | `game_states` row | apply, then navigate |
+| `takeControl` | `game_states` | single conditional update, no separate read | `game_states` row | apply |
+| `startGame` | `game_states`, `games`, `sessions` | existing sequence | redirect target | navigate |
+| `moveToNextGameOnBreak` / `AfterWin` | composite | composite, documented as non-atomic | redirect target | navigate |
+| `sendHeartbeat` | `game_states` | bound update | nothing | no local state change |
+| `toggleWinnerPrizeGiven` | `winners` | bound update | `winners` row | apply to winner lists only |
+| `voidWinnerFromHost` | `winners` | existing `voidWinner`, admin only | `winners` row | refresh winner lists |
+
+"Bound update" means the `update` filter binds every condition the action asserted (controller, `status`, `on_break`, `paused_for_validation`, `current_stage_index`), so zero rows changed returns a conflict instead of committing against state that has moved on. The two `moveToNextGame*` actions stay non-atomic by decision: they are in-flight guarded on the client and each step checks its own preconditions, so a failure is a visible half-transition the host can retry. Full rationale in `docs/superpowers/specs/2026-07-29-live-game-fixes-design.md` section 5.
 
 ## RPCs Used
 
@@ -84,5 +110,9 @@ All host actions wrap mutations in auth checks and call `revalidatePath` for the
 | `delete_game_safe` | `deleteGame` | Atomic precheck + delete under row lock |
 | `update_game_safe` | `updateGame` | Atomic structural-update guard against `game_states.status` |
 | `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session |
+| `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on `game_states`; host gap passed in as `p_min_gap_ms` |
+| `void_last_number` | `voidLastNumber` | Atomic undo under the same lock, with the non-void winner check inside the transaction |
+| `record_winner_atomic` | `recordWinner` | Winner insert plus win-display update in one transaction; re-checks the snowball jackpot window |
+| `assert_is_host` | the three host functions above | Raises unless `profiles.role` is `admin` or `host` |
 
 See [[relationships]] for the table → action and action → caller cross-reference.

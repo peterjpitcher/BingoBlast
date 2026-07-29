@@ -36,12 +36,16 @@ See [[relationships]] for the inverse mapping (table → actions that touch it).
 | `delete_game_safe` | `deleteGame` | Atomic precheck + delete under row lock |
 | `update_game_safe` | `updateGame` | Atomic structural-update guard against `game_states.status` |
 | `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session |
+| `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on the `game_states` row: asserts host role, controller, status, remaining balls and the host gap (`p_min_gap_ms`), appends the ball, returns the committed row |
+| `void_last_number` | `voidLastNumber` | Atomic undo under the same row lock: counts non-void winners on the current ball inside the same transaction and refuses when one exists, decrements the count, clears the win display, leaves `last_call_at` untouched |
+| `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked |
+| `assert_is_host` | helper, called by the three above | Raises unless `profiles.role` is `admin` or `host` |
 
-Introduced by `supabase/migrations/20260430120300_atomic_admin_mutations.sql`.
+The four admin RPCs come from `supabase/migrations/20260430120300_atomic_admin_mutations.sql`; the four host functions from `supabase/migrations/20260729120000_atomic_host_mutations.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
 
 ## Migrations Applied
 
-13 migrations under `supabase/migrations/`, latest 2026-04-30:
+16 migrations under `supabase/migrations/`, latest 2026-07-29:
 
 - `20251221101434` — `add_active_game_id`
 - `20251221101435` — `add_controller_locking`
@@ -56,6 +60,9 @@ Introduced by `supabase/migrations/20260430120300_atomic_admin_mutations.sql`.
 - `20260430120200` — `backfill_call_delay_to_2`
 - `20260430120300` — `atomic_admin_mutations`
 - `20260430120400` — `tighten_profiles_select`
+- `20260729120000` - `atomic_host_mutations`
+- `20260729120100` - `public_reveal_delay`
+- `20260729120200` - `ensure_realtime_publication`
 
 ## `state_version` — Live-State Ordering Field
 
@@ -64,6 +71,14 @@ Both `game_states` and `game_states_public` carry a `state_version bigint not nu
 - The **`bump_game_state_version` BEFORE UPDATE trigger** on `game_states` increments `new.state_version` to `coalesce(old.state_version, 0) + 1` on every row update.
 - The **`sync_game_states_public()` trigger** propagates the row (including the just-bumped `state_version`) into `game_states_public` so the public mirror always carries the same version.
 - Clients use **`isFreshGameState()`** in `src/lib/game-state-version.ts` to compare the current state's `state_version` against an incoming Realtime/polling payload's `state_version` — older payloads are dropped. Never compare on `updated_at` for ordering purposes.
+
+## `call_delay_seconds` is the Public Reveal Delay
+
+`call_delay_seconds` (on both `game_states` and `game_states_public`) used to do two jobs: the server's minimum gap between host calls, and the delay before the public screens showed a ball. Since `supabase/migrations/20260729120100_public_reveal_delay.sql` it means **only** the public reveal delay: how long `/display` and `/player` wait after `last_call_at` before revealing a ball. Default and backfilled value is `3`, and a `comment on column` on both tables records the meaning.
+
+The host gap is a separate constant, `HOST_MIN_CALL_GAP_MS` in `src/lib/call-timing.ts`, passed into `call_next_number` as `p_min_gap_ms`. It is an anti-double-tap window only. Do not reintroduce `call_delay_seconds` as a host gap: with the new code that would put seconds back between the host's calls.
+
+Rollback note: the pre-2026-07-29 application reads `call_delay_seconds` as the host gap, so reverting the code also needs `docs/superpowers/plans/2026-07-29-rollback.sql` (sets both tables back to `2`).
 
 ## Environment Configuration
 

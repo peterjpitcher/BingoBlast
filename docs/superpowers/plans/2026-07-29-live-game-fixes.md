@@ -540,10 +540,14 @@ Inside `renderHouseRulesPanel`, below the rules: a heading "Join in" and a two c
 
 1. All streams merged into the branch. Run the full pipeline: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run build`. Every one must pass.
 2. Commit per stream, conventional messages, one logical change each.
-3. Merge the branch into `main` and push to `origin`.
-4. Wait for the Vercel deployment to go live and confirm it is serving the new code.
-5. **Then** apply the three migrations to Supabase in order: atomic host mutations, public reveal delay, publication assertion.
-6. Run the post-deploy SQL checks in spec section 9 and record the output.
-7. Leave the manual evidence checklist for the host to run against a test session.
+3. **Apply `20260729120000_atomic_host_mutations.sql`** via `apply_migration`. Additive: the deployed code never calls these functions.
+4. **Apply `20260729120200_ensure_realtime_publication.sql`**. Additive and idempotent.
+5. Merge the branch into `main` and push to `origin`.
+6. Wait for the Vercel deployment to go live and confirm it is serving the new code.
+7. **Then apply `20260729120100_public_reveal_delay.sql`**.
+8. Run the post-deploy SQL checks in spec section 9 and record the output.
+9. Leave the manual evidence checklist for the host to run against a test session.
 
-Order is deliberate: with the new database and the old app, the host would face a 3 second gap between calls. Code first means the only intermediate state is a 2 second public reveal instead of 3, which is harmless.
+The split is deliberate and both halves matter. If the functions are missing while the new code is live, every call, undo and winner fails. If the reveal delay lands while the old code is live, the old code reads 3 as its host gap and blocks the host for 3 seconds a ball. The only intermediate state this order allows is a 2 second public reveal instead of 3, between steps 5 and 7.
+
+`npx supabase db push` is unusable here: the remote history has eight versions with no local file, three of which exist only in production, so the CLI aborts before parsing. Use `apply_migration`.

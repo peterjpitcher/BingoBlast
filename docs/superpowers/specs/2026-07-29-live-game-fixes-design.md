@@ -386,18 +386,23 @@ Phases are **separately reviewable**. They are not separately deployable: phase 
 | 5 | TV geometry (footer, QR, ball calc), 40 percent balls, snowball badge, validation ball, "Join in" grid, phone equivalents | Low, but needs screenshot evidence |
 | 6 | Content and host layout: `Andys Den`, nickname extraction, claim counter, snowball centring, selection-count parity, migration 3 | Low |
 
-**Deployment order** (D8). The order matters because the migration changes what the host gap means:
+**Deployment order** (D8). The three migrations do **not** all go on the same side of the deploy. Two are additive and must land first; one changes the meaning of an existing value and must land last.
 
 1. Verify locally: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run build`.
-2. Merge to `main` and push. Vercel deploys.
-3. Confirm the deployment is live and serving the new code.
-4. Apply the three migrations to Supabase, atomic RPCs first, then the reveal delay, then the publication assertion.
-5. Run the post-deploy verification queries in section 9.
+2. Apply `20260729120000_atomic_host_mutations.sql`. Purely additive: it creates four functions the currently deployed code never calls.
+3. Apply `20260729120200_ensure_realtime_publication.sql`. Also additive, and idempotent against the current state.
+4. Merge to `main` and push. Vercel deploys.
+5. Confirm the deployment is live and serving the new code.
+6. **Then** apply `20260729120100_public_reveal_delay.sql`.
+7. Run the post-deploy verification queries in section 9.
 
-Compatibility, both directions:
+`npx supabase db push` cannot be used. The remote migration history has eight versions with no matching local file, three of which exist only in production, so the CLI aborts before parsing anything. Apply via `apply_migration` instead. Recovering those three files is tracked separately and is a prerequisite for ever rebuilding this project from the repo.
 
-- **New database, old app**: the old app reads `call_delay_seconds = 3` as its host gap, so the host would be forced to wait 3 seconds between calls. Annoying, not dangerous. This is why code goes first.
-- **New app, old database**: the new app uses its own 400ms host gap and reads `call_delay_seconds = 2`, so the public reveal is 2 seconds instead of 3. Correct behaviour, slightly early. Safe. This is the window between steps 2 and 4.
+Why the split, in both directions:
+
+- **Functions missing, new app live**: `callNextNumber`, `voidLastNumber` and `recordWinner` would all fail, because they call functions that do not exist. This is the worst case and it is why steps 2 and 3 come before the deploy.
+- **New reveal delay, old app live**: the old app reads `call_delay_seconds = 3` as its *host* gap, so the host would be forced to wait 3 seconds between every call. Annoying, not dangerous, but it is why step 6 comes after the deploy.
+- **New app, old reveal delay**: the new app uses its own 400ms host gap and reads `call_delay_seconds = 2`, so the public reveal is 2 seconds instead of 3. Correct behaviour, slightly early. This is the only intermediate state, and it exists between steps 4 and 6.
 - **Rollback**: revert the merge and redeploy. The database can stay as it is, except that the old app would then enforce a 3 second host gap, so a rollback must also run `update public.game_states set call_delay_seconds = 2; update public.game_states_public set call_delay_seconds = 2;`. The new RPCs are additive and harmless if unused. Rollback SQL is committed alongside the migrations as `docs/superpowers/plans/2026-07-29-rollback.sql`.
 
 Timing: applied overnight with no session running, so no live game is disturbed. No backup is taken because no data is destroyed; the only data change is one integer column moving from 2 to 3 on 60 rows per table, and the rollback statement above reverses it.
