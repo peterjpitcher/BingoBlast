@@ -127,7 +127,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         let interval: NodeJS.Timeout;
         if (isController) {
             interval = setInterval(async () => {
-                await sendHeartbeat(gameId);
+                // A dropped heartbeat is expected on pub wifi and recovers on the
+                // next tick, so swallow it. Without the catch every blip raised an
+                // unhandled promise rejection, ten seconds apart, all night.
+                try {
+                    await sendHeartbeat(gameId);
+                } catch (err) {
+                    logError('host-control', err);
+                }
             }, 10000); // Send heartbeat every 10s
         }
         return () => clearInterval(interval);
@@ -230,12 +237,24 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setCurrentWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: !currentStatus } : w));
         setSessionWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: !currentStatus } : w));
 
-        const result = await toggleWinnerPrizeGiven(sessionId, gameId, winnerId, !currentStatus);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to update prize status.");
-            // Revert
+        // Revert on refusal AND on a transport failure. Without the catch a
+        // dropped request left the optimistic tick showing a prize as given when
+        // the write never landed.
+        const revert = () => {
             setCurrentWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: currentStatus } : w));
             setSessionWinners(prev => prev.map(w => w.id === winnerId ? { ...w, prize_given: currentStatus } : w));
+        };
+
+        try {
+            const result = await toggleWinnerPrizeGiven(sessionId, gameId, winnerId, !currentStatus);
+            if (!result?.success) {
+                setActionError(result?.error || "Failed to update prize status.");
+                revert();
+            }
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to update prize status. Check the connection and try again.");
+            revert();
         }
     };
 
@@ -487,15 +506,25 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     }, [pollGameState]);
 
     const handleCallNextNumber = async () => {
-        if (!isController) return;
+        if (!isController || isCallingNumber) return;
         setIsCallingNumber(true);
         setActionError(null);
 
-        // The host is the author of this change, so apply the server's
-        // already-synced state snapshot immediately. The freshness gate keeps
-        // a slightly older Realtime echo from clobbering it.
-        applyMutation(await callNextNumber(gameId), "Failed to call next number.");
-        setIsCallingNumber(false);
+        try {
+            // The host is the author of this change, so apply the server's
+            // already-synced state snapshot immediately. The freshness gate keeps
+            // a slightly older Realtime echo from clobbering it.
+            applyMutation(await callNextNumber(gameId), "Failed to call next number.");
+        } catch (err) {
+            // This is the control the host presses every ten seconds all night.
+            // Without the catch and finally, one dropped request left
+            // isCallingNumber true forever: the button stayed disabled reading
+            // "CALLING..." with no error, and only a reload recovered it.
+            logError('host-control', err);
+            setActionError("Could not reach the server to call the next number. Check the connection and try again.");
+        } finally {
+            setIsCallingNumber(false);
+        }
     };
 
     const handleToggleBreak = async () => {
@@ -549,7 +578,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             const result = await moveToNextGameAfterWin(gameId, sessionId);
             if (!result?.success) {
                 setActionError(result?.error || "Failed to move to next game.");
-                if ('conflict' in result && result.conflict) void pollGameState();
+                // `result &&` guard matches applyMutation: an action that resolves
+                // undefined would otherwise throw a TypeError right after the
+                // error was set, losing the message the host needs.
+                if (result && 'conflict' in result && result.conflict) void pollGameState();
                 return;
             }
             if (result.data?.requiresCashJackpotAmount) {
@@ -583,7 +615,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             const result = await moveToNextGameOnBreak(gameId, sessionId);
             if (!result?.success) {
                 setActionError(result?.error || "Failed to move to next game break.");
-                if ('conflict' in result && result.conflict) void pollGameState();
+                if (result && 'conflict' in result && result.conflict) void pollGameState();
                 return;
             }
             if (result.data?.requiresCashJackpotAmount) {
@@ -603,8 +635,16 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
+    /**
+     * Every route out of this modal was gated on isSubmittingCashJackpot: Confirm
+     * is disabled by it, Cancel returns early while it is set, the ✕ calls Cancel
+     * and Escape clicks the ✕. So a rejected transition, which used to skip the
+     * flag reset entirely, trapped the host with no way out but a reload, mid
+     * game-transition. Hence the finally. The re-entrancy guard is the other half:
+     * without it a double tap fired two game transitions.
+     */
     const handleConfirmCashJackpotAndContinue = async () => {
-        if (!isController) return;
+        if (!isController || isSubmittingCashJackpot) return;
         if (!cashJackpotAmount.trim()) {
             setActionError("Enter a cash jackpot amount before continuing.");
             return;
@@ -612,21 +652,25 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
         setIsSubmittingCashJackpot(true);
         setActionError(null);
-        const transitionResult = cashJackpotMode === 'break'
-            ? await moveToNextGameOnBreak(gameId, sessionId, cashJackpotAmount)
-            : await moveToNextGameAfterWin(gameId, sessionId, cashJackpotAmount);
+        try {
+            const transitionResult = cashJackpotMode === 'break'
+                ? await moveToNextGameOnBreak(gameId, sessionId, cashJackpotAmount)
+                : await moveToNextGameAfterWin(gameId, sessionId, cashJackpotAmount);
 
-        setIsSubmittingCashJackpot(false);
+            if (!transitionResult?.success) {
+                setActionError(transitionResult?.error || "Failed to continue to next game.");
+                return;
+            }
 
-        if (!transitionResult?.success) {
-            setActionError(transitionResult?.error || "Failed to continue to next game.");
-            return;
+            setShowCashJackpotModal(false);
+            clearSpentClaim();
+            navigateToHostPath(transitionResult.data?.redirectTo);
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to start the next game. Check the connection and try again.");
+        } finally {
+            setIsSubmittingCashJackpot(false);
         }
-
-        setShowCashJackpotModal(false);
-        setShowValidationModal(false);
-        handleClearSelection();
-        navigateToHostPath(transitionResult.data?.redirectTo);
     };
 
     const handleCancelCashJackpotModal = () => {
@@ -651,6 +695,26 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleClearSelection = () => {
         setSelectedNumbers([]);
         setValidationResult(null);
+    };
+
+    /**
+     * A recorded claim is spent, so every trace of it has to go.
+     *
+     * The server cannot refuse a duplicate: ties are legitimate by design, so two
+     * winners on one stage is a valid write. The only thing stopping the same
+     * ticket being paid twice is that the host never sees a second live Record
+     * Winner button for it. Leaving `showValidationModal` open behind the Post Win
+     * modal did exactly that: closing Post Win revealed the green Valid Claim
+     * panel again, with the same numbers highlighted and nothing saying the win
+     * was already recorded. One tap wrote a second winners row, and on a snowball
+     * Full House it paid the jackpot twice.
+     *
+     * Call this on every path that records a win, and on the Post Win escape.
+     */
+    const clearSpentClaim = () => {
+        setShowValidationModal(false);
+        setValidationResult(null);
+        setSelectedNumbers([]);
     };
 
     const handleBeginClaimCheck = async () => {
@@ -746,8 +810,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 setPrizeGiven(false);
                 setSnowballEligibleChoice(null);
                 setShowWinnerModal(false);
+                // The claim is spent. Without this the validation modal survived
+                // behind Post Win with a live Record Winner button on the same
+                // ticket, which paid a snowball jackpot twice.
+                clearSpentClaim();
                 setShowPostWinModal(true);
             }
+        } catch (err) {
+            // A transport failure here is the worst case: the host sees
+            // "Recording…" flash back to idle and taps again. Say so, in the
+            // modal, rather than leaving it looking like nothing happened.
+            logError('host-control', err);
+            setActionError("Could not reach the server to record that winner. Check the connection, then check the Winners and Prizes list before recording again.");
         } finally {
             setIsRecordingWinner(false);
         }
@@ -775,6 +849,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
      * one.
      */
     const handleOpenRecordWinnerModal = () => {
+        // This modal now shows actionError, so clear any stale one from an earlier
+        // refusal. Otherwise an unrelated message would greet the host here.
+        setActionError(null);
         setSnowballEligibleChoice(null);
         setShowWinnerModal(true);
     };
@@ -814,7 +891,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     message: result?.error || "Failed to undo the last call.",
                     code: result?.code,
                 });
-                if ('conflict' in result && result.conflict) void pollGameState();
+                if (result && 'conflict' in result && result.conflict) void pollGameState();
                 return;
             }
             applyMutation(result, "Failed to undo the last call.");
@@ -850,6 +927,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         if (isPostWinBusy) return;
         setActionError(null);
         setShowPostWinModal(false);
+        // Belt and braces: recordWinner already spent the claim, so there should
+        // be nothing left to clear. This guarantees closing Post Win can never
+        // reveal a live Record Winner button for a win that is already on record.
+        clearSpentClaim();
     };
 
     const handleOpenVoidWinner = (winner: SessionWinner) => {
@@ -903,6 +984,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isVoidLastNumberDisabled = !isController || isVoiding || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
     const canVoidWinner = currentUserRole === 'admin';
     const hostSurfaceClass = "bg-[#003f27]/88 border border-[#1f7c58]";
+    const modalErrorClass = "p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded";
+    // Every modal that can produce an actionError now renders it inside itself,
+    // because a banner on the page behind a modal is a banner the host never sees.
+    // The page banner therefore stands down while one of those is open: two
+    // role="alert" regions holding the same text would be announced twice.
+    const isActionErrorShownInModal = showValidationModal || showWinnerModal || showPostWinModal || showCashJackpotModal || showManualSnowballModal || showSessionWinnersModal;
 
 
     return (
@@ -935,9 +1022,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 shouldAutoRefresh={health.shouldAutoRefresh}
             />
 
-            {/* Alerts. Hidden while the Post Win modal is open, because that modal
-                renders the same error inside itself where the host can see it. */}
-            {actionError && !showPostWinModal && (
+            {/* Alerts. Hidden while any modal that renders the same error inside
+                itself is open, because that is where the host can actually see it. */}
+            {actionError && !isActionErrorShownInModal && (
                 <div role="alert" className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center">{actionError}</div>
             )}
             {isGameCompleted && <div className="mb-4 p-4 bg-[#003f27]/90 border border-[#1f7c58] text-white rounded-lg text-center">Game Completed</div>}
@@ -1075,8 +1162,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant="secondary"
                     size="sm"
-                    className="border-[#a57626] text-white hover:bg-[#0f6846]"
-                    onClick={() => setShowSessionWinnersModal(true)}
+                    className="border-[#a57626] text-white hover:bg-[#0f6846] min-h-[44px]"
+                    onClick={() => {
+                        setActionError(null);
+                        setShowSessionWinnersModal(true);
+                    }}
                 >
                     Winners &amp; Prizes ({sessionWinners.length})
                 </Button>
@@ -1088,8 +1178,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     <Button
                         variant="secondary"
                         size="sm"
-                        className="bg-[#0f6846] border-[#a57626] text-white hover:bg-[#136f4b]"
+                        className="bg-[#0f6846] border-[#a57626] text-white hover:bg-[#136f4b] min-h-[44px]"
                         onClick={() => {
+                            setActionError(null);
                             setPrizeDescription(`£${currentSnowballPot.current_jackpot_amount} (Manual Snowball Win)`);
                             setShowManualSnowballModal(true);
                         }}
@@ -1152,7 +1243,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             >
                 <div className="flex flex-col h-full">
                     <div className="shrink-0 mb-4">
-                        {actionError && <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded mb-3">{actionError}</div>}
+                        {/* Suppressed while Record Winner is stacked on top of this
+                            modal: that one renders the same error where the host is
+                            looking, and two role="alert" regions holding the same
+                            text would be announced twice. */}
+                        {actionError && !showWinnerModal && <div role="alert" className={cn(modalErrorClass, "mb-3")}>{actionError}</div>}
 
                         {/* Claim progress. Big enough to read at arm's length behind the
                             bar, and announced politely so it does not chatter. Stays up
@@ -1281,6 +1376,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 className="max-w-4xl bg-[#003f27] border border-[#1f7c58]"
             >
                 <div className="space-y-4">
+                    {/* Mark Given raises actionError, and this modal covers the page
+                        banner, so a failed toggle would otherwise be invisible. */}
+                    {actionError && (
+                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                    )}
                     <p className="text-sm text-white/85">
                         Review winners across all games in this session and mark prizes as given when handed out.
                         Voiding a winner is how you clear an undo that is blocked by a win on the last ball.
@@ -1321,7 +1421,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                                 winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
                                             )}
                                             onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
-                                            disabled={!canTogglePrize || winner.is_void}
+                                            disabled={!canTogglePrize || winner.is_void === true}
                                         >
                                             {winner.prize_given ? "Given ✅" : "Mark Given"}
                                         </Button>
@@ -1451,6 +1551,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             {/* Record Winner Modal — winners are anonymous on public surfaces, so no name input. */}
             <Modal isOpen={showWinnerModal} onClose={handleCloseRecordWinnerModal} title={`Winner: ${currentStageName || 'Stage'}`} className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
+                    {/* This modal sits on top, so a failed Confirm Winner used to
+                        look like nothing happened at all: the error rendered only on
+                        the page and in the two modals behind. The host then tapped
+                        again, which is how a duplicate win got recorded. */}
+                    {actionError && (
+                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                    )}
                     <p className="text-sm text-white/85">
                         Winners are recorded anonymously. Confirm the prize details below to log the win.
                     </p>
@@ -1628,6 +1735,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 className="bg-[#003f27] border border-[#1f7c58] max-w-md"
             >
                 <div className="space-y-4">
+                    {actionError && (
+                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                    )}
                     <p className="text-sm text-white/90">
                         Enter tonight&apos;s cash jackpot amount for <span className="font-bold">{cashJackpotGameName}</span> before this game starts.
                     </p>
@@ -1648,15 +1758,21 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <div className="mt-6 flex justify-end gap-3">
                     <Button
                         variant="secondary"
+                        className="min-h-[44px]"
                         onClick={handleCancelCashJackpotModal}
+                        disabled={isSubmittingCashJackpot}
                     >
                         Cancel
                     </Button>
                     <Button
                         variant="primary"
-                        className="bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
+                        className="min-h-[44px] bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
                         onClick={handleConfirmCashJackpotAndContinue}
-                        disabled={isSubmittingCashJackpot}
+                        // Disabled on an empty field rather than only refused after
+                        // the tap: the refusal used to set an error the host could
+                        // not see from inside this modal, so the tap did nothing at
+                        // all as far as they could tell.
+                        disabled={isSubmittingCashJackpot || cashJackpotAmount.trim().length === 0}
                     >
                         {isSubmittingCashJackpot ? "Starting..." : "Set Amount & Start"}
                     </Button>
@@ -1666,6 +1782,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             {/* Manual Snowball Win Modal — winners are anonymous on public surfaces, so no name input. */}
             <Modal isOpen={showManualSnowballModal} onClose={() => setShowManualSnowballModal(false)} title="Manual Snowball Award" className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
+                    {actionError && (
+                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                    )}
                     <div className="p-3 bg-[#a57626]/20 border border-[#a57626] rounded text-white text-sm">
                         This will record a Snowball Jackpot win, display the celebration, and <strong>reset the pot</strong>.
                         Use this if the automatic trigger was missed or for special circumstances.
@@ -1685,6 +1804,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <div className="mt-6 flex justify-end gap-3">
                     <Button
                         variant="secondary"
+                        className="min-h-[44px]"
                         onClick={() => setShowManualSnowballModal(false)}
                         disabled={isRecordingSnowballWinner}
                     >
@@ -1692,9 +1812,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     </Button>
                     <Button
                         variant="primary"
+                        className="min-h-[44px]"
                         disabled={isRecordingSnowballWinner}
                         onClick={async () => {
                             if (isRecordingSnowballWinner) return; // Double-tap guard
+                            setActionError(null);
                             setIsRecordingSnowballWinner(true);
                             try {
                                 // Force record as snowball jackpot. Winner is always
@@ -1712,8 +1834,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
                                 if (applyMutation(result, "Failed to record snowball win.")) {
                                     setShowManualSnowballModal(false);
+                                    // This award is a recorded win too, so the claim
+                                    // it belongs to is spent.
+                                    clearSpentClaim();
                                     setShowPostWinModal(true);
                                 }
+                            } catch (err) {
+                                logError('host-control', err);
+                                setActionError("Could not reach the server to record that snowball win. Check the connection, then check the Winners and Prizes list before recording again.");
                             } finally {
                                 setIsRecordingSnowballWinner(false);
                             }

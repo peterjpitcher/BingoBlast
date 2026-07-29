@@ -211,3 +211,32 @@ body {
   min-height: 100vh; /* Fallback */
   min-height: 100dvh;
 }
+
+/* Warning colour for "Prize not set" and other host-facing prize warnings.
+   Tailwind has no `destructive` colour in tailwind.config.ts, so `text-destructive`
+   used to resolve to nothing and the warning inherited white from the surrounding
+   theme, which is exactly the warning a host would miss. Red-400 (#f87171) matches
+   the `text-red-400` warnings already used on the public display, so the same
+   condition reads the same on every screen. Unlayered, so it beats Tailwind's
+   utility layer without !important. */
+.text-destructive {
+  color: #f87171;
+}
+
+/* Recent-calls strips are rendered newest-first, so they overflow off their
+   RIGHT edge and `overflow-hidden` / `overflow-x-auto` hard-cuts the oldest
+   visible ball mid-circle. These masks fade that trailing edge instead. Both
+   fade towards the right because that is the edge both strips overflow; they
+   differ only in fade width, which is scaled to the ball size on each surface.
+   `-webkit-` prefix kept for older TV browsers. */
+.mask-linear-fade {
+  /* Big-screen display: 4.2rem balls, so a wider fade to cover a whole circle. */
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 3.5rem), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 3.5rem), transparent 100%);
+}
+
+.mask-linear-fade-right {
+  /* Player mobile strip: narrower viewport, so a shorter fade. */
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 2.25rem), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 2.25rem), transparent 100%);
+}

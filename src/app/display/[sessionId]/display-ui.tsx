@@ -639,10 +639,31 @@ export default function DisplayUI({
   // a height term so the binding constraint wins, and they now have to carry the
   // Join in grid as well. Do not raise them without re-checking 1280x720 AND
   // 1920x1080 on all three screens that render this panel.
-  const houseRulesTitleClass = "text-[min(2.9vw,5vh)] font-bold text-white mb-3 border-b border-[#1f7c58] pb-2";
-  // space-y-3 rather than space-y-4: the tighter list buys back the room the
+  // Budget: 100vh - 6rem top bar - 10rem footer - 3rem main padding. That is
+  // 416px at 1280x720, 464px at 1366x768, 776px at 1920x1080. Modelled height of
+  // this panel with the coefficients below: 402px / 421px / 550px. The previous
+  // coefficients modelled at 515px / 512px / 708px, so 720p and 768p both clipped.
+  const houseRulesTitleClass = "text-[min(2.9vw,4.4vh)] font-bold text-white mb-2 border-b border-[#1f7c58] pb-1.5";
+  // space-y-1.5 rather than space-y-2: the tighter list buys back the room the
   // "Join in" grid needs, because this panel clips instead of scrolling.
-  const houseRulesListClass = "space-y-2 text-[min(2.35vw,3.2vh)] leading-[1.2] text-white";
+  const houseRulesListClass = "space-y-1.5 text-[min(2.35vw,2.85vh)] leading-[1.2] text-white";
+  // The waiting, break and session-complete screens share one left column, sized
+  // against the same budget. Break and Session Complete stack three blocks in
+  // there and modelled at 525px off vw alone, so the third card was clipped with
+  // no visual cue. Each scale now takes min() of the width term and a height
+  // term, so the shorter screen wins. Every vh term is chosen so 1080p still
+  // lands on its clamp maximum and is pixel-identical to before, and the spacing
+  // only tightens below 2xl, so 1080p is untouched. Modelled column height:
+  // 379px at 720p, 393px at 768p, 512px (unchanged) at 1080p.
+  const serviceColumnClass = "col-span-12 xl:col-span-6 flex flex-col justify-center gap-4 2xl:gap-6";
+  const serviceCardPadClass = "p-4 2xl:p-5";
+  const serviceEyebrowClass = "text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold";
+  const serviceHeadlineClass = "text-[clamp(2rem,min(4.6vw,6.5vh),4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1";
+  const serviceSubheadClass = "text-[clamp(1rem,min(1.55vw,2.1vh),1.35rem)] text-white/90 mt-2";
+  const servicePromoTitleClass = "text-[clamp(1.7rem,min(3.2vw,4.6vh),3.1rem)] font-black uppercase tracking-[0.08em] text-white animate-pulse";
+  const servicePromoBodyClass = "text-[clamp(1rem,min(1.7vw,2.3vh),1.5rem)] text-white mt-2 font-medium";
+  const serviceCardTitleClass = "text-[clamp(1.5rem,min(2.3vw,3.6vh),2.3rem)] font-bold text-white";
+  const serviceCardBodyClass = "text-[clamp(1rem,min(1.45vw,2vh),1.3rem)] text-white/90 mt-1";
   const stagePrizePreview = currentActiveGame
     ? currentActiveGame.stage_sequence.map((stage, index) => {
         const prize = currentActiveGame.prizes?.[stage as keyof typeof currentActiveGame.prizes];
@@ -662,7 +683,7 @@ export default function DisplayUI({
   );
 
   const renderHouseRulesPanel = () => (
-    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-6 text-left backdrop-blur-md overflow-hidden">
+    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-left backdrop-blur-md overflow-hidden">
       <h3 className={houseRulesTitleClass}>House Rules</h3>
       <ul className={houseRulesListClass}>
         {HOUSE_RULES.map((rule, i) => (
@@ -710,15 +731,15 @@ export default function DisplayUI({
       {/* Call-and-response nudges. Two columns and three rows, deliberately
           smaller than the rules and tightly spaced: the panel is
           overflow-hidden, so anything that does not fit is clipped silently. */}
-      <div className="mt-3 border-t border-[#1f7c58] pt-2">
-        <h4 className="text-[min(1.35vw,2.2vh)] font-bold uppercase tracking-[0.12em] text-white mb-1.5">
+      <div className="mt-2 border-t border-[#1f7c58] pt-1.5">
+        <h4 className="text-[min(1.35vw,1.95vh)] font-bold uppercase tracking-[0.12em] text-white mb-1.5">
           Join in
         </h4>
         <div className="grid grid-cols-2 gap-x-5 gap-y-0.5">
           {CALL_RESPONSES.map((item) => (
             <p
               key={item.number}
-              className="text-[min(1.6vw,2.4vh)] leading-tight text-white"
+              className="text-[min(1.6vw,2.1vh)] leading-tight text-white"
             >
               <span className="font-bold text-[#f3d59d]">{item.number}</span> {item.response}
             </p>
@@ -825,16 +846,16 @@ export default function DisplayUI({
 
           {isWaitingState && !isSessionCompletedState && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
-                <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6">
+                <div className={serviceColumnClass}>
                     <div className="text-center xl:text-left">
-                        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold">Anchor Bingo Night</p>
-                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Session Starts Shortly</h1>
-                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">Please have your tickets ready and watch the screen for the first call.</p>
+                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+                        <h1 className={serviceHeadlineClass}>Session Starts Shortly</h1>
+                        <p className={serviceSubheadClass}>Please have your tickets ready and watch the screen for the first call.</p>
                     </div>
 
-                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Kitchen Open Until 9pm</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
+                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
+                        <h2 className={servicePromoTitleClass}>Kitchen Open Until 9pm</h2>
+                        <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
                     </div>
                 </div>
 
@@ -846,21 +867,21 @@ export default function DisplayUI({
 
           {showBreak && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in zoom-in duration-500 items-center overflow-hidden">
-                <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6">
+                <div className={serviceColumnClass}>
                     <div className="text-center xl:text-left">
-                        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold">Anchor Bingo Night</p>
-                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Break Time</h1>
-                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">Please hold your tickets, we will resume shortly.</p>
+                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+                        <h1 className={serviceHeadlineClass}>Break Time</h1>
+                        <p className={serviceSubheadClass}>Please hold your tickets, we will resume shortly.</p>
                     </div>
 
-                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Kitchen Open Until 9pm</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Get your drinks and order food at the bar!</p>
+                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
+                        <h2 className={servicePromoTitleClass}>Kitchen Open Until 9pm</h2>
+                        <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
                     </div>
 
-                    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-center xl:text-left backdrop-blur-md">
-                        <h3 className="text-[clamp(1.5rem,2.3vw,2.3rem)] font-bold text-white">We&apos;ll be back in a moment</h3>
-                        <p className="text-[clamp(1rem,1.45vw,1.3rem)] text-white/90 mt-1">Keep your tickets handy for the next call.</p>
+                    <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl text-center xl:text-left backdrop-blur-md", serviceCardPadClass)}>
+                        <h3 className={serviceCardTitleClass}>We&apos;ll be back in a moment</h3>
+                        <p className={serviceCardBodyClass}>Keep your tickets handy for the next call.</p>
                     </div>
                 </div>
 
@@ -872,21 +893,21 @@ export default function DisplayUI({
 
                   {isSessionCompletedState && (
             <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
-                <div className="col-span-12 xl:col-span-6 flex flex-col justify-center gap-6 text-center xl:text-left">
+                <div className={cn(serviceColumnClass, "text-center xl:text-left")}>
                     <div>
-                        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold">Anchor Bingo Night</p>
-                        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1">Thanks For Coming!</h1>
-                        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90 mt-2">Please book your table for our next bingo event before you leave.</p>
+                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+                        <h1 className={serviceHeadlineClass}>Thanks For Coming!</h1>
+                        <p className={serviceSubheadClass}>Please book your table for our next bingo event before you leave.</p>
                     </div>
 
-                    <div className="w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl p-5 text-center xl:text-left backdrop-blur-sm">
-                        <h2 className={cn("text-[clamp(1.7rem,3.2vw,3.1rem)] font-black uppercase tracking-[0.08em] text-white", "animate-pulse")}>Book For Our Next Event</h2>
-                        <p className="text-[clamp(1rem,1.7vw,1.5rem)] text-white mt-2 font-medium">Don&apos;t miss out. Reserve your table at the bar tonight.</p>
+                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
+                        <h2 className={servicePromoTitleClass}>Book For Our Next Event</h2>
+                        <p className={servicePromoBodyClass}>Don&apos;t miss out. Reserve your table at the bar tonight.</p>
                     </div>
 
-                    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-center xl:text-left backdrop-blur-md">
-                        <h3 className="text-[clamp(1.5rem,2.3vw,2.3rem)] font-bold text-white">Bring friends for the next one</h3>
-                        <p className="text-[clamp(1rem,1.45vw,1.3rem)] text-white/90 mt-1">Ask the team about dates and get booked in early.</p>
+                    <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl text-center xl:text-left backdrop-blur-md", serviceCardPadClass)}>
+                        <h3 className={serviceCardTitleClass}>Bring friends for the next one</h3>
+                        <p className={serviceCardBodyClass}>Ask the team about dates and get booked in early.</p>
                     </div>
                 </div>
 
@@ -931,11 +952,18 @@ export default function DisplayUI({
             <div className="flex flex-col items-center justify-center h-full w-full">
               {currentNumberDelayed ? (
                 <div className="relative animate-in zoom-in duration-300">
-                   {/* Massive Main Number */}
+                   {/* Massive Main Number.
+                      The 19rem subtracted below is the real vertical chrome:
+                      h-24 top bar (6rem) + h-40 footer (10rem) + the main area's
+                      p-6 top and bottom (3rem) = 19rem. It used to say 18rem,
+                      which is exactly 1rem short, so at 1280x720 the calc asked
+                      for 432px against 416px available and flat-topped the ball
+                      by 8px top and bottom. Masked at 1080p only because the
+                      68vh term binds first there. */}
                   <div
                     className="relative bg-[#005131] border-4 border-white rounded-full flex items-center justify-center overflow-hidden"
                     style={{
-                      ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 18rem))',
+                      ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 19rem))',
                       width: 'var(--display-ball-size)',
                       height: 'var(--display-ball-size)',
                     } as React.CSSProperties}
@@ -1010,8 +1038,10 @@ export default function DisplayUI({
       </div>
 
       {/* Footer Info Bar. h-40 rather than h-32 to clear the enlarged recent
-          calls strip, paired with the main ball's calc(100vh - 18rem) and the
-          QR badge at bottom-44. Change all four together or 1080p breaks. */}
+          calls strip. Its 10rem is one of the three terms in the main ball's
+          calc(100vh - 19rem) above (6rem top bar + 10rem footer + 3rem main
+          padding), and it also sets where the QR badge sits (bottom-44).
+          Change this height and you must re-do that subtraction. */}
       <div className="h-40 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10">
             <div className="flex flex-col justify-center border-r border-white/10 pr-8">
                 {(showActiveGame || showPausedForValidation) && (
