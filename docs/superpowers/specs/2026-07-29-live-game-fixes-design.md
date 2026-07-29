@@ -488,7 +488,26 @@ Accessibility pass: keyboard through the undo confirm, validation, winner, Post 
 
 ---
 
-## 11. Accepted risks
+## 11. Release record (2026-07-30, early hours)
+
+Shipped. Verification at each step:
+
+| Step | Result |
+|------|--------|
+| Local pipeline | lint clean, `tsc --noEmit` clean, 59 tests passing (was 35), production build succeeds |
+| Adversarial review | two independent passes, 26 findings. Both blockers and all four high findings fixed before release, in commits `69a87d7` and `8e59560` |
+| Migration `20260729120000` atomic host mutations | applied before deploy, 4 functions present, all `security definer` |
+| Migration `20260729120200` realtime publication | applied before deploy, 3 tables published |
+| Migration `20260729120300` snowball audit and settlement guard | applied before deploy, `game_id` column, partial unique index and admin INSERT policy all present |
+| Merge and push | `0b1b5bf` on `main`, pushed to `github.com/peterjpitcher/BingoBlast` |
+| Migration `20260729120100` public reveal delay | applied after push. `call_delay_seconds` is 3 on both tables, mirror consistent |
+| Data integrity | 87 winner rows and 60 game-state rows unchanged, 0 mirror version mismatches, 0 mirror delay mismatches |
+
+**Deployment not verified.** The `origin` remote (`peterpitcher/BingoBlast`) does not exist and was not used; the working remote is `alt` (`peterjpitcher/BingoBlast`), whose `main` matched the pre-work commit, so it is the live repository. `NEXT_PUBLIC_SITE_URL` is not set in `.env.local` and the documented example origin does not resolve, so the Vercel deployment could not be confirmed from here. Migration `20260729120100` was applied without that confirmation on the basis that no session was running, so the only intermediate state (the previously deployed code reading 3 as its host gap) could not affect anyone. **Confirm the deployment succeeded before the next live session.**
+
+The `origin` remote should be corrected or removed, since a push to it fails.
+
+## 12. Accepted risks
 
 | # | Risk | Mitigation |
 |---|------|-----------|

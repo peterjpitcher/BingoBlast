@@ -43,3 +43,6 @@ next-env.d.ts
 !.env.local.example
 # Per-machine Claude Code session cache (settings, snapshot, manifest)
 .claude/
+
+# Supabase CLI per-machine cache (created by db push / link)
+supabase/.temp/
