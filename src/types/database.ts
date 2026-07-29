@@ -156,7 +156,7 @@ export interface Database {
           numbers_called_count: number
           current_stage_index: number
           status: GameStatus
-          call_delay_seconds: number
+          call_delay_seconds: number // Public reveal delay in seconds, not a host call gap (that is HOST_MIN_CALL_GAP_MS)
           on_break: boolean
           paused_for_validation: boolean
           display_win_type: string | null // 'line', 'two_lines', 'full_house', 'snowball'
@@ -237,7 +237,7 @@ export interface Database {
           numbers_called_count: number
           current_stage_index: number
           status: GameStatus
-          call_delay_seconds: number
+          call_delay_seconds: number // Public reveal delay in seconds, not a host call gap
           on_break: boolean
           paused_for_validation: boolean
           display_win_type: string | null
@@ -450,6 +450,35 @@ export interface Database {
     }
     Functions: {
       assert_is_admin: { Args: Record<string, never>; Returns: undefined }
+      // Host hot-path mutations. Defined in
+      // supabase/migrations/20260729120000_atomic_host_mutations.sql. All four are
+      // security definer and read auth.uid(), so they must be called with the
+      // cookie-based client, never the service-role client.
+      assert_is_host: { Args: Record<string, never>; Returns: undefined }
+      call_next_number: {
+        Args: {
+          p_game_id: string
+          /** Host anti-double-tap window. Pass HOST_MIN_CALL_GAP_MS from src/lib/call-timing.ts. */
+          p_min_gap_ms?: number
+        }
+        Returns: Database['public']['Tables']['game_states']['Row']
+      }
+      void_last_number: {
+        Args: { p_game_id: string }
+        Returns: Database['public']['Tables']['game_states']['Row']
+      }
+      record_winner_atomic: {
+        Args: {
+          p_session_id: string
+          p_game_id: string
+          p_stage: WinStage
+          p_prize_description?: string | null
+          p_prize_given?: boolean
+          p_force_snowball_jackpot?: boolean
+          p_snowball_eligible?: boolean
+        }
+        Returns: Database['public']['Tables']['game_states']['Row']
+      }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }
       reset_session_safe: { Args: { p_session_id: string }; Returns: undefined }
