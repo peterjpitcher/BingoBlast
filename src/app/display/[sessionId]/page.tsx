@@ -3,6 +3,7 @@ import { createClient } from '@/utils/supabase/server';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import DisplayUI from './display-ui';
+import type { InitialLoadStatus } from './display-ui';
 import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
@@ -60,6 +61,10 @@ export default async function DisplayPage({ params }: PageProps) {
   let activeGame: Database['public']['Tables']['games']['Row'] | null = null;
   let initialGameState: Database['public']['Tables']['game_states_public']['Row'] | null = null;
   let prizeText: string = ''; // To pass to display
+  // A failed read is reported to the client as its own load status. It must
+  // never be presented to guests as "the host has not started yet": the screen
+  // shows a recoverable panel and recovers on the next successful poll.
+  let initialLoadStatus: InitialLoadStatus = 'ready';
 
   if (session.active_game_id) {
     // Fetch the active game details
@@ -71,7 +76,7 @@ export default async function DisplayPage({ params }: PageProps) {
 
     if (gameError || !game) {
       logError('display', gameError ?? new Error('No active game found for session'));
-      // Continue to render, display will show "waiting" state
+      initialLoadStatus = 'failed';
     } else {
       activeGame = game;
       // Fetch the initial game state for the active game
@@ -83,6 +88,7 @@ export default async function DisplayPage({ params }: PageProps) {
 
       if (gameStateError || !gameState) {
         logError('display', gameStateError ?? new Error('No game state found for active game'));
+        initialLoadStatus = 'failed';
       } else {
         initialGameState = gameState;
         // Determine initial prize text
@@ -94,16 +100,16 @@ export default async function DisplayPage({ params }: PageProps) {
     }
   }
 
-  // A basic check: If there's no active game and session is not running, show waiting
-  const isWaitingState = !session.active_game_id && session.status !== 'running';
-
+  // The waiting screen is no longer decided here. DisplayUI derives it as
+  // "session not completed and no renderable game state", which covers both the
+  // pre-game period and the gap between games, so the TV is never left blank.
   return (
     <DisplayUI
       session={session}
       activeGame={activeGame}
       initialGameState={initialGameState}
       initialPrizeText={prizeText}
-      isWaitingState={isWaitingState}
+      initialLoadStatus={initialLoadStatus}
       playerJoinUrl={playerJoinUrl}
     />
   );

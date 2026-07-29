@@ -9,8 +9,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
 import { useWakeLock } from '@/hooks/wake-lock';
-import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining } from '@/lib/snowball';
+import {
+  formatPounds,
+  getSnowballCallsLabel,
+  getSnowballCallsRemaining,
+  getSnowballWindowStatus,
+} from '@/lib/snowball';
 import { isFreshGameState } from '@/lib/game-state-version';
+import { planReveal } from '@/lib/reveal-queue';
+import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { ConnectionBanner } from '@/components/connection-banner';
 import type { RealtimeStatus } from '@/lib/connection-health';
@@ -22,12 +29,62 @@ type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states_public']['Row'];
 type SnowballPot = Database['public']['Tables']['snowball_pots']['Row'];
 
+/**
+ * Outcome of the server-side initial read in page.tsx. 'failed' means a session,
+ * game or game-state query errored, which must never be presented to guests as
+ * "the host has not started yet".
+ */
+export type InitialLoadStatus = 'ready' | 'failed';
+
 interface PlayerUIProps {
   session: Session;
   activeGame: Game | null;
   initialGameState: GameState | null;
   initialPrizeText: string;
+  initialLoadStatus: InitialLoadStatus;
 }
+
+/**
+ * What the screen is showing right now. Kept deliberately identical to the pub
+ * TV at /display so the phone and the big screen can never disagree in front of
+ * guests.
+ *
+ * This replaces the old "have we loaded yet" boolean, which was initialised to
+ * `initialGameState != null` and could therefore never turn true before the host
+ * started a game: there is no `game_states_public` row yet, so the follower sat
+ * on "Connecting to game..." for the whole pre-game period.
+ */
+type LoadPhase = 'loading' | 'waiting' | 'active' | 'completed' | 'failed';
+
+/**
+ * The only part of the phase that is real client state. 'waiting', 'active' and
+ * 'completed' are all functions of the session status and of whether we hold a
+ * renderable game state, so storing them separately would duplicate state and
+ * let the screen disagree with itself.
+ */
+type ConnectionPhase = 'loading' | 'ready' | 'failed';
+
+/**
+ * Result of `refreshActiveGame`. It used to return void and silently null the
+ * state, so an RLS, network or schema failure looked identical to "no game".
+ * 'superseded' means a newer refresh has already taken over, so the caller must
+ * leave the phase alone rather than judge the connection on a discarded read.
+ */
+type RefreshResult =
+  | { status: 'ok'; hasGame: boolean }
+  | { status: 'failed' }
+  | { status: 'superseded' };
+
+/**
+ * A fresh mount, or a switch to another game, must not trickle an existing
+ * backlog out one ball at a time: forty balls at PUBLIC_MIN_DWELL_MS each would
+ * take the best part of a minute. Adopt every ball except the newest, then let
+ * planReveal gate that one on its own call time plus the public delay.
+ */
+const adoptRevealCount = (serverCount: number) => Math.max(0, serverCount - 1);
+
+const readCalledNumbers = (state: GameState | null): number[] =>
+  state && Array.isArray(state.called_numbers) ? state.called_numbers : [];
 
 // Explicit narrow column lists keep public surfaces from leaking unintended
 // fields and document exactly what the UI consumes from each table.
@@ -44,8 +101,11 @@ export default function PlayerUI({
   activeGame: initialActiveGame,
   initialGameState: initialActiveGameState,
   initialPrizeText,
+  initialLoadStatus,
 }: PlayerUIProps) {
   const supabase = useRef(createClient());
+
+  const initialRevealCount = adoptRevealCount(readCalledNumbers(initialActiveGameState).length);
 
   const [currentSession, setCurrentSession] = useState<Session>(session);
   const [currentActiveGame, setCurrentActiveGame] = useState<Game | null>(initialActiveGame);
@@ -59,15 +119,22 @@ export default function PlayerUI({
     return currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || '';
   }, [currentActiveGame, currentGameState, initialPrizeText]);
   const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
-
-  const [currentNumberDelayed, setCurrentNumberDelayed] = useState<number | null>(null);
-  const [delayedNumbers, setDelayedNumbers] = useState<number[]>([]);
   const [showFullHistory, setShowFullHistory] = useState(false);
-  // Tracks whether we have applied any usable game state (initial render or
-  // first poll/realtime payload). Used to gate the "Connecting to game…" skeleton.
-  const [hasLoaded, setHasLoaded] = useState<boolean>(initialActiveGameState != null);
+  const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>(
+    initialLoadStatus === 'failed' ? 'failed' : initialActiveGameState ? 'ready' : 'loading'
+  );
+  // How many balls this client currently shows. planReveal owns the value; the
+  // displayed numbers are sliced from it so there is a single source of truth.
+  const [revealCount, setRevealCount] = useState<number>(initialRevealCount);
 
-  const numberCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const revealedCountRef = useRef<number>(initialRevealCount);
+  const lastRevealAtRef = useRef<number | null>(null);
+  const revealGameIdRef = useRef<string | null>(
+    initialActiveGameState ? initialActiveGameState.game_id : null
+  );
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Lets the visibilitychange handler force the game-state channel to rebuild.
+  const reconnectGameStateRef = useRef<(() => void) | null>(null);
 
   // Connection health: drives the reconnecting banner + auto-refresh.
   const health = useConnectionHealth();
@@ -77,7 +144,7 @@ export default function PlayerUI({
   // results from clobbering newer state when responses arrive out-of-order.
   const pollSeqRef = useRef(0);
   const pollInFlightRef = useRef(false);
-  // refreshActiveGame request-order guard: if active_game_id flips A→B and
+  // refreshActiveGame request-order guard: if active_game_id flips A to B and
   // A's fetch resolves last, the wrong game would win.
   const refreshSeqRef = useRef(0);
 
@@ -90,70 +157,121 @@ export default function PlayerUI({
 
   const { isLocked: isWakeLockActive } = useWakeLock();
 
+  const currentActiveGameId = currentActiveGame ? currentActiveGame.id : null;
 
   // --- Data Fetching & Subscription Logic (Shared with Display) ---
 
-  const refreshActiveGame = useCallback(async (newActiveGameId: string | null) => {
-    if (newActiveGameId === currentActiveGame?.id) return;
-    const seq = ++refreshSeqRef.current;
+  const refreshActiveGame = useCallback(
+    async (newActiveGameId: string | null): Promise<RefreshResult> => {
+      if (newActiveGameId === currentActiveGameId) {
+        return { status: 'ok', hasGame: newActiveGameId !== null };
+      }
+      const seq = ++refreshSeqRef.current;
 
-    if (newActiveGameId) {
-      const { data: newGame } = await supabase.current
+      if (!newActiveGameId) {
+        setCurrentActiveGame(null);
+        setCurrentGameState(null);
+        return { status: 'ok', hasGame: false };
+      }
+
+      const { data: newGame, error: gameError } = await supabase.current
         .from('games')
         .select(GAME_SELECT)
         .eq('id', newActiveGameId)
         .single<Database['public']['Tables']['games']['Row']>();
-      if (seq !== refreshSeqRef.current) return;
-
-      if (newGame) {
-        setCurrentActiveGame(newGame);
-        const { data: newGameState } = await supabase.current
-          .from('game_states_public')
-          .select(GAME_STATE_PUBLIC_SELECT)
-          .eq('game_id', newGame.id)
-          .single<Database['public']['Tables']['game_states_public']['Row']>();
-        if (seq !== refreshSeqRef.current) return;
-
-        if (newGameState) {
-          setCurrentGameState(newGameState);
-          setHasLoaded(true);
-        } else {
-          setCurrentGameState(null);
-        }
-      } else {
-        setCurrentActiveGame(null);
-        setCurrentGameState(null);
+      if (seq !== refreshSeqRef.current) return { status: 'superseded' };
+      if (gameError || !newGame) {
+        logError('player', gameError ?? new Error('Active game lookup returned no row'));
+        return { status: 'failed' };
       }
-    } else {
-      setCurrentActiveGame(null);
-      setCurrentGameState(null);
-    }
-  }, [currentActiveGame?.id]);
 
-  // Session-level realtime: track changes to active_game_id / status.
+      setCurrentActiveGame(newGame);
+
+      const { data: newGameState, error: stateError } = await supabase.current
+        .from('game_states_public')
+        .select(GAME_STATE_PUBLIC_SELECT)
+        .eq('game_id', newGame.id)
+        .single<Database['public']['Tables']['game_states_public']['Row']>();
+      if (seq !== refreshSeqRef.current) return { status: 'superseded' };
+      if (stateError || !newGameState) {
+        logError('player', stateError ?? new Error('Active game state lookup returned no row'));
+        setCurrentGameState(null);
+        return { status: 'failed' };
+      }
+
+      setCurrentGameState(newGameState);
+      return { status: 'ok', hasGame: true };
+    },
+    [currentActiveGameId]
+  );
+
+  // Session-level realtime: track changes to active_game_id / status, with the
+  // same exponential-backoff reconnect as the game-state channel.
   useEffect(() => {
     const supabaseClient = supabase.current;
 
-    const sessionChannel = supabaseClient
-      .channel(`session_updates_player:${session.id}`)
-      .on<Session>(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
-        async (payload) => {
-          setCurrentSession(payload.new);
-          await refreshActiveGame(payload.new.active_game_id);
-        }
-      )
-      .subscribe();
+    let isMounted = true;
+    let activeChannel: ReturnType<typeof supabaseClient.channel> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attemptCount = 0;
+
+    const connect = async () => {
+      if (!isMounted) return;
+      if (activeChannel) {
+        await supabaseClient.removeChannel(activeChannel);
+        activeChannel = null;
+      }
+      if (!isMounted) return;
+
+      const channel = supabaseClient
+        .channel(`session_updates_player:${session.id}:${Date.now()}`)
+        .on<Session>(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
+          async (payload) => {
+            if (!isMounted) return;
+            setCurrentSession(payload.new);
+            const result = await refreshActiveGame(payload.new.active_game_id);
+            if (!isMounted) return;
+            if (result.status === 'failed') setConnectionPhase('failed');
+            else if (result.status === 'ok') setConnectionPhase('ready');
+          }
+        )
+        .subscribe((status) => {
+          if (!isMounted) return;
+          // Deliberately NOT reported into useConnectionHealth. The 3 second
+          // poll already picks up game switches and session status, so this
+          // channel is non-critical and a wobble here must never put a
+          // "Reconnecting" banner in front of a guest. Only the game-state
+          // channel reports into connection health.
+          if (status === 'SUBSCRIBED') {
+            attemptCount = 0;
+            return;
+          }
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            // Exponential backoff: 1s, 2s, 4s and so on, capped at 30s.
+            const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
+            attemptCount += 1;
+            reconnectTimer = setTimeout(() => { void connect(); }, delay);
+          }
+        });
+
+      activeChannel = channel;
+    };
+
+    void connect();
 
     return () => {
-      supabaseClient.removeChannel(sessionChannel);
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (activeChannel) void supabaseClient.removeChannel(activeChannel);
     };
   }, [session.id, refreshActiveGame]);
 
   // Game state realtime with exponential-backoff auto-reconnect.
   // Each reconnect tears down the previous channel before creating the next
-  // (ordering matters — Supabase rejects subscribe() against a torn channel).
+  // (ordering matters, because Supabase rejects subscribe() on a torn channel).
   useEffect(() => {
     const supabaseClient = supabase.current;
     const activeGameId = currentActiveGame?.id;
@@ -188,11 +306,14 @@ export default function PlayerUI({
             // currentPrizeText is derived from currentGameState via useMemo,
             // so it inherits this gating automatically.
             setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
-            setHasLoaded(true);
+            setConnectionPhase('ready');
           }
         )
         .subscribe((status) => {
           if (!isMounted) return;
+          // This is the ONLY channel that reports into connection health: it is
+          // the one carrying live calls, so it is the only one whose failure
+          // guests need to know about.
           markRealtimeStatus(status as RealtimeStatus);
           if (status === 'SUBSCRIBED') {
             attemptCount = 0;
@@ -200,7 +321,7 @@ export default function PlayerUI({
           }
           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
             if (reconnectTimer) clearTimeout(reconnectTimer);
-            // Exponential backoff: 1s, 2s, 4s … capped at 30s.
+            // Exponential backoff: 1s, 2s, 4s and so on, capped at 30s.
             const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
             attemptCount += 1;
             reconnectTimer = setTimeout(() => { void connect(); }, delay);
@@ -210,14 +331,28 @@ export default function PlayerUI({
       activeChannel = channel;
     };
 
+    reconnectGameStateRef.current = () => { void connect(); };
     void connect();
 
     return () => {
       isMounted = false;
+      reconnectGameStateRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (activeChannel) void supabaseClient.removeChannel(activeChannel);
     };
   }, [currentActiveGame?.id, markRealtimeStatus]);
+
+  // Force-reconnect the game-state channel when the phone comes back into view.
+  // Mobile browsers kill background WebSockets silently, and the poll below
+  // already re-fires on the same event.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      reconnectGameStateRef.current?.();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   useEffect(() => {
     const supabaseClient = supabase.current;
@@ -232,6 +367,10 @@ export default function PlayerUI({
           .single();
         if (data) setCurrentSnowballPot(data);
 
+        // Deliberately non-critical: this channel does not report into
+        // useConnectionHealth. The pot is re-read whenever the active game
+        // changes and the jackpot figure is not time critical, so a pot channel
+        // failure must never put a "Reconnecting" banner in front of a guest.
         potChannel = supabaseClient
           .channel(`pot_updates_player:${currentActiveGame.snowball_pot_id}`)
           .on<SnowballPot>(
@@ -254,7 +393,7 @@ export default function PlayerUI({
     };
   }, [currentActiveGame]);
 
-  // Polling fallback — re-fetches session + game state every 3 seconds with
+  // Polling fallback: re-fetches session + game state every 3 seconds with
   // request-order guards so out-of-order responses cannot clobber newer state.
   useEffect(() => {
     let cancelled = false;
@@ -277,6 +416,7 @@ export default function PlayerUI({
         if (cancelled || seq !== pollSeqRef.current) return;
         if (sessionError || !freshSession) {
           logError('player', sessionError ?? new Error('Polling sessions returned no row'));
+          setConnectionPhase('failed');
           markPollFailure();
           return;
         }
@@ -284,13 +424,21 @@ export default function PlayerUI({
         setCurrentSession(freshSession);
 
         const activeGame = currentActiveGameRef.current;
-        if (freshSession.active_game_id !== activeGame?.id) {
-          await refreshActiveGame(freshSession.active_game_id);
+        const knownGameId = activeGame ? activeGame.id : null;
+        if (freshSession.active_game_id !== knownGameId) {
+          const result = await refreshActiveGame(freshSession.active_game_id);
+          if (cancelled) return;
+          if (result.status === 'failed') {
+            setConnectionPhase('failed');
+            markPollFailure();
+            return;
+          }
+          if (result.status === 'ok') setConnectionPhase('ready');
           markPollSuccess();
           return;
         }
 
-        if (activeGame?.id) {
+        if (activeGame) {
           const { data: freshState, error: stateError } = await supabase.current
             .from('game_states_public')
             .select(GAME_STATE_PUBLIC_SELECT)
@@ -299,6 +447,7 @@ export default function PlayerUI({
           if (cancelled || seq !== pollSeqRef.current) return;
           if (stateError || !freshState) {
             logError('player', stateError ?? new Error('Polling game_states_public returned no row'));
+            setConnectionPhase('failed');
             markPollFailure();
             return;
           }
@@ -308,13 +457,14 @@ export default function PlayerUI({
           // currentPrizeText is derived from currentGameState via useMemo,
           // so it inherits this gating automatically.
           setCurrentGameState((current) => (isFreshGameState(current, freshState) ? freshState : current));
-          setHasLoaded(true);
         }
 
+        setConnectionPhase('ready');
         markPollSuccess();
       } catch (err) {
         if (!cancelled) {
           logError('player', err);
+          setConnectionPhase('failed');
           markPollFailure();
         }
       } finally {
@@ -339,76 +489,120 @@ export default function PlayerUI({
     };
   }, [session.id, currentActiveGame?.id, refreshActiveGame, markPollSuccess, markPollFailure]);
 
-  // --- Delay Logic (Same as Display) ---
+  const serverNumbers = useMemo<number[]>(
+    () => readCalledNumbers(currentGameState),
+    [currentGameState]
+  );
+
+  // Reveal pacing, identical to the pub TV. planReveal is the single decision
+  // point: it never skips a ball, never shows the newest one early, and snaps to
+  // the server during a claim check or at game end. One timer at a time,
+  // re-planned on every snapshot, so the state is fully derivable after a poll
+  // or a reconnect.
   useEffect(() => {
-    if (numberCallTimeoutRef.current) {
-      clearTimeout(numberCallTimeoutRef.current);
-    }
-
-    if (currentActiveGame && currentGameState) {
-      const serverCalledNumbers = currentGameState.called_numbers as number[];
-
-      // Immediate sync
-      if (currentGameState.paused_for_validation || currentGameState.status === 'completed') {
-        setDelayedNumbers(serverCalledNumbers);
-        const newLastNumber = serverCalledNumbers.length > 0 ? serverCalledNumbers[serverCalledNumbers.length - 1] : null;
-        setCurrentNumberDelayed(newLastNumber);
-        return;
-      }
-
-      if (serverCalledNumbers.length < delayedNumbers.length) {
-        setDelayedNumbers(serverCalledNumbers);
-        const newLastNumber = serverCalledNumbers.length > 0 ? serverCalledNumbers[serverCalledNumbers.length - 1] : null;
-        setCurrentNumberDelayed(newLastNumber);
-        return;
-      }
-
-      if (currentGameState.numbers_called_count > 0) {
-        const lastCalledNumber = serverCalledNumbers[currentGameState.numbers_called_count - 1];
-        const lastCallTimestamp = currentGameState.last_call_at ? new Date(currentGameState.last_call_at).getTime() : 0;
-        const callDelay = currentGameState.call_delay_seconds * 1000;
-
-        const now = Date.now();
-        const timeSinceLastCall = now - lastCallTimestamp;
-
-        if (currentNumberDelayed === lastCalledNumber) {
-          if (delayedNumbers.length !== serverCalledNumbers.length) {
-            if (!delayedNumbers.includes(lastCalledNumber)) {
-              setDelayedNumbers(prev => [...prev, lastCalledNumber]);
-            }
-          }
-          return;
-        }
-
-        if (timeSinceLastCall >= callDelay) {
-          setCurrentNumberDelayed(lastCalledNumber);
-          setDelayedNumbers(serverCalledNumbers);
-        } else {
-          numberCallTimeoutRef.current = setTimeout(() => {
-            setCurrentNumberDelayed(lastCalledNumber);
-            setDelayedNumbers(serverCalledNumbers);
-          }, callDelay - timeSinceLastCall);
-        }
-      } else {
-        setCurrentNumberDelayed(null);
-        setDelayedNumbers([]);
-      }
-    } else {
-      setCurrentNumberDelayed(null);
-      setDelayedNumbers([]);
-    }
-
-    return () => {
-      if (numberCallTimeoutRef.current) {
-        clearTimeout(numberCallTimeoutRef.current);
+    const clearRevealTimer = () => {
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
       }
     };
-  }, [currentActiveGame, currentGameState, currentNumberDelayed, delayedNumbers]);
+    clearRevealTimer();
 
+    if (!currentActiveGame || !currentGameState) {
+      revealGameIdRef.current = null;
+      revealedCountRef.current = 0;
+      lastRevealAtRef.current = null;
+      setRevealCount(0);
+      return;
+    }
+
+    if (revealGameIdRef.current !== currentGameState.game_id) {
+      const adopted = adoptRevealCount(serverNumbers.length);
+      revealGameIdRef.current = currentGameState.game_id;
+      revealedCountRef.current = adopted;
+      lastRevealAtRef.current = null;
+      setRevealCount(adopted);
+    }
+
+    const serverCount = serverNumbers.length;
+    const publicDelayMs =
+      (Number.isFinite(currentGameState.call_delay_seconds)
+        ? currentGameState.call_delay_seconds
+        : DEFAULT_PUBLIC_CALL_DELAY_SECONDS) * 1000;
+    const parsedLastCallAt = currentGameState.last_call_at
+      ? new Date(currentGameState.last_call_at).getTime()
+      : null;
+    const lastCallAtMs =
+      parsedLastCallAt !== null && Number.isFinite(parsedLastCallAt) ? parsedLastCallAt : null;
+    const snapImmediately =
+      currentGameState.paused_for_validation || currentGameState.status === 'completed';
+
+    const step = () => {
+      const plan = planReveal({
+        serverCount,
+        revealedCount: revealedCountRef.current,
+        lastCallAtMs,
+        publicDelayMs,
+        minDwellMs: PUBLIC_MIN_DWELL_MS,
+        lastRevealAtMs: lastRevealAtRef.current,
+        snapImmediately,
+        nowMs: Date.now(),
+      });
+
+      if (plan.revealCount !== revealedCountRef.current) {
+        revealedCountRef.current = plan.revealCount;
+        lastRevealAtRef.current = Date.now();
+        setRevealCount(plan.revealCount);
+      }
+
+      revealTimerRef.current =
+        plan.nextTickInMs === null ? null : setTimeout(step, plan.nextTickInMs);
+    };
+
+    step();
+
+    return clearRevealTimer;
+  }, [currentActiveGame, currentGameState, serverNumbers]);
+
+  const delayedNumbers = useMemo<number[]>(
+    () => serverNumbers.slice(0, revealCount),
+    [serverNumbers, revealCount]
+  );
+  // The revealed count is what every public counter must use. Reading
+  // numbers_called_count would tick a counter down up to 3 seconds before the
+  // ball itself appears, spoiling the call and disagreeing with the ball strip.
+  const revealedCallCount = delayedNumbers.length;
+  const currentNumberDelayed = revealedCallCount > 0 ? delayedNumbers[revealedCallCount - 1] : null;
 
   // --- UI States ---
   const isSessionCompleted = currentSession.status === 'completed';
-  const isWaiting = !isSessionCompleted && (!currentActiveGame || (currentGameState?.status !== 'in_progress' && currentGameState?.status !== 'completed'));
+  /**
+   * A game counts as active once this surface has something to render for it.
+   * The phone has its own "Game Over" card, so a completed game is renderable
+   * here even though on the pub TV it falls through to the waiting screen.
+   */
+  const hasRenderableGame =
+    currentActiveGame !== null &&
+    currentGameState !== null &&
+    (currentGameState.status === 'in_progress' || currentGameState.status === 'completed');
+
+  /**
+   * Phase precedence, in order and for a reason:
+   *  - a completed session is terminal, so the thank-you card always wins;
+   *  - a renderable game beats 'failed', because a single query blip must never
+   *    rip a live game off the screen. The ConnectionBanner covers that case;
+   *  - 'failed' beats 'waiting' and 'loading', so an outage is never dressed up
+   *    as "the host has not started yet". It recovers on the next good read.
+   */
+  const loadPhase = useMemo<LoadPhase>(() => {
+    if (isSessionCompleted) return 'completed';
+    if (hasRenderableGame) return 'active';
+    if (connectionPhase === 'failed') return 'failed';
+    if (connectionPhase === 'loading') return 'loading';
+    return 'waiting';
+  }, [isSessionCompleted, hasRenderableGame, connectionPhase]);
+
+  const isWaiting = !isSessionCompleted && !hasRenderableGame;
   const isOnBreak = currentGameState?.on_break;
   const isCompleted = currentGameState?.status === 'completed';
   const isValidating = currentGameState?.paused_for_validation;
@@ -417,18 +611,43 @@ export default function PlayerUI({
   const backgroundColor = currentActiveGame?.background_colour || '#005131';
   const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
-    ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    ? getSnowballCallsLabel(revealedCallCount, currentSnowballPot.current_max_calls)
     : null;
   const snowballCallsRemaining = currentSnowballPot && currentGameState
-    ? getSnowballCallsRemaining(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
+    ? getSnowballCallsRemaining(revealedCallCount, currentSnowballPot.current_max_calls)
+    : null;
+  const snowballWindowStatus = currentSnowballPot && currentGameState
+    ? getSnowballWindowStatus(revealedCallCount, currentSnowballPot.current_max_calls)
     : null;
 
-  // Initial load skeleton: show until first poll/realtime payload completes.
-  if (!hasLoaded) {
+  // First server answer not in yet. Deliberately brief: unlike the old boolean
+  // gate this can always be left, because the poll above resolves the phase to
+  // waiting, active, completed or failed on its first response.
+  if (loadPhase === 'loading') {
     return (
       <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-current mr-3" />
         Connecting to game…
+      </div>
+    );
+  }
+
+  // Recoverable outage. Polling continues, and the next good read moves the
+  // screen straight on to the waiting or active phase with no reload.
+  if (loadPhase === 'failed') {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center p-6 text-white"
+        style={{ backgroundColor: '#005131' }}
+      >
+        <Card className="w-full max-w-sm bg-[#003f27]/80 border-[#1f7c58]">
+          <CardContent className="p-6 text-center" role="status" aria-live="polite">
+            <div className="text-4xl mb-2">📡</div>
+            <h2 className="text-xl font-bold text-white">Reconnecting to the game</h2>
+            <p className="text-white mt-1">Hold on to your tickets, this screen will catch up in a moment.</p>
+            <span className="mt-4 inline-block h-2 w-2 animate-pulse rounded-full bg-white" />
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -450,7 +669,7 @@ export default function PlayerUI({
         {currentGameState && (
           <div className="bg-[#005131] px-3 py-1 rounded border border-[#1f7c58]">
             <span className="text-xs text-white uppercase block">Calls</span>
-            <span className="font-mono font-bold text-xl leading-none">{delayedNumbers.length}</span>
+            <span className="font-mono font-bold text-xl leading-none">{revealedCallCount}</span>
           </div>
         )}
       </div>
@@ -511,6 +730,14 @@ export default function PlayerUI({
               <div className="text-4xl mb-2">🎫</div>
               <h2 className="text-2xl font-bold text-white">Checking Claim</h2>
               <p className="text-white">Please wait...</p>
+              {/* The claim is validated against the last called ball, and the
+                  reveal queue snaps to the server state while paused, so this is
+                  always the true last call. */}
+              {currentNumberDelayed !== null && (
+                <p className="mt-2 text-lg font-bold text-white">
+                  Claim must include: {currentNumberDelayed}
+                </p>
+              )}
             </CardContent>
           </Card>
         )}
@@ -552,23 +779,34 @@ export default function PlayerUI({
             </div>
 
             {isSnowballGame && (
-              <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 flex justify-between items-center shadow-lg shadow-black/25 gap-4">
-                {currentSnowballPot && currentGameState ? (
+              <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 shadow-lg shadow-black/25">
+                {currentSnowballPot && currentGameState && snowballWindowStatus ? (
                   <>
-                    <div>
-                      <span className="text-white text-xs font-bold uppercase block">Snowball Jackpot</span>
-                      <span className="text-2xl font-bold text-white">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
+                    <div className="flex justify-between items-center gap-4">
+                      <div>
+                        <span className="text-white text-xs font-bold uppercase block">Snowball Jackpot</span>
+                        <span className="text-2xl font-bold text-white">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        {snowballWindowStatus === 'open' ? (
+                          <>
+                            <span className="block text-6xl font-black leading-none text-white tabular-nums">
+                              {snowballCallsRemaining}
+                            </span>
+                            <span className="block text-[0.7rem] font-bold uppercase tracking-wider text-white/90 mt-1">
+                              Calls Left
+                            </span>
+                          </>
+                        ) : (
+                          <span className="block text-xl font-black uppercase text-white">
+                            {snowballCallsLabel}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <span className="text-white text-xs block">Status</span>
-                      <span className="text-xl font-bold text-white">
-                        {snowballCallsLabel}
-                      </span>
-                      <span className="text-xs text-white/90 block">
-                        {currentGameState.numbers_called_count}/{currentSnowballPot.current_max_calls} calls
-                        {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
-                      </span>
-                    </div>
+                    <p className="text-xs text-white/90 mt-2">
+                      {revealedCallCount}/{currentSnowballPot.current_max_calls} calls made for the jackpot
+                    </p>
                   </>
                 ) : (
                   <p className="text-white font-semibold">
@@ -595,7 +833,10 @@ export default function PlayerUI({
               )}
             </div>
 
-            {/* Recent History */}
+            {/* Recent History. Five balls, 40 percent larger than before, and
+                allowed to slide sideways rather than shrink: BingoBall carries
+                shrink-0 so the balls stay circular at 320px and at 200 percent
+                text zoom. */}
             <div>
               <div className="flex justify-between items-end mb-2">
                 <span className="text-sm text-white font-medium">Recent Calls</span>
@@ -614,7 +855,7 @@ export default function PlayerUI({
                     key={i}
                     number={num}
                     variant={i === 0 ? "active" : "called"}
-                    className={i === 0 ? "w-14 h-14 text-xl bg-[#005131] text-white border-white/70" : "w-12 h-12 text-lg opacity-80 bg-[#005131] text-white border-white/50"}
+                    className={i === 0 ? "w-[4.9rem] h-[4.9rem] text-[1.75rem] bg-[#005131] text-white border-white/70" : "w-[4.2rem] h-[4.2rem] text-[1.575rem] opacity-80 bg-[#005131] text-white border-white/50"}
                   />
                 ))}
                 {delayedNumbers.length === 0 && <p className="text-white italic text-sm">No numbers called yet</p>}
