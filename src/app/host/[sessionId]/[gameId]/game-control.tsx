@@ -4,7 +4,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost } from '@/app/host/actions';
+import type { ActionFailureCode, ActionResult } from '@/types/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
@@ -18,6 +19,7 @@ import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining, isSnowb
 import { isFreshGameState } from '@/lib/game-state-version';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
 import { logError } from '@/lib/log-error';
+import { getNumberNickname } from '@/lib/number-nicknames';
 import { PreGameBriefing } from '@/components/host/pre-game-briefing';
 
 type Game = Database['public']['Tables']['games']['Row'];
@@ -38,68 +40,6 @@ interface GameControlProps {
     isFirstGameOfSession: boolean;
 }
 
-// Hardcoded for now (same as before)
-const NUMBER_NICKNAMES: { [key: number]: string } = {
-    1: "Kelly's Eye",
-    2: "One Little Duck",
-    3: "Debbie McGee",
-    4: "Knock at the Door",
-    5: "Man Alive",
-    6: "Half Dozen",
-    7: "Lucky For Some",
-    8: "Garden Gate",
-    9: "Doctor's Orders",
-    10: "Starmers Den",
-    11: "Legs Eleven",
-    12: "One Dozen",
-    13: "Unlucky For Some",
-    14: "Valentines Day",
-    15: "Young And Keen",
-    16: "Sweet Sixteen",
-    17: "Dancing Queen",
-    20: "Blind Twenty",
-    22: "Two Little Ducks",
-    25: "Duck And Dive",
-    26: "Pick And Mix",
-    27: "Gateway To Heaven",
-    28: "In A State",
-    29: "Rise And Shine",
-    30: "Dirty Gertie",
-    31: "Get Up And Run",
-    32: "Buckle My Shoe",
-    33: "All The Threes",
-    34: "Ask For More",
-    36: "Three Dozen",
-    40: "Naughty Forty",
-    42: "Winnie The Pooh",
-    44: "Droopy Drawers",
-    45: "Halfway There",
-    46: "Up To Tricks",
-    47: "Four And Seven",
-    48: "Four Dozen",
-    51: "Tweak Of The Thumb",
-    52: "Danny La Rue",
-    53: "Stuck In The Tree",
-    54: "Clean The Floor",
-    55: "All The Fives",
-    57: "Heinz Varieties",
-    58: "Make Them Wait",
-    59: "Brighton Line",
-    61: "Bakers Bun",
-    62: "Tickety Boo",
-    63: "Tickle Me",
-    66: "Clickety Click",
-    67: "Made In Heaven",
-    69: "Any Way Up",
-    73: "Queen B",
-    77: "All The Sevens",
-    81: "Stop And Run",
-    83: "Time For Tea",
-    85: "Staying Alive",
-    88: "Two Fat Ladies",
-    90: "Top Of The Shop"
-};
-
 export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole, isFirstGameOfSession }: GameControlProps) {
     const router = useRouter();
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
@@ -119,17 +59,55 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [cashJackpotMode, setCashJackpotMode] = useState<'next' | 'break'>('next');
     const [isSubmittingCashJackpot, setIsSubmittingCashJackpot] = useState(false);
     const [prizeGiven, setPrizeGiven] = useState(false);
-    const [snowballEligible, setSnowballEligible] = useState(false);
+    // Tri-state on purpose (T4.6): null means the host has not chosen yet, and
+    // Confirm Winner stays disabled. There is no default, because a wrong default
+    // either gives away the jackpot or withholds it.
+    const [snowballEligibleChoice, setSnowballEligibleChoice] = useState<boolean | null>(null);
     const [isRecordingWinner, setIsRecordingWinner] = useState(false);
     const [isRecordingSnowballWinner, setIsRecordingSnowballWinner] = useState(false);
     const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
     const [sessionWinners, setSessionWinners] = useState<SessionWinner[]>([]);
 
+    // Undo confirm modal (T4.3): replaces the blocking window.confirm.
+    const [showUndoModal, setShowUndoModal] = useState(false);
+    // Undo refusals are held separately so they can render inside the undo modal.
+    // `code` lets the modal offer the Winners and Prizes route out without
+    // pattern-matching the wording, which is copy and will be reworded.
+    const [undoError, setUndoError] = useState<{ message: string; code?: ActionFailureCode } | null>(null);
+
+    // Void winner confirm (T4.7).
+    const [voidWinnerTarget, setVoidWinnerTarget] = useState<SessionWinner | null>(null);
+    const [voidWinnerReason, setVoidWinnerReason] = useState('');
+    const [voidWinnerError, setVoidWinnerError] = useState<string | null>(null);
+    const [isVoidingWinner, setIsVoidingWinner] = useState(false);
+
+    // Per-action in-flight flags (T4.2). A publican taps twice on a phone, so
+    // every mutation gets its own flag and its own disabled control.
+    const [isTakingControl, setIsTakingControl] = useState(false);
+    const [isTogglingBreak, setIsTogglingBreak] = useState(false);
+    const [isVoiding, setIsVoiding] = useState(false);
+    const [isAdvancing, setIsAdvancing] = useState(false);
+    const [isSkipping, setIsSkipping] = useState(false);
+    const [isResuming, setIsResuming] = useState(false);
+    const [isPausing, setIsPausing] = useState(false);
+    const [isMovingGame, setIsMovingGame] = useState(false);
+    const [isCheckingWin, setIsCheckingWin] = useState(false);
+
+    // Any Post Win choice in flight disables all of them, so the host cannot
+    // advance a stage and move to the next game with two quick taps.
+    const isPostWinBusy = isAdvancing || isMovingGame || isPausing || isTogglingBreak;
+
     // Singleton Supabase client — all subscriptions share one WebSocket connection
     const supabaseRef = useRef(createClient());
 
     // Connection health: drives the reconnecting banner + auto-refresh.
+    // The returned object changes once a second by design, so ONLY the stable
+    // callbacks destructured below may appear in a dependency array. Putting
+    // `health` itself in one is what stopped the host screen updating: the 3
+    // second poll was cleared before it fired and the Realtime channel was
+    // re-subscribed every second. See src/hooks/use-connection-health.ts.
     const health = useConnectionHealth();
+    const { markPollSuccess, markPollFailure, markRealtimeStatus } = health;
 
     // Polling guards: monotonic sequence + in-flight flag prevent stale poll
     // results from clobbering newer state when responses arrive out-of-order.
@@ -156,10 +134,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     }, [isController, gameId]);
 
     const handleTakeControl = async () => {
+        if (isTakingControl) return;
         setActionError(null);
-        const result = await takeControl(gameId);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to take control.");
+        setIsTakingControl(true);
+        try {
+            // applyMutation is declared further down but only ever runs on a click,
+            // by which point the const is initialised for this render.
+            applyMutation(await takeControl(gameId), "Failed to take control.");
+        } finally {
+            setIsTakingControl(false);
         }
     };
 
@@ -170,13 +153,36 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
     const [prizeDescription, setPrizeDescription] = useState(getPlannedPrize(initialGameState.current_stage_index));
 
+    // Winner list fetchers, shared by the subscriptions below and by the void
+    // control so a void refreshes both lists without waiting on Realtime.
+    const fetchGameWinners = useCallback(async () => {
+        const supabase = supabaseRef.current;
+        const { data } = await supabase.from('winners').select('*').eq('game_id', gameId).order('created_at', { ascending: false });
+        if (data) setCurrentWinners(data);
+    }, [gameId]);
+
+    const fetchSessionWinners = useCallback(async () => {
+        const supabase = supabaseRef.current;
+        const { data } = await supabase
+            .from('winners')
+            .select(`
+                *,
+                game:games (id, name, game_index)
+            `)
+            .eq('session_id', sessionId)
+            .order('created_at', { ascending: false });
+
+        if (data) setSessionWinners(data as SessionWinner[]);
+    }, [sessionId]);
+
+    const refreshWinnerLists = useCallback(async () => {
+        await Promise.all([fetchGameWinners(), fetchSessionWinners()]);
+    }, [fetchGameWinners, fetchSessionWinners]);
+
     // Winners Subscription
     useEffect(() => {
         const supabase = supabaseRef.current;
-        const fetchWinners = async () => {
-            const { data } = await supabase.from('winners').select('*').eq('game_id', gameId).order('created_at', { ascending: false });
-            if (data) setCurrentWinners(data);
-        };
+        const fetchWinners = fetchGameWinners;
 
         fetchWinners();
 
@@ -194,23 +200,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [gameId]);
+    }, [gameId, fetchGameWinners]);
 
     // Session-wide winners subscription so prize status can be managed after moving to later games
     useEffect(() => {
         const supabase = supabaseRef.current;
-        const fetchSessionWinners = async () => {
-            const { data } = await supabase
-                .from('winners')
-                .select(`
-                    *,
-                    game:games (id, name, game_index)
-                `)
-                .eq('session_id', sessionId)
-                .order('created_at', { ascending: false });
-
-            if (data) setSessionWinners(data as SessionWinner[]);
-        };
 
         fetchSessionWinners();
 
@@ -228,7 +222,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [sessionId]);
+    }, [sessionId, fetchSessionWinners]);
 
     const handleTogglePrize = async (winnerId: string, currentStatus: boolean) => {
         if (!canTogglePrize) return;
@@ -251,16 +245,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     }, [currentGameState.current_stage_index, getPlannedPrize]);
 
     const currentNumber = currentGameState.called_numbers?.[currentGameState.numbers_called_count - 1] || null;
-    const currentNickname = currentNumber ? NUMBER_NICKNAMES[currentNumber] : null;
+    const currentNickname = currentNumber ? getNumberNickname(currentNumber) : null;
     const lastNNumbers = (currentGameState.called_numbers || []).slice(-10, -1);
     const fallbackStageName = game.stage_sequence[game.stage_sequence.length - 1];
     const currentStageName = game.stage_sequence[currentGameState.current_stage_index] || fallbackStageName;
     const plannedStagePrize = getPlannedPrize(currentGameState.current_stage_index);
     const isStagePrizeMissing = !plannedStagePrize;
-    // Fall back to the shared 5-number default if the stage name is somehow not
-    // one of the canonical Line / Two Lines / Full House values. This mirrors
-    // the legacy behaviour while routing through the shared helper.
-    const requiredSelectionCount = getRequiredSelectionCountForStage(currentStageName) ?? 5;
+    // No fallback count. The server rejects an unrecognised stage outright, so the
+    // host screen says the same thing rather than inviting a claim check that can
+    // only fail. null disables Check Win and shows an explanation.
+    const requiredSelectionCount = getRequiredSelectionCountForStage(currentStageName);
+    const isStageValidForClaimCheck = requiredSelectionCount !== null;
+    const claimIncludesLastBall = currentNumber !== null && selectedNumbers.includes(currentNumber);
+    const isClaimCountMet = requiredSelectionCount !== null && selectedNumbers.length === requiredSelectionCount;
     const isSnowballGame = game.type === 'snowball';
     const snowballCallsLabel = currentSnowballPot
         ? getSnowballCallsLabel(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
@@ -275,13 +272,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isSnowballEligibilityStage = isSnowballGame && currentStageName === 'Full House';
     const isFinalStage = currentGameState.current_stage_index >= Math.max(0, game.stage_sequence.length - 1);
 
-    // Auto-check snowballEligible when the jackpot window is open so hosts don't accidentally miss it
-    useEffect(() => {
-        if (isSnowballJackpotWindowOpen) {
-             
-            setSnowballEligible(true);
-        }
-    }, [isSnowballJackpotWindowOpen]);
+    // Snowball eligibility is an explicit host choice, only demanded when it can
+    // actually change what is paid out: a snowball Full House with the jackpot
+    // window still open. There used to be an effect auto-ticking eligibility here
+    // and another resetting it in handleCheckWin, and the two fought each other.
+    const isSnowballChoiceRequired = isSnowballEligibilityStage && isSnowballJackpotWindowOpen;
 
     const navigateToHostPath = (targetPath?: string) => {
         const destination = targetPath || '/host';
@@ -342,7 +337,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 .eq('game_id', gameId)
                 .single<GameState>();
             if (error) {
-                health.markPollFailure();
+                markPollFailure();
                 logError('host-control', error);
                 return;
             }
@@ -352,15 +347,49 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 setCurrentGameState((current) =>
                     isFreshGameState(current, freshState) ? freshState : current,
                 );
-                health.markPollSuccess();
+                markPollSuccess();
             }
         } catch (err) {
-            health.markPollFailure();
+            markPollFailure();
             logError('host-control', err);
         } finally {
             pollInFlightRef.current = false;
         }
-    }, [gameId, health]);
+        // Depends on the stable health callbacks, never on the health object:
+        // the object changes every second, which would give this callback a new
+        // identity every second and re-arm the 3 second poll interval forever.
+    }, [gameId, markPollSuccess, markPollFailure]);
+
+    /**
+     * Applies whatever state a mutation returned, and turns a conflict into a
+     * refresh rather than a dead end.
+     *
+     * Every host mutation that writes `game_states` now returns the committed row
+     * (see docs/architecture/server-actions.md). Applying it here means break,
+     * undo, pause, resume and stage advance land on the host screen at once
+     * instead of waiting on Realtime.
+     *
+     * Returns true on success so callers can gate their own follow-up work.
+     */
+    const applyMutation = useCallback(
+        (result: ActionResult<{ gameState: GameState }> | undefined, fallback: string): boolean => {
+            if (!result?.success) {
+                setActionError(result?.error || fallback);
+                // A conflict means the server state moved under us. Re-read it so
+                // the host sees why the action was refused.
+                if (result && 'conflict' in result && result.conflict) void pollGameState();
+                return false;
+            }
+            if (result.data?.gameState) {
+                const incoming = result.data.gameState;
+                setCurrentGameState((current) =>
+                    isFreshGameState(current, incoming) ? incoming : current,
+                );
+            }
+            return true;
+        },
+        [pollGameState],
+    );
 
     // Stable callable so the visibility handler can force-reconnect realtime.
     const reconnectRealtimeRef = useRef<(() => void) | null>(null);
@@ -404,7 +433,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 )
                 .subscribe((status) => {
                     if (!isMounted) return;
-                    health.markRealtimeStatus(status);
+                    markRealtimeStatus(status);
                     if (status === 'SUBSCRIBED') {
                         attemptCount = 0;
                     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
@@ -429,7 +458,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             if (reconnectTimeout) clearTimeout(reconnectTimeout);
             if (activeChannel) supabase.removeChannel(activeChannel);
         };
-    }, [gameId, health]);
+        // Depends on the stable markRealtimeStatus callback, never on the health
+        // object: depending on the object tore this channel down and rebuilt it
+        // every second, which is faster than Supabase can subscribe a channel, so
+        // the host never received a single Realtime update.
+    }, [gameId, markRealtimeStatus]);
 
     // Polling fallback — re-fetch game state every 3 seconds to recover from
     // missed Realtime events. Skips when tab is hidden to save bandwidth.
@@ -461,53 +494,49 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         // The host is the author of this change, so apply the server's
         // already-synced state snapshot immediately. The freshness gate keeps
         // a slightly older Realtime echo from clobbering it.
-        const result = await callNextNumber(gameId);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to call next number.");
-        } else if (result.data?.gameState) {
-            const incoming = result.data.gameState;
-            setCurrentGameState((current) =>
-                isFreshGameState(current, incoming) ? incoming : current,
-            );
-        }
+        applyMutation(await callNextNumber(gameId), "Failed to call next number.");
         setIsCallingNumber(false);
     };
 
     const handleToggleBreak = async () => {
-        if (!isController) return;
+        if (!isController || isTogglingBreak) return;
         setActionError(null);
-        const newOnBreakStatus = !currentGameState.on_break;
-        const result = await toggleBreak(gameId, newOnBreakStatus);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to toggle break.");
+        setIsTogglingBreak(true);
+        try {
+            const newOnBreakStatus = !currentGameState.on_break;
+            applyMutation(await toggleBreak(gameId, newOnBreakStatus), "Failed to toggle break.");
+        } finally {
+            setIsTogglingBreak(false);
         }
     };
 
+    /**
+     * Post Win "Continue Playing" and "Continue and Take Break" (spec 4.3).
+     * Advances one stage, optionally starts a break, then closes the Post Win and
+     * validation modals and clears the selection. The prize text follows the new
+     * stage through the current_stage_index effect above.
+     */
     const handleContinuePlaying = async (putOnBreak: boolean = false) => {
-        if (!isController) return;
+        if (!isController || isAdvancing) return;
         setActionError(null);
+        setIsAdvancing(true);
+        try {
+            if (!applyMutation(await advanceToNextStage(gameId), "Failed to continue playing.")) return;
 
-        const advanceResult = await advanceToNextStage(gameId);
-        if (!advanceResult?.success) {
-            setActionError(advanceResult?.error || "Failed to continue playing.");
-            return;
-        }
-
-        if (putOnBreak) {
-            const breakResult = await toggleBreak(gameId, true);
-            if (!breakResult?.success) {
-                setActionError(breakResult?.error || "Failed to start break.");
-                return;
+            if (putOnBreak) {
+                if (!applyMutation(await toggleBreak(gameId, true), "Failed to start break.")) return;
             }
-        }
 
-        setShowPostWinModal(false);
-        setShowValidationModal(false);
-        handleClearSelection();
+            setShowPostWinModal(false);
+            setShowValidationModal(false);
+            handleClearSelection();
+        } finally {
+            setIsAdvancing(false);
+        }
     };
 
     const handleMoveToNextGame = async () => {
-        if (!isController) return;
+        if (!isController || isMovingGame) return;
 
         if (!isFinalStage) {
             await handleContinuePlaying();
@@ -515,27 +544,33 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
 
         setActionError(null);
-        const result = await moveToNextGameAfterWin(gameId, sessionId);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to move to next game.");
-            return;
-        }
-        if (result.data?.requiresCashJackpotAmount) {
-            setCashJackpotMode('next');
-            setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
-            setCashJackpotAmount('');
-            setShowCashJackpotModal(true);
+        setIsMovingGame(true);
+        try {
+            const result = await moveToNextGameAfterWin(gameId, sessionId);
+            if (!result?.success) {
+                setActionError(result?.error || "Failed to move to next game.");
+                if ('conflict' in result && result.conflict) void pollGameState();
+                return;
+            }
+            if (result.data?.requiresCashJackpotAmount) {
+                setCashJackpotMode('next');
+                setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
+                setCashJackpotAmount('');
+                setShowCashJackpotModal(true);
+                setShowPostWinModal(false);
+                return;
+            }
             setShowPostWinModal(false);
-            return;
+            setShowValidationModal(false);
+            handleClearSelection();
+            navigateToHostPath(result.data?.redirectTo);
+        } finally {
+            setIsMovingGame(false);
         }
-        setShowPostWinModal(false);
-        setShowValidationModal(false);
-        handleClearSelection();
-        navigateToHostPath(result.data?.redirectTo);
     };
 
     const handleTakeBreakAfterGame = async () => {
-        if (!isController) return;
+        if (!isController || isMovingGame) return;
 
         if (!isFinalStage) {
             await handleContinuePlaying(true);
@@ -543,23 +578,29 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
 
         setActionError(null);
-        const result = await moveToNextGameOnBreak(gameId, sessionId);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to move to next game break.");
-            return;
-        }
-        if (result.data?.requiresCashJackpotAmount) {
-            setCashJackpotMode('break');
-            setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
-            setCashJackpotAmount('');
-            setShowCashJackpotModal(true);
+        setIsMovingGame(true);
+        try {
+            const result = await moveToNextGameOnBreak(gameId, sessionId);
+            if (!result?.success) {
+                setActionError(result?.error || "Failed to move to next game break.");
+                if ('conflict' in result && result.conflict) void pollGameState();
+                return;
+            }
+            if (result.data?.requiresCashJackpotAmount) {
+                setCashJackpotMode('break');
+                setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
+                setCashJackpotAmount('');
+                setShowCashJackpotModal(true);
+                setShowPostWinModal(false);
+                return;
+            }
             setShowPostWinModal(false);
-            return;
+            setShowValidationModal(false);
+            handleClearSelection();
+            navigateToHostPath(result.data?.redirectTo);
+        } finally {
+            setIsMovingGame(false);
         }
-        setShowPostWinModal(false);
-        setShowValidationModal(false);
-        handleClearSelection();
-        navigateToHostPath(result.data?.redirectTo);
     };
 
     const handleConfirmCashJackpotAndContinue = async () => {
@@ -613,21 +654,31 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     };
 
     const handleBeginClaimCheck = async () => {
-        if (!isController) return;
+        if (!isController || isPausing) return;
         setActionError(null);
         setValidationResult(null);
         setShowValidationModal(true);
-
-        const pauseResult = await pauseForValidation(gameId);
-        if (!pauseResult?.success) {
-            setActionError("Failed to start claim check: " + (pauseResult?.error || "Unknown error"));
-            setShowValidationModal(false);
+        setIsPausing(true);
+        try {
+            // pauseForValidation also nulls the win display fields, which is what
+            // returns the public screens to "Checking Claim" when the host chooses
+            // "Validate Another Winner" in the Post Win modal (spec 4.3).
+            const pauseResult = await pauseForValidation(gameId);
+            if (!applyMutation(pauseResult, "Failed to start claim check.")) {
+                setShowValidationModal(false);
+            }
+        } finally {
+            setIsPausing(false);
         }
     };
 
     const handleCheckWin = async () => {
-        if (!isController) return;
+        if (!isController || isCheckingWin) return;
         setActionError(null);
+        if (requiredSelectionCount === null) {
+            setActionError(`This stage is not valid for claim checking.`);
+            return;
+        }
         if (selectedNumbers.length !== requiredSelectionCount) {
             setActionError(`Select exactly ${requiredSelectionCount} numbers for ${currentStageName || 'this stage'} before checking.`);
             return;
@@ -641,26 +692,25 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             return;
         }
 
-        const result = await validateClaim(gameId, selectedNumbers);
-        if (!result?.success) {
-            setActionError(result?.error || "Failed to validate claim.");
-            setValidationResult(null);
-            return;
-        }
-        const validation = result.data;
-        setValidationResult(validation || null);
-        if (validation?.valid) {
-            const currentStage = currentStageName;
-            if (isSnowballGame && currentStage === 'Full House') {
-                setSnowballEligible(false);
-            }
-
-            const announceResult = await announceWin(gameId, currentStage);
-            if (!announceResult?.success) {
-                setActionError(announceResult?.error || "Failed to announce win.");
+        setIsCheckingWin(true);
+        try {
+            const result = await validateClaim(gameId, selectedNumbers);
+            if (!result?.success) {
+                setActionError(result?.error || "Failed to validate claim.");
+                setValidationResult(null);
                 return;
             }
-            setShowWinnerModal(true);
+            const validation = result.data;
+            setValidationResult(validation || null);
+            if (validation?.valid) {
+                const currentStage = currentStageName;
+                if (!applyMutation(await announceWin(gameId, currentStage), "Failed to announce win.")) {
+                    return;
+                }
+                handleOpenRecordWinnerModal();
+            }
+        } finally {
+            setIsCheckingWin(false);
         }
     }
 
@@ -673,6 +723,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError("Current stage is not available for this game.");
             return;
         }
+        // Money decision: never record a snowball Full House with the jackpot
+        // window open until the host has said Eligible or Not eligible.
+        if (isSnowballChoiceRequired && snowballEligibleChoice === null) {
+            setActionError("Choose eligibility before recording.");
+            return;
+        }
 
         setIsRecordingWinner(true);
         try {
@@ -683,14 +739,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 prizeDescription,
                 prizeGiven,
                 false,
-                snowballEligible
+                snowballEligibleChoice === true
             );
 
-            if (!result?.success) {
-                setActionError(result?.error || "Failed to record winner.");
-            } else {
+            if (applyMutation(result, "Failed to record winner.")) {
                 setPrizeGiven(false);
-                setSnowballEligible(false);
+                setSnowballEligibleChoice(null);
                 setShowWinnerModal(false);
                 setShowPostWinModal(true);
             }
@@ -700,44 +754,143 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     };
 
     const handleSkipStage = async () => {
-        if (!isController) return;
-        if (confirm("Are you sure you want to skip this stage without a winner?")) {
-            setActionError(null);
-            const result = await skipStage(gameId, currentGameState.current_stage_index, game.stage_sequence.length);
-            if (!result?.success) {
-                setActionError(result?.error || "Failed to skip stage.");
-            } else {
+        if (!isController || isSkipping) return;
+        setActionError(null);
+        setIsSkipping(true);
+        try {
+            // The stage index and stage count are derived server-side, so a stale
+            // host screen can no longer move the game to a stage it already left.
+            if (applyMutation(await skipStage(gameId), "Failed to skip stage.")) {
                 setShowValidationModal(false);
+                handleClearSelection();
             }
+        } finally {
+            setIsSkipping(false);
         }
     };
 
-    const handleVoidLastNumber = async () => {
+    /**
+     * Opens Record Winner with the eligibility choice cleared, so every win is a
+     * fresh decision and a previous "Eligible" can never carry over to the next
+     * one.
+     */
+    const handleOpenRecordWinnerModal = () => {
+        setSnowballEligibleChoice(null);
+        setShowWinnerModal(true);
+    };
+
+    const handleCloseRecordWinnerModal = () => {
+        if (isRecordingWinner) return;
+        setSnowballEligibleChoice(null);
+        setShowWinnerModal(false);
+    };
+
+    const handleOpenUndoModal = () => {
         if (!isController) return;
         if (!currentNumber) {
             setActionError("No numbers to void.");
             return;
         }
-        if (confirm(`Are you sure you want to void the last called number (${currentNumber})?`)) {
-            setActionError(null);
+        setUndoError(null);
+        setShowUndoModal(true);
+    };
+
+    const handleCloseUndoModal = () => {
+        if (isVoiding) return;
+        setShowUndoModal(false);
+        setUndoError(null);
+    };
+
+    const handleConfirmVoidLastNumber = async () => {
+        if (!isController || isVoiding) return;
+        setUndoError(null);
+        setIsVoiding(true);
+        try {
             const result = await voidLastNumber(gameId);
             if (!result?.success) {
-                setActionError(result?.error || "Failed to void last number.");
-            } else {
+                // Errors stay inside the modal so the host can read the refusal and
+                // act on it, rather than hunting for a banner behind the modal.
+                setUndoError({
+                    message: result?.error || "Failed to undo the last call.",
+                    code: result?.code,
+                });
+                if ('conflict' in result && result.conflict) void pollGameState();
+                return;
             }
+            applyMutation(result, "Failed to undo the last call.");
+            setShowUndoModal(false);
+        } finally {
+            setIsVoiding(false);
         }
     };
 
     const handleResumeGame = async () => {
-        if (!isController) return;
+        if (!isController || isResuming) return;
         setActionError(null);
-        const result = await resumeGame(gameId);
-        if (!result?.success) {
-            setActionError("Failed to resume game: " + (result?.error || "Unknown error"));
+        setIsResuming(true);
+        try {
+            if (!applyMutation(await resumeGame(gameId), "Failed to resume game.")) return;
+            setShowValidationModal(false);
+            handleClearSelection();
+        } finally {
+            setIsResuming(false);
+        }
+    };
+
+    /** Post Win: "Validate Another Winner" (spec 4.3). */
+    const handleValidateAnotherWinner = async () => {
+        setShowPostWinModal(false);
+        setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
+        handleClearSelection();
+        await handleBeginClaimCheck();
+    };
+
+    /** Post Win: "Close and stay paused" (spec 4.3). The guaranteed escape. */
+    const handleClosePostWinAndStayPaused = () => {
+        if (isPostWinBusy) return;
+        setActionError(null);
+        setShowPostWinModal(false);
+    };
+
+    const handleOpenVoidWinner = (winner: SessionWinner) => {
+        setVoidWinnerTarget(winner);
+        setVoidWinnerReason('');
+        setVoidWinnerError(null);
+    };
+
+    const handleCloseVoidWinner = () => {
+        if (isVoidingWinner) return;
+        setVoidWinnerTarget(null);
+        setVoidWinnerReason('');
+        setVoidWinnerError(null);
+    };
+
+    /**
+     * Voids a recorded winner with a reason (T4.7). This is the host's only route
+     * out of an undo blocked by a winner on the last ball, so it has to work
+     * without leaving the game screen.
+     */
+    const handleConfirmVoidWinner = async () => {
+        if (!voidWinnerTarget || isVoidingWinner) return;
+        const reason = voidWinnerReason.trim();
+        if (reason.length === 0) {
+            setVoidWinnerError("Give a reason before voiding this winner.");
             return;
         }
-        setShowValidationModal(false);
-        handleClearSelection();
+        setVoidWinnerError(null);
+        setIsVoidingWinner(true);
+        try {
+            const result = await voidWinnerFromHost(sessionId, gameId, voidWinnerTarget.id, reason);
+            if (!result?.success) {
+                setVoidWinnerError(result?.error || "Failed to void that winner.");
+                return;
+            }
+            await refreshWinnerLists();
+            setVoidWinnerTarget(null);
+            setVoidWinnerReason('');
+        } finally {
+            setIsVoidingWinner(false);
+        }
     };
 
     const isGameCompleted = currentGameState.status === 'completed';
@@ -745,9 +898,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isPausedForValidation = currentGameState.paused_for_validation;
 
     const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || currentGameState.numbers_called_count >= 90;
-    const isBreakToggleDisabled = !isController || isGameNotInProgress || isGameCompleted || isPausedForValidation;
-    const isValidateButtonDisabled = !isController || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
-    const isVoidLastNumberDisabled = !isController || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
+    const isBreakToggleDisabled = !isController || isTogglingBreak || isGameNotInProgress || isGameCompleted || isPausedForValidation;
+    const isValidateButtonDisabled = !isController || isPausing || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
+    const isVoidLastNumberDisabled = !isController || isVoiding || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
+    const canVoidWinner = currentUserRole === 'admin';
     const hostSurfaceClass = "bg-[#003f27]/88 border border-[#1f7c58]";
 
 
@@ -762,8 +916,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             <p className="text-sm text-white/85">Another host is currently controlling this game.</p>
                         </div>
                         {canTakeControl && (
-                            <Button variant="secondary" className="bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white animate-pulse" onClick={handleTakeControl}>
-                                Take Control
+                            <Button
+                                variant="secondary"
+                                className="bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white animate-pulse min-h-[44px]"
+                                onClick={handleTakeControl}
+                                disabled={isTakingControl}
+                            >
+                                {isTakingControl ? 'Taking control…' : 'Take Control'}
                             </Button>
                         )}
                     </div>
@@ -776,8 +935,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 shouldAutoRefresh={health.shouldAutoRefresh}
             />
 
-            {/* Alerts */}
-            {actionError && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center">{actionError}</div>}
+            {/* Alerts. Hidden while the Post Win modal is open, because that modal
+                renders the same error inside itself where the host can see it. */}
+            {actionError && !showPostWinModal && (
+                <div role="alert" className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center">{actionError}</div>
+            )}
             {isGameCompleted && <div className="mb-4 p-4 bg-[#003f27]/90 border border-[#1f7c58] text-white rounded-lg text-center">Game Completed</div>}
             {currentGameState.on_break && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold animate-pulse">ON BREAK</div>}
             {currentGameState.paused_for_validation && <div className="mb-4 p-4 bg-[#a57626]/25 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">CHECKING CLAIM...</div>}
@@ -838,13 +1000,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 </div>
                             </div>
                             {isSnowballGame && (
-                                <div className="mt-4 w-full rounded-xl border border-[#a57626]/70 bg-[#005131]/65 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                                <div className="mt-4 w-full rounded-xl border border-[#a57626]/70 bg-[#005131]/65 px-4 py-3 flex flex-col items-center text-center gap-2 md:flex-row md:items-center md:justify-between md:text-left">
                                     {currentSnowballPot && snowballCallsLabel ? (
                                         <>
                                             <p className="text-white font-semibold">
                                                 Snowball Jackpot: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
                                             </p>
-                                            <p className="text-white/90 font-semibold text-right">
+                                            <p className="text-white/90 font-semibold text-center md:text-right">
                                                 {snowballCallsLabel}
                                                 {` • ${currentGameState.numbers_called_count}/${currentSnowballPot.current_max_calls} calls`}
                                                 {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
@@ -881,7 +1043,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     onClick={handleToggleBreak}
                     disabled={isBreakToggleDisabled}
                 >
-                    {currentGameState.on_break ? 'Resume Session' : 'Take Break'}
+                    {isTogglingBreak
+                        ? (currentGameState.on_break ? 'Resuming…' : 'Starting break…')
+                        : (currentGameState.on_break ? 'Resume Session' : 'Take Break')}
                 </Button>
 
                 <Button
@@ -891,7 +1055,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     onClick={handleBeginClaimCheck}
                     disabled={isValidateButtonDisabled}
                 >
-                    Check Claim
+                    {isPausing ? 'Pausing…' : 'Check Claim'}
                 </Button>
             </div>
 
@@ -900,8 +1064,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <Button
                     variant="ghost"
                     size="sm"
-                    className="text-white/80 hover:text-white hover:bg-[#0f6846]"
-                    onClick={handleVoidLastNumber}
+                    className="text-white/80 hover:text-white hover:bg-[#0f6846] min-h-[44px]"
+                    onClick={handleOpenUndoModal}
                     disabled={isVoidLastNumberDisabled}
                 >
                     Undo Last Call
@@ -988,15 +1152,44 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             >
                 <div className="flex flex-col h-full">
                     <div className="shrink-0 mb-4">
-                        {actionError && <div className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded mb-3">{actionError}</div>}
+                        {actionError && <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded mb-3">{actionError}</div>}
+
+                        {/* Claim progress. Big enough to read at arm's length behind the
+                            bar, and announced politely so it does not chatter. Stays up
+                            after a rejected claim, because that is when the host is
+                            re-counting the ticket. */}
+                        {!validationResult?.valid && (
+                            <div aria-live="polite" className="text-center mb-3">
+                                {isStageValidForClaimCheck ? (
+                                    <p className={cn(
+                                        "text-4xl font-bold font-mono tabular-nums",
+                                        isClaimCountMet ? "text-[#f3d59d]" : "text-white",
+                                    )}>
+                                        {selectedNumbers.length}/{requiredSelectionCount}
+                                    </p>
+                                ) : (
+                                    <p className="text-lg font-bold text-white">This stage is not valid for claim checking.</p>
+                                )}
+                                {isStageValidForClaimCheck && (
+                                    <p className={cn(
+                                        "text-base font-semibold mt-1",
+                                        claimIncludesLastBall ? "text-[#f3d59d]" : "text-white/85",
+                                    )}>
+                                        {claimIncludesLastBall ? '✓' : '✗'} Includes last ball ({currentNumber ?? 'none'})
+                                    </p>
+                                )}
+                            </div>
+                        )}
 
                         {validationResult ? (
                             validationResult.valid ? (
-                                <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg flex items-center justify-between mb-4">
+                                <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg flex flex-wrap items-center justify-between gap-2 mb-4">
                                     <span className="text-white font-bold text-lg">Valid Claim</span>
                                     <div className="flex gap-2">
-                                        <Button onClick={() => setShowWinnerModal(true)}>Record Winner</Button>
-                                        <Button variant="ghost" onClick={handleSkipStage} className="text-white/80 hover:text-white hover:bg-[#0f6846]">Skip (No Winner)</Button>
+                                        <Button className="min-h-[44px]" onClick={handleOpenRecordWinnerModal}>Record Winner</Button>
+                                        <Button variant="ghost" onClick={handleSkipStage} disabled={isSkipping} className="text-white/80 hover:text-white hover:bg-[#0f6846] min-h-[44px]">
+                                            {isSkipping ? 'Skipping…' : 'Skip (No Winner)'}
+                                        </Button>
                                     </div>
                                 </div>
                             ) : (
@@ -1004,14 +1197,20 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     <span className="text-white font-bold text-lg block mb-1">Invalid Claim</span>
                                     <span className="text-white/85 text-sm">Numbers not called: {validationResult.invalidNumbers?.join(', ')}</span>
                                     <div className="mt-2">
-                                        <Button variant="outline" size="sm" onClick={handleResumeGame} className="text-white border-[#a57626] hover:bg-[#a57626]/25">Reject & Resume</Button>
+                                        <Button variant="outline" size="sm" onClick={handleResumeGame} disabled={isResuming} className="text-white border-[#a57626] hover:bg-[#a57626]/25 min-h-[44px]">
+                                            {isResuming ? 'Resuming…' : 'Reject & Resume'}
+                                        </Button>
                                     </div>
                                 </div>
                             )
                         ) : (
-                            <div className="space-y-1">
+                            <div className="space-y-2">
                                 <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below.</p>
-                                <p className="text-white text-sm text-center font-semibold">Select exactly {requiredSelectionCount} numbers for {currentStageName || 'this stage'}.</p>
+                                {isStageValidForClaimCheck ? (
+                                    <p className="text-white text-sm text-center font-semibold">Select exactly {requiredSelectionCount} numbers for {currentStageName || 'this stage'}.</p>
+                                ) : (
+                                    <p className="text-white text-sm text-center font-semibold">Check the game&apos;s stages in the admin screen, then try again.</p>
+                                )}
                                 <p className="text-white/75 text-xs text-center">The claim must include the last called number (highlighted).</p>
                             </div>
                         )}
@@ -1056,17 +1255,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     </div>
 
                     <div className="shrink-0 pt-4 mt-4 border-t border-[#1f7c58] flex justify-between gap-3">
-                        <Button variant="secondary" onClick={handleResumeGame}>
-                            {currentGameState.paused_for_validation ? 'Cancel & Resume' : 'Cancel'}
+                        <Button variant="secondary" className="min-h-[44px]" onClick={handleResumeGame} disabled={isResuming}>
+                            {isResuming ? 'Resuming…' : currentGameState.paused_for_validation ? 'Cancel & Resume' : 'Cancel'}
                         </Button>
                         <div className="flex gap-2">
-                            <Button variant="ghost" onClick={handleClearSelection} disabled={selectedNumbers.length === 0}>Clear</Button>
+                            <Button variant="ghost" className="min-h-[44px]" onClick={handleClearSelection} disabled={selectedNumbers.length === 0}>Clear</Button>
                             <Button
                                 variant="primary"
+                                className="min-h-[44px]"
                                 onClick={handleCheckWin}
-                                disabled={selectedNumbers.length !== requiredSelectionCount || (currentNumber !== null && !selectedNumbers.includes(currentNumber))}
+                                disabled={!isStageValidForClaimCheck || isCheckingWin || !isClaimCountMet || (currentNumber !== null && !claimIncludesLastBall)}
                             >
-                                Check Win
+                                {isCheckingWin ? 'Checking…' : 'Check Win'}
                             </Button>
                         </div>
                     </div>
@@ -1083,7 +1283,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <div className="space-y-4">
                     <p className="text-sm text-white/85">
                         Review winners across all games in this session and mark prizes as given when handed out.
+                        Voiding a winner is how you clear an undo that is blocked by a win on the last ball.
                     </p>
+                    {!canVoidWinner && (
+                        <p className="text-sm text-white/75">
+                            Only an admin can void a winner. Ask an admin to void it, then undo.
+                        </p>
+                    )}
                     {sessionWinners.length === 0 ? (
                         <div className="rounded-lg border border-[#1f7c58] bg-[#003f27]/80 p-6 text-sm text-white/70">
                             No winners recorded yet.
@@ -1111,7 +1317,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                             size="sm"
                                             variant={winner.prize_given ? "outline" : "secondary"}
                                             className={cn(
-                                                "min-w-[120px]",
+                                                "min-w-[120px] min-h-[44px]",
                                                 winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
                                             )}
                                             onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
@@ -1119,6 +1325,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                         >
                                             {winner.prize_given ? "Given ✅" : "Mark Given"}
                                         </Button>
+                                        {!winner.is_void && (
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="min-h-[44px] text-white border-[#a57626] hover:bg-[#a57626]/20"
+                                                onClick={() => handleOpenVoidWinner(winner)}
+                                                disabled={!canVoidWinner}
+                                                title={canVoidWinner ? undefined : 'Only an admin can void a winner. Ask an admin to void it, then undo.'}
+                                            >
+                                                Void
+                                            </Button>
+                                        )}
                                     </div>
                                 </div>
                             ))}
@@ -1126,14 +1344,112 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     )}
                 </div>
                 <div className="mt-6 flex justify-end">
-                    <Button variant="secondary" onClick={() => setShowSessionWinnersModal(false)}>
+                    <Button variant="secondary" className="min-h-[44px]" onClick={() => setShowSessionWinnersModal(false)}>
                         Close
                     </Button>
                 </div>
             </Modal>
 
+            {/* Void Winner Confirm (T4.7). Reason is mandatory, and this is the only
+                route out of an undo blocked by a winner on the last ball. */}
+            <Modal
+                isOpen={voidWinnerTarget !== null}
+                onClose={handleCloseVoidWinner}
+                title="Void this winner"
+                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+            >
+                <div className="space-y-4">
+                    {voidWinnerError && (
+                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+                            {voidWinnerError}
+                        </div>
+                    )}
+                    <p className="text-sm text-white/90">
+                        {voidWinnerTarget
+                            ? `Voiding the ${voidWinnerTarget.stage} win${voidWinnerTarget.game ? ` from Game ${voidWinnerTarget.game.game_index}` : ''}. The win stays on record, marked void, and stops counting towards the snowball pot.`
+                            : ''}
+                    </p>
+                    <div>
+                        <label htmlFor="voidWinnerReason" className="text-sm text-white/85 block mb-1">
+                            Reason (required)
+                        </label>
+                        <textarea
+                            id="voidWinnerReason"
+                            value={voidWinnerReason}
+                            onChange={(e) => setVoidWinnerReason(e.target.value)}
+                            rows={3}
+                            placeholder="e.g. Claim called on the wrong ball"
+                            className="w-full rounded-md border border-[#1f7c58] bg-[#005131] px-3 py-2 text-white placeholder:text-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
+                        />
+                    </div>
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                    <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseVoidWinner} disabled={isVoidingWinner}>
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="primary"
+                        className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+                        onClick={handleConfirmVoidWinner}
+                        disabled={isVoidingWinner || voidWinnerReason.trim().length === 0}
+                    >
+                        {isVoidingWinner ? 'Voiding…' : 'Void winner'}
+                    </Button>
+                </div>
+            </Modal>
+
+            {/* Undo Confirm (T4.3). Names the ball and says plainly that it goes back
+                in the bag, because "undo" reads as "skip" to a host mid-game. */}
+            <Modal
+                isOpen={showUndoModal}
+                onClose={handleCloseUndoModal}
+                title="Undo last call"
+                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+            >
+                <div className="space-y-4">
+                    {undoError && (
+                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded space-y-3">
+                            <p>{undoError.message}</p>
+                            {undoError.code === 'winner_on_ball' && (
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
+                                    onClick={() => {
+                                        setShowUndoModal(false);
+                                        setUndoError(null);
+                                        setShowSessionWinnersModal(true);
+                                    }}
+                                >
+                                    Open Winners and Prizes
+                                </Button>
+                            )}
+                        </div>
+                    )}
+                    <p className="text-white font-semibold">
+                        This will take ball {currentNumber ?? '?'} off the board.
+                    </p>
+                    <p className="text-white/90 text-sm">
+                        The next call will draw ball {currentNumber ?? '?'} again. It goes back in the bag, it is not skipped.
+                    </p>
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                    <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseUndoModal} disabled={isVoiding}>
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="primary"
+                        className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+                        onClick={handleConfirmVoidLastNumber}
+                        disabled={isVoiding || currentNumber === null}
+                    >
+                        {isVoiding ? 'Undoing…' : `Undo ball ${currentNumber ?? ''}`}
+                    </Button>
+                </div>
+            </Modal>
+
             {/* Record Winner Modal — winners are anonymous on public surfaces, so no name input. */}
-            <Modal isOpen={showWinnerModal} onClose={() => setShowWinnerModal(false)} title={`Winner: ${currentStageName || 'Stage'}`} className="bg-[#003f27] border border-[#1f7c58]">
+            <Modal isOpen={showWinnerModal} onClose={handleCloseRecordWinnerModal} title={`Winner: ${currentStageName || 'Stage'}`} className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
                     <p className="text-sm text-white/85">
                         Winners are recorded anonymously. Confirm the prize details below to log the win.
@@ -1155,32 +1471,61 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         )}
                     </div>
                     {isSnowballEligibilityStage && currentSnowballPot && (
-                        <div className="rounded-lg border border-[#a57626]/70 bg-[#005131]/60 px-3 py-2">
-                            {isSnowballJackpotWindowOpen && (
-                                <p className="text-xs font-semibold text-[#f3d59d] mb-2">
-                                    Jackpot window is OPEN — check eligibility carefully before recording winner.
+                        <div className="rounded-lg border border-[#a57626]/70 bg-[#005131]/60 px-3 py-3">
+                            {isSnowballJackpotWindowOpen ? (
+                                <>
+                                    <p className="text-xs font-semibold text-[#f3d59d] mb-2">
+                                        Jackpot window is OPEN. Choose eligibility carefully: this decides whether the jackpot is paid out.
+                                    </p>
+                                    <p className="text-sm text-white/90 mb-2">
+                                        Has the winner attended the last 3 games?
+                                    </p>
+                                    {/* Two explicit choices, no default (T4.6). The old
+                                        checkbox auto-ticked itself, so a host could pay a
+                                        jackpot without ever making the decision. */}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <Button
+                                            type="button"
+                                            variant={snowballEligibleChoice === true ? 'primary' : 'outline'}
+                                            aria-pressed={snowballEligibleChoice === true}
+                                            className={cn(
+                                                "min-h-[44px] w-full",
+                                                snowballEligibleChoice === true
+                                                    ? "bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626] text-white"
+                                                    : "text-white border-[#a57626] hover:bg-[#a57626]/20",
+                                            )}
+                                            onClick={() => setSnowballEligibleChoice(true)}
+                                        >
+                                            Eligible for jackpot
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant={snowballEligibleChoice === false ? 'primary' : 'outline'}
+                                            aria-pressed={snowballEligibleChoice === false}
+                                            className={cn(
+                                                "min-h-[44px] w-full",
+                                                snowballEligibleChoice === false
+                                                    ? "bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] text-white"
+                                                    : "text-white border-[#a57626] hover:bg-[#a57626]/20",
+                                            )}
+                                            onClick={() => setSnowballEligibleChoice(false)}
+                                        >
+                                            Not eligible
+                                        </Button>
+                                    </div>
+                                    <p className="text-xs text-white/75 mt-2">
+                                        {snowballEligibleChoice === null
+                                            ? 'Choose eligibility before recording.'
+                                            : snowballEligibleChoice
+                                                ? `Will award stage prize plus Snowball Jackpot £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}.`
+                                                : 'Will award stage prize only.'}
+                                    </p>
+                                </>
+                            ) : (
+                                <p className="text-xs text-white/75">
+                                    Snowball jackpot cannot be awarded after the call limit. This will record the stage prize only.
                                 </p>
                             )}
-                            <div className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    id="snowballEligible"
-                                    checked={snowballEligible}
-                                    onChange={(e) => setSnowballEligible(e.target.checked)}
-                                    disabled={!isSnowballJackpotWindowOpen}
-                                    className="w-5 h-5 rounded border-[#1f7c58] bg-[#005131] text-[#a57626] focus:ring-[#a57626] accent-[#a57626] cursor-pointer disabled:opacity-50"
-                                />
-                                <label htmlFor="snowballEligible" className="text-sm text-white/90 select-none cursor-pointer">
-                                    Winner is eligible for Snowball (attended last 3 games)
-                                </label>
-                            </div>
-                            <p className="text-xs text-white/75 mt-2">
-                                {isSnowballJackpotWindowOpen
-                                    ? snowballEligible
-                                        ? `Will award stage prize + Snowball Jackpot £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}.`
-                                        : 'Will award stage prize only.'
-                                    : 'Snowball jackpot cannot be awarded after the call limit.'}
-                            </p>
                         </div>
                     )}
                     <div className="flex items-center gap-2 pt-2">
@@ -1195,43 +1540,82 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     </div>
                 </div>
                 <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="secondary" onClick={() => setShowWinnerModal(false)} disabled={isRecordingWinner}>Cancel</Button>
+                    <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseRecordWinnerModal} disabled={isRecordingWinner}>Cancel</Button>
                     <Button
                         variant="primary"
+                        className="min-h-[44px]"
                         onClick={() => handleRecordWinner()}
-                        disabled={isRecordingWinner}
+                        disabled={isRecordingWinner || (isSnowballChoiceRequired && snowballEligibleChoice === null)}
                     >
                         {isRecordingWinner ? 'Recording…' : 'Confirm Winner'}
                     </Button>
                 </div>
             </Modal>
 
-            {/* Post Win Modal */}
-            <Modal isOpen={showPostWinModal} onClose={() => { }} title="Winner Recorded!" className="bg-[#003f27] border border-[#1f7c58]">
+            {/* Post Win Modal. Implements the state table in spec 4.3.
+                onClose is a real close (it used to be a no-op, which killed the ✕ and
+                Escape and trapped the host whenever a button failed), and errors
+                render inside the modal rather than on the page behind it. */}
+            <Modal
+                isOpen={showPostWinModal}
+                onClose={handleClosePostWinAndStayPaused}
+                title="Winner Recorded!"
+                className="bg-[#003f27] border border-[#1f7c58]"
+            >
                 <div className="space-y-6 text-center py-4">
+                    {actionError && (
+                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded text-left">
+                            {actionError}
+                        </div>
+                    )}
                     <div className="w-16 h-16 bg-[#a57626]/20 text-white rounded-full flex items-center justify-center mx-auto text-3xl border border-[#a57626]">
                         🎉
                     </div>
                     <p className="text-white/90">The winner has been announced. What&apos;s next?</p>
 
                     <div className="flex flex-col gap-3">
-                        <Button variant="primary" size="lg" className="w-full bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]" onClick={handleMoveToNextGame}>
-                            {isFinalStage ? 'Move to Next Game' : 'Continue Playing'}
+                        <Button
+                            variant="primary"
+                            size="lg"
+                            className="w-full min-h-[44px] bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
+                            onClick={handleMoveToNextGame}
+                            disabled={isPostWinBusy}
+                        >
+                            {isPostWinBusy && (isAdvancing || isMovingGame)
+                                ? 'Working…'
+                                : isFinalStage ? 'Move to Next Game' : 'Continue Playing'}
                         </Button>
 
                         <div className="grid grid-cols-1 gap-3">
-                            <Button variant="secondary" onClick={async () => {
-                                setShowPostWinModal(false);
-                                setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
-                                handleClearSelection();
-                                await handleBeginClaimCheck();
-                            }}>
+                            <Button
+                                variant="secondary"
+                                className="min-h-[44px]"
+                                onClick={handleValidateAnotherWinner}
+                                disabled={isPostWinBusy}
+                            >
                                 Validate Another Winner
                             </Button>
 
-                            <Button variant="secondary" className="border-[#a57626] text-white hover:bg-[#a57626]/20" onClick={handleTakeBreakAfterGame}>
+                            <Button
+                                variant="secondary"
+                                className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
+                                onClick={handleTakeBreakAfterGame}
+                                disabled={isPostWinBusy}
+                            >
                                 {isFinalStage ? 'Take a Break' : 'Continue & Take Break'}
                             </Button>
+
+                            <Button
+                                variant="ghost"
+                                className="min-h-[44px] text-white/85 hover:text-white hover:bg-[#0f6846]"
+                                onClick={handleClosePostWinAndStayPaused}
+                                disabled={isPostWinBusy}
+                            >
+                                Close and stay paused
+                            </Button>
+                            <p className="text-xs text-white/75">
+                                Closes this box and leaves the game paused with the win on screen. Resume or check another claim from the main pad when you are ready.
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -1326,9 +1710,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     true
                                 );
 
-                                if (!result?.success) {
-                                    setActionError(result?.error || "Failed to record snowball win.");
-                                } else {
+                                if (applyMutation(result, "Failed to record snowball win.")) {
                                     setShowManualSnowballModal(false);
                                     setShowPostWinModal(true);
                                 }
