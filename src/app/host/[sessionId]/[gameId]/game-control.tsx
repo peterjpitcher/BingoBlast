@@ -38,9 +38,10 @@ interface GameControlProps {
     currentUserId: string;
     currentUserRole: UserRole;
     isFirstGameOfSession: boolean;
+    isLastGameOfSession: boolean;
 }
 
-export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole, isFirstGameOfSession }: GameControlProps) {
+export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole, isFirstGameOfSession, isLastGameOfSession }: GameControlProps) {
     const router = useRouter();
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
     const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
@@ -290,6 +291,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     );
     const isSnowballEligibilityStage = isSnowballGame && currentStageName === 'Full House';
     const isFinalStage = currentGameState.current_stage_index >= Math.max(0, game.stage_sequence.length - 1);
+    // Last stage of the last game: there is nothing after this. The post-win
+    // buttons must say so. Labelling it "Move to Next Game" when no next game
+    // exists reads as "not for me", which is how two sessions were left running.
+    const isEndOfSession = isFinalStage && isLastGameOfSession;
 
     // Snowball eligibility is an explicit host choice, only demanded when it can
     // actually change what is paid out: a snowball Full House with the jackpot
@@ -1690,8 +1695,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         >
                             {isPostWinBusy && (isAdvancing || isMovingGame)
                                 ? 'Working…'
-                                : isFinalStage ? 'Move to Next Game' : 'Continue Playing'}
+                                : isEndOfSession
+                                    ? 'End Game & Finish Session'
+                                    : isFinalStage ? 'Move to Next Game' : 'Continue Playing'}
                         </Button>
+                        {isEndOfSession && !isPostWinBusy && (
+                            <p className="text-xs text-white/75 -mt-1">
+                                This is the last game. Pressing this ends it and closes the session.
+                            </p>
+                        )}
 
                         <div className="grid grid-cols-1 gap-3">
                             <Button
@@ -1703,14 +1715,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 Validate Another Winner
                             </Button>
 
-                            <Button
-                                variant="secondary"
-                                className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
-                                onClick={handleTakeBreakAfterGame}
-                                disabled={isPostWinBusy}
-                            >
-                                {isFinalStage ? 'Take a Break' : 'Continue & Take Break'}
-                            </Button>
+                            {/* Hidden at the end of the session: there is no next
+                                game to break into, so this would just end the
+                                game under a misleading label. */}
+                            {!isEndOfSession && (
+                                <Button
+                                    variant="secondary"
+                                    className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
+                                    onClick={handleTakeBreakAfterGame}
+                                    disabled={isPostWinBusy}
+                                >
+                                    {isFinalStage ? 'Take a Break' : 'Continue & Take Break'}
+                                </Button>
+                            )}
 
                             <Button
                                 variant="ghost"

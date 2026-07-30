@@ -39,13 +39,16 @@ See [[relationships]] for the inverse mapping (table → actions that touch it).
 | `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on the `game_states` row: asserts host role, controller, status, remaining balls and the host gap (`p_min_gap_ms`), appends the ball, returns the committed row |
 | `void_last_number` | `voidLastNumber` | Atomic undo under the same row lock: counts non-void winners on the current ball inside the same transaction and refuses when one exists, decrements the count, clears the win display, leaves `last_call_at` untouched |
 | `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked |
-| `assert_is_host` | helper, called by the three above | Raises unless `profiles.role` is `admin` or `host` |
+| `settle_snowball_pot` | `handleSnowballPotUpdate`, called by `endGame`, `advanceToNextStage` and `skipStage` | Settles the pot for a finished game under a `for update` lock on the pot row: derives reset-vs-rollover from non-void jackpot winners, derives both new values from the pot row's own base/increment columns, then writes the `snowball_pot_history` claim and moves the pot in one transaction. Returns an outcome of `settled`, `already_settled`, `not_snowball` or `test_session` |
+| `assert_is_host` | helper, called by the four above | Raises unless `profiles.role` is `admin` or `host` |
 
-The four admin RPCs come from `supabase/migrations/20260430120300_atomic_admin_mutations.sql`; the four host functions from `supabase/migrations/20260729120000_atomic_host_mutations.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
+The four admin RPCs come from `supabase/migrations/20260430120300_atomic_admin_mutations.sql`; four of the five host functions from `supabase/migrations/20260729120000_atomic_host_mutations.sql`, with `settle_snowball_pot` from `supabase/migrations/20260730120000_atomic_snowball_settlement.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
+
+`settle_snowball_pot` carries a second job beyond atomicity: it is the reason `snowball_pots` UPDATE and `snowball_pot_history` INSERT can stay admin-only in RLS while a host-role account can still settle a pot. RLS grants row access and not column or value access, so widening those policies would let a host write any value to the pot directly. The function is the narrow door instead: the caller names a game id and every written value is derived server-side.
 
 ## Migrations Applied
 
-16 migrations under `supabase/migrations/`, latest 2026-07-29:
+18 migrations under `supabase/migrations/`, latest 2026-07-30:
 
 - `20251221101434` — `add_active_game_id`
 - `20251221101435` — `add_controller_locking`
@@ -63,6 +66,8 @@ The four admin RPCs come from `supabase/migrations/20260430120300_atomic_admin_m
 - `20260729120000` - `atomic_host_mutations`
 - `20260729120100` - `public_reveal_delay`
 - `20260729120200` - `ensure_realtime_publication`
+- `20260729120300` - `snowball_audit_and_settlement_guard`
+- `20260730120000` - `atomic_snowball_settlement`
 
 ## `state_version` — Live-State Ordering Field
 

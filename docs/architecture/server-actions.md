@@ -113,6 +113,7 @@ All host actions wrap mutations in auth checks and call `revalidatePath('/host')
 | `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on `game_states`; host gap passed in as `p_min_gap_ms` |
 | `void_last_number` | `voidLastNumber` | Atomic undo under the same lock, with the non-void winner check inside the transaction |
 | `record_winner_atomic` | `recordWinner` | Winner insert plus win-display update in one transaction; re-checks the snowball jackpot window |
-| `assert_is_host` | the three host functions above | Raises unless `profiles.role` is `admin` or `host` |
+| `settle_snowball_pot` | `handleSnowballPotUpdate`, called by `endGame`, `advanceToNextStage` and `skipStage` | Audit claim plus pot move in one transaction under a `for update` lock on the pot row. Derives reset-vs-rollover and both new values server-side, so a host settles without `snowball_pots` or `snowball_pot_history` granting a host any write access |
+| `assert_is_host` | the four host functions above | Raises unless `profiles.role` is `admin` or `host` |
 
 See [[relationships]] for the table → action and action → caller cross-reference.

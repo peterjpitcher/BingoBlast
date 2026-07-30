@@ -66,7 +66,11 @@ create table public.sessions (
   status session_status default 'draft'::session_status,
   is_test_session boolean default false,
   created_by uuid references public.profiles(id),
-  active_game_id uuid references public.games(id), -- New: ID of the game currently active on display
+  -- The foreign key to public.games is added in section 5, after that table
+  -- exists. Declared inline here it made this file impossible to run top to
+  -- bottom: games is created below, so a fresh run failed on this line with
+  -- 'relation "public.games" does not exist'.
+  active_game_id uuid, -- New: ID of the game currently active on display
   created_at timestamptz default now()
 );
 alter table public.sessions enable row level security;
@@ -97,6 +101,13 @@ create policy "Read access for all" on public.games for select using (true);
 create policy "Admins can manage games" on public.games for all using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
+
+-- sessions.active_game_id -> games.id, deferred from section 4 because sessions
+-- is created before games. The constraint name and shape match production
+-- exactly: sessions_active_game_id_fkey, no on delete clause.
+alter table public.sessions
+  add constraint sessions_active_game_id_fkey
+  foreign key (active_game_id) references public.games(id);
 
 -- 6. GAME STATE (Realtime frequent updates)
 create table public.game_states (
