@@ -11,6 +11,7 @@ import { formatCashJackpotPrize, isCashJackpotGame, parseCashJackpotAmount } fro
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages'
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
 import { logActionFailure, logActionLatency } from '@/lib/log-action-failure'
+import { isUuid } from '@/lib/utils'
 
 type GameStateRow = Database['public']['Tables']['game_states']['Row']
 
@@ -35,9 +36,10 @@ interface MappedRpcError {
 }
 
 /**
- * Contract with supabase/migrations/20260729120000_atomic_host_mutations.sql.
- * Those functions raise short machine-readable keys, and this map is the only
- * place those keys become words a host reads. Keep the two in step.
+ * Contract with supabase/migrations/20260729120000_atomic_host_mutations.sql and
+ * 20260730120000_winner_idempotency_key.sql. Those functions raise short
+ * machine-readable keys, and this map is the only place those keys become words a
+ * host reads. Keep the two in step.
  */
 const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
   not_controller: { error: 'Another host is now controlling this game.', conflict: true },
@@ -56,6 +58,12 @@ const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
   game_not_found: { error: COULD_NOT_READ_GAME_ERROR },
   game_state_not_found: { error: COULD_NOT_READ_GAME_ERROR },
   unauthorized: { error: 'You do not have permission to do that.' },
+  // A claim key already spent on a different game: a client bug, never a retry.
+  // The wording sends the host to the winners list first, because the one thing
+  // that must not happen next is a blind second attempt at the same prize.
+  request_id_reused: {
+    error: 'Could not record that winner. Reload the page, then check the Winners and Prizes list before recording again.',
+  },
 }
 
 function mapHostRpcError(rawMessage: string | null | undefined): MappedRpcError {
@@ -1326,10 +1334,18 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult<{
  * Records a winner.
  *
  * The winner insert and the win announcement are one transaction inside
- * record_winner_atomic, so a failure on either half leaves nothing behind and a
- * retry cannot record the same winner twice. Snowball eligibility, the call
- * count at win, the prize text and the announcement wording are all derived in
- * the function from locked rows, never from the client.
+ * record_winner_atomic, so a failure on either half leaves nothing behind.
+ * Snowball eligibility, the call count at win, the prize text and the
+ * announcement wording are all derived in the function from locked rows, never
+ * from the client.
+ *
+ * `clientRequestId` is the idempotency key for one claim attempt, minted by the
+ * host client when the Record Winner modal opens. It is what makes a retry safe:
+ * a call that committed but lost its response can be repeated with the same key
+ * and the function inserts nothing and returns the state as it stands. Without
+ * it, the second attempt records a second winner at the same stage and the same
+ * ball, and the host is shown the same prize owed twice. A tie is a separate
+ * claim with a separate key, so both of those still save.
  *
  * `snowballEligible` carries the host's explicit Eligible / Not eligible choice.
  * It can only award the jackpot while the call window is genuinely open.
@@ -1341,9 +1357,18 @@ export async function recordWinner(
     prizeDescription: string | null,
     prizeGiven: boolean = false,
     forceSnowballJackpot: boolean = false,
-    snowballEligible: boolean = false
+    snowballEligible: boolean = false,
+    clientRequestId: string | null = null
 ): Promise<ActionResult<{ gameState: GameStateRow }>> {
     const startedAtMs = Date.now();
+
+    // Refused rather than passed through as null. A malformed key would be a
+    // silent downgrade to the unprotected path, which is exactly the failure this
+    // parameter exists to stop, and it is a client bug the host cannot act on.
+    if (clientRequestId !== null && !isUuid(clientRequestId)) {
+        return failure('recordWinner', GENERIC_ACTION_ERROR, `invalid clientRequestId: ${clientRequestId}`);
+    }
+
     // Cookie-based client, never the service role: the function reads auth.uid().
     const supabase = await createClient();
 
@@ -1355,6 +1380,7 @@ export async function recordWinner(
         p_prize_given: prizeGiven,
         p_force_snowball_jackpot: forceSnowballJackpot,
         p_snowball_eligible: snowballEligible,
+        p_client_request_id: clientRequestId,
     });
 
     if (rpcError) {
