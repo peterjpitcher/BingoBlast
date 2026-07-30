@@ -5,8 +5,9 @@
  * House rules for this list:
  *   - Nothing about death, dying, heaven or the afterlife. Guests have lost
  *     husbands, and a call is shouted out to a whole room with no warning.
- *     "Gateway To Heaven" (27) and "Made In Heaven" (67) were removed for this,
- *     and "Debbie McGee" (3) went too because she is a well known widow.
+ *     "Gateway To Heaven" (27) and "Made In Heaven" (67) were removed for this.
+ *     "Debbie McGee" (3) stays: it was queried on the same grounds and the host
+ *     kept it, so leave it be.
  *   - Funny, never rude. It is a pub, not a stag do.
  *   - Two to four words, easy to shout, easy to hear over a room.
  *
@@ -23,7 +24,7 @@
 export const NUMBER_NICKNAMES: Readonly<Record<number, string>> = {
   1: "Kelly's Eye",
   2: 'One Little Duck',
-  3: 'Cup Of Tea',
+  3: 'Debbie McGee',
   4: 'Knock at the Door',
   5: 'Man Alive',
   6: 'Half Dozen',
