@@ -5,8 +5,8 @@
 -- real project.
 --
 -- A fresh build from this repo now gets the hardened end state straight out of
--- 20260729120000_atomic_host_mutations.sql, which is correct but makes
--- 20260730130000_revoke_anon_host_rpcs.sql a no-op and the run worthless as
+-- 20260729231945_atomic_host_mutations.sql, which is correct but makes
+-- 20260730070705_revoke_anon_execute_on_host_rpcs.sql a no-op and the run worthless as
 -- evidence. Production is different: it applied that migration BEFORE the anon
 -- revoke was folded in, so it carries anon=X/postgres on all four functions.
 -- This file recreates that drift, in the two shapes production has it.
@@ -17,7 +17,7 @@
 -- Shape 2: an eight-argument record_winner_atomic. Production is on the version
 -- winner_idempotency_key installed, which added p_client_request_id, while this
 -- repo's migration history still builds the seven-argument one. That mismatch is
--- the reason 20260730130000 loops over pg_proc instead of naming signatures: a
+-- the reason 20260730070705 loops over pg_proc instead of naming signatures: a
 -- pinned REVOKE would raise "function does not exist" against production. The
 -- stub below has no default on its last argument, so seven-named-argument calls
 -- in the host flow test still resolve unambiguously to the real function.

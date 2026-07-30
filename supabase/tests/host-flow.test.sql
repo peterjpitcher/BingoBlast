@@ -1,4 +1,4 @@
--- Behavioural assertions for 20260730130000_revoke_anon_host_rpcs.sql.
+-- Behavioural assertions for 20260730070705_revoke_anon_execute_on_host_rpcs.sql.
 --
 -- Run against a throwaway database via supabase/tests/run.sh, never against a
 -- real project: it calls and voices numbers and inserts winners rows freely.

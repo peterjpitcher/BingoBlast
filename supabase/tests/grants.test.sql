@@ -1,6 +1,6 @@
 -- Grant assertions for the four host RPCs created by
--- 20260729120000_atomic_host_mutations.sql and hardened by
--- 20260730130000_revoke_anon_host_rpcs.sql.
+-- 20260729231945_atomic_host_mutations.sql and hardened by
+-- 20260730070705_revoke_anon_execute_on_host_rpcs.sql.
 --
 -- Run against a throwaway database via supabase/tests/run.sh, never against a
 -- real project.

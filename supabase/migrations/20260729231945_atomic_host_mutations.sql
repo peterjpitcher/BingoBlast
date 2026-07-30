@@ -28,6 +28,15 @@
 -- key for record_winner_atomic is tracked separately; until it lands, callers
 -- must not auto-retry that function.
 --
+-- SUPERSEDED for record_winner_atomic by
+-- 20260730064309_winner_idempotency_key.sql. That migration added
+-- winners.client_request_id with a unique index where not null, and replaced this
+-- function with an 8-argument version that takes the key: a retry carrying the
+-- same key now inserts nothing and returns the current state, so callers MAY
+-- retry it. The paragraph above describes the state of things up to that
+-- migration and is left as written for the history. call_next_number and
+-- void_last_number are unchanged and still carry the caveat.
+--
 -- Conventions follow 20260430120300_atomic_admin_mutations.sql: plpgsql,
 -- security definer, set search_path = public, row lock via "for update",
 -- revoke all from public then grant execute to authenticated and service_role.
@@ -90,8 +99,14 @@ begin
 end;
 $$;
 
+-- The anon revoke is not redundant with the public revoke. PUBLIC and anon are
+-- different grantees, and Supabase ships default privileges that grant EXECUTE
+-- on new public-schema functions to anon, so "from public" leaves anon holding
+-- EXECUTE. Every function in this file needs both lines. Added by
+-- 20260730130000_revoke_anon_execute_on_host_rpcs.sql, and repeated here so a
+-- fresh database never has the grant in the first place.
 revoke all on function public.assert_is_host() from public;
-revoke execute on function public.assert_is_host() from anon;
+revoke all on function public.assert_is_host() from anon;
 grant execute on function public.assert_is_host() to authenticated;
 grant execute on function public.assert_is_host() to service_role;
 
@@ -181,7 +196,7 @@ end;
 $$;
 
 revoke all on function public.call_next_number(uuid, int) from public;
-revoke execute on function public.call_next_number(uuid, int) from anon;
+revoke all on function public.call_next_number(uuid, int) from anon;
 grant execute on function public.call_next_number(uuid, int) to authenticated;
 grant execute on function public.call_next_number(uuid, int) to service_role;
 
@@ -276,7 +291,7 @@ end;
 $$;
 
 revoke all on function public.void_last_number(uuid) from public;
-revoke execute on function public.void_last_number(uuid) from anon;
+revoke all on function public.void_last_number(uuid) from anon;
 grant execute on function public.void_last_number(uuid) to authenticated;
 grant execute on function public.void_last_number(uuid) to service_role;
 
@@ -288,6 +303,11 @@ grant execute on function public.void_last_number(uuid) to service_role;
 -- winner: the function mutates none of the fields its prechecks read, and
 -- legitimate ties rule out a unique constraint on (game_id, stage). Callers must
 -- not auto-retry. An idempotency key is tracked separately.
+--
+-- SUPERSEDED. This version of the function is no longer the one in the database.
+-- 20260730064309_winner_idempotency_key.sql replaced it with an 8-argument
+-- version taking p_client_request_id, which is idempotent when that key is
+-- supplied. Read that file for the current definition.
 --
 -- Snowball eligibility is recomputed here from the locked pot row. The client's
 -- p_snowball_eligible is the host's explicit Eligible / Not eligible choice, and
@@ -484,6 +504,6 @@ end;
 $$;
 
 revoke all on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) from public;
-revoke execute on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) from anon;
+revoke all on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) from anon;
 grant execute on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) to authenticated;
 grant execute on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) to service_role;

@@ -12,7 +12,7 @@
 -- whoever writes the next batch of functions.
 --
 -- It is a no-op on production, where it has already run, and a no-op on a fresh
--- database built from this repo, because 20260729120000_atomic_host_mutations.sql
+-- database built from this repo, because 20260729231945_atomic_host_mutations.sql
 -- now revokes anon inline on each of the four. Both were verified against a
 -- throwaway postgres:17 container: bash supabase/tests/run.sh.
 --
@@ -33,7 +33,7 @@
 --
 -- Cause. Supabase ships default privileges that grant EXECUTE on new
 -- public-schema functions to anon, and the "revoke all on function ... from
--- public" in 20260729120000_atomic_host_mutations.sql does not remove an
+-- public" in 20260729231945_atomic_host_mutations.sql does not remove an
 -- explicit grant to a named role. PUBLIC and anon are different grantees.
 -- Confirmed by reading the live ACLs: these four carry "anon=X/postgres" while
 -- the older admin RPCs (assert_is_admin, delete_game_safe, delete_session_safe,
@@ -53,7 +53,7 @@
 -- Why this iterates pg_proc instead of naming signatures. record_winner_atomic
 -- has drifted: production carries an eighth parameter (p_client_request_id
 -- uuid) added by a migration that has no file in this repo, while
--- 20260729120000_atomic_host_mutations.sql still creates the seven-parameter
+-- 20260729231945_atomic_host_mutations.sql still creates the seven-parameter
 -- version. A hard-coded signature would therefore fail on one side or the
 -- other. Looping over the names covers whichever signatures exist, including
 -- both at once if the drift ever leaves two overloads behind. The same loop is

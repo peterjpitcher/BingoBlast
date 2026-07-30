@@ -8,7 +8,7 @@
 --   REVOKE EXECUTE ON FUNCTION public.sync_game_states_public()  FROM anon, authenticated, PUBLIC;
 --
 -- bump_game_state_version() is the third trigger function in this schema and it
--- was not on that list, because 20260430120000_add_state_version.sql created it
+-- was not on that list, because 20260430094038_add_state_version.sql created it
 -- three days after that lockdown ran. It has carried the default-privilege grant
 -- ever since. In production it reads:
 --
@@ -32,7 +32,7 @@
 -- is that PUBLIC grant. authenticated goes too, matching the siblings: no role
 -- has any business calling a trigger function by hand.
 --
--- Also folded into 20260430120000_add_state_version.sql, which is where the
+-- Also folded into 20260430094038_add_state_version.sql, which is where the
 -- function is created, so a database built from this repo never has the grant in
 -- the first place. This file is for the production database, which does.
 --

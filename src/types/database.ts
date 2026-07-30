@@ -12,6 +12,32 @@ export type GameType = 'standard' | 'snowball' | 'jackpot'
 export type GameStatus = 'not_started' | 'in_progress' | 'completed'
 export type WinStage = 'Line' | 'Two Lines' | 'Full House'
 
+/**
+ * What settle_snowball_pot did. Only 'settled' moved the pot. The other three
+ * all mean the pot is already correct and nothing needed doing, so none of them
+ * is a failure the host should see.
+ */
+export type SnowballSettlementOutcome =
+  | 'settled'
+  | 'already_settled'
+  | 'not_snowball'
+  | 'test_session'
+
+/**
+ * One row from settle_snowball_pot. Defined in
+ * supabase/migrations/20260730120000_atomic_snowball_settlement.sql.
+ *
+ * settlement is null unless this call actually moved the pot. Every other field
+ * is null on the 'not_snowball' and 'test_session' outcomes.
+ */
+export interface SnowballSettlementRow {
+  outcome: SnowballSettlementOutcome
+  settlement: 'reset' | 'rollover' | null
+  pot_id: string | null
+  new_max_calls: number | null
+  new_jackpot_amount: number | null
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -314,6 +340,11 @@ export interface Database {
           // `coalesce(is_void, false) = false` on the SQL side.
           is_void: boolean | null
           void_reason: string | null
+          // Caller-supplied idempotency key, one per claim attempt. Unique where
+          // not null, so a retried recordWinner cannot insert a second row for
+          // the same claim while a genuine tie (a different key) still can. Null
+          // on every row written before 20260730120000. Not player-identifying.
+          client_request_id: string | null
           created_at: string
         }
         Insert: {
@@ -329,6 +360,7 @@ export interface Database {
           is_snowball_jackpot?: boolean
           is_void?: boolean
           void_reason?: string | null
+          client_request_id?: string | null
           created_at?: string
         }
         Update: {
@@ -344,6 +376,7 @@ export interface Database {
           is_snowball_jackpot?: boolean
           is_void?: boolean
           void_reason?: string | null
+          client_request_id?: string | null
           created_at?: string
         }
         Relationships: [
@@ -468,7 +501,7 @@ export interface Database {
     Functions: {
       assert_is_admin: { Args: Record<string, never>; Returns: undefined }
       // Host hot-path mutations. Defined in
-      // supabase/migrations/20260729120000_atomic_host_mutations.sql. All four are
+      // supabase/migrations/20260729231945_atomic_host_mutations.sql. All four are
       // security definer and read auth.uid(), so they must be called with the
       // cookie-based client, never the service-role client.
       assert_is_host: { Args: Record<string, never>; Returns: undefined }
@@ -493,8 +526,38 @@ export interface Database {
           p_prize_given?: boolean
           p_force_snowball_jackpot?: boolean
           p_snowball_eligible?: boolean
+          /**
+           * Idempotency key for one claim attempt, from newClaimRequestId() in
+           * src/lib/claim-request-id.ts. Pass the same value on a retry of the
+           * same claim; pass a fresh one for the next claim, including a tie.
+           * Null omits the protection, so always send one.
+           */
+          p_client_request_id?: string | null
         }
         Returns: Database['public']['Tables']['game_states']['Row']
+      }
+      /**
+       * Writes only winners.prize_given, so a host can tick a prize as handed
+       * over without gaining is_void. Returns the persisted value.
+       * Defined in supabase/migrations/20260730130000_host_can_mark_prize_given.sql.
+       */
+      set_winner_prize_given: {
+        Args: {
+          p_winner_id: string
+          p_session_id: string
+          p_prize_given: boolean
+        }
+        Returns: boolean
+      }
+      /**
+       * Settles the snowball pot for a finished game in one transaction. Host
+       * callable, which is why snowball_pots and snowball_pot_history keep
+       * admin-only RLS. Also security definer and auth.uid()-reading, so it
+       * needs the cookie-based client, never the service-role client.
+       */
+      settle_snowball_pot: {
+        Args: { p_game_id: string }
+        Returns: SnowballSettlementRow[]
       }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }

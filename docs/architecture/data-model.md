@@ -38,35 +38,64 @@ See [[relationships]] for the inverse mapping (table → actions that touch it).
 | `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session |
 | `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on the `game_states` row: asserts host role, controller, status, remaining balls and the host gap (`p_min_gap_ms`), appends the ball, returns the committed row |
 | `void_last_number` | `voidLastNumber` | Atomic undo under the same row lock: counts non-void winners on the current ball inside the same transaction and refuses when one exists, decrements the count, clears the win display, leaves `last_call_at` untouched |
-| `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked |
-| `assert_is_host` | helper, called by the three above | Raises unless `profiles.role` is `admin` or `host` |
+| `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked. Idempotent on `p_client_request_id` |
+| `settle_snowball_pot` | `handleSnowballPotUpdate`, called by `endGame`, `advanceToNextStage` and `skipStage` | Settles the pot for a finished game under a `for update` lock on the pot row: derives reset-vs-rollover from non-void jackpot winners, derives both new values from the pot row's own base/increment columns, then writes the `snowball_pot_history` claim and moves the pot in one transaction. Returns an outcome of `settled`, `already_settled`, `not_snowball` or `test_session` |
+| `assert_is_host` | helper, called by the four above | Raises unless `profiles.role` is `admin` or `host` |
 
-The four admin RPCs come from `supabase/migrations/20260430120300_atomic_admin_mutations.sql`; the four host functions from `supabase/migrations/20260729120000_atomic_host_mutations.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
+The four admin RPCs come from `supabase/migrations/20260430124120_atomic_admin_mutations.sql`; the host functions from `supabase/migrations/20260729231945_atomic_host_mutations.sql`, with `settle_snowball_pot` from `supabase/migrations/20260730120000_atomic_snowball_settlement.sql` and `record_winner_atomic` replaced by `supabase/migrations/20260730064309_winner_idempotency_key.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
+
+`settle_snowball_pot` carries a second job beyond atomicity: it is the reason `snowball_pots` UPDATE and `snowball_pot_history` INSERT can stay admin-only in RLS while a host-role account can still settle a pot. RLS grants row access and not column or value access, so widening those policies would let a host write any value to the pot directly. The function is the narrow door instead: the caller names a game id and every written value is derived server-side.
+
+### Duplicate winners: why the key exists
+
+A transaction protects a call that **fails**. It does nothing for a call that **commits** and then loses its response on the way back to the host's phone. Retried, `record_winner_atomic` used to re-run in full: it mutates none of the fields its prechecks read, so every precheck passed again and a second `winners` row landed at the same stage and the same `call_count_at_win`. The host was then shown the same prize owed twice, and on a snowball Full House two rows carried `is_snowball_jackpot` with the cash amount in `prize_description`. The pot only resets once, so the money was not double-deducted, but the jackpot could be paid out twice.
+
+A unique constraint is not available, because ties are real: two punters can shout on the same ball and both are winners, so `(game_id, stage)` and `(game_id, stage, call_count_at_win)` are legitimately non-unique.
+
+So the identity comes from the caller. `winners.client_request_id` is a nullable `uuid` with a unique index where not null. The host client mints one key when the Record Winner modal opens and sends it with the claim:
+
+- **A retry** is the same tap, so the same key. The function finds it already recorded, inserts nothing, and returns the current `game_states` row rather than raising, so the retry is a safe no-op and the host still lands on Post Win.
+- **A tie** is a different claim, so a different key. Both rows save.
+- **Rows written before this migration** keep a null key. The index ignores nulls, so nothing was backfilled, and a call that omits the key behaves exactly as it did before, with no protection.
+
+The idempotency check runs **before** the controller, status and stage prechecks. Once the write is on record those prechecks can only invent a failure: a lost response gives the game time to move on, and refusing a retry for a win that is already recorded reads to the host as "it did not save". `request_id_reused` is the one case that does raise, for a key presented against a different game, which is a client bug rather than a retry.
+
+What the key does **not** cover: a *fresh* claim on a ticket that was already paid. Reopening Record Winner mints a new key, and it has to, because that is the same path a genuine tie arrives on. `clearSpentClaim()` in `game-control.tsx` is what closes that hole, by making sure the host never sees a live Record Winner button for a win already on record.
 
 ## Migrations Applied
 
-16 migrations under `supabase/migrations/`, latest 2026-07-29:
+26 migrations under `supabase/migrations/`, latest 2026-07-30. Versions match the migration history recorded in production (`supabase_migrations.schema_migrations`), so `supabase db push` finds nothing pending:
 
-- `20251221101434` — `add_active_game_id`
-- `20251221101435` — `add_controller_locking`
-- `20251221101436` — `fix_host_permissions`
-- `20251221101437` — `enable_realtime_sessions`
-- `20251221101438` — `add_game_states_public`
-- `20260218143000` — `add_jackpot_game_type`
-- `20260218170000` — `add_winner_snowball_eligibility`
-- `20260218190500` — `set_call_delay_to_1_second`
-- `20260430120000` — `add_state_version`
-- `20260430120100` — `set_call_delay_default_2`
-- `20260430120200` — `backfill_call_delay_to_2`
-- `20260430120300` — `atomic_admin_mutations`
-- `20260430120400` — `tighten_profiles_select`
-- `20260729120000` - `atomic_host_mutations`
-- `20260729120100` - `public_reveal_delay`
-- `20260729120200` - `ensure_realtime_publication`
+- `20251201000000` - `baseline_schema`
+- `20251221101434` - `add_active_game_id`
+- `20251221101435` - `add_controller_locking`
+- `20251221101436` - `fix_host_permissions`
+- `20251221101437` - `enable_realtime_sessions`
+- `20251221101438` - `add_game_states_public`
+- `20260218143000` - `add_jackpot_game_type`
+- `20260218170000` - `add_winner_snowball_eligibility`
+- `20260430094038` - `add_state_version`
+- `20260430094057` - `set_call_delay_default_2`
+- `20260430094536` - `backfill_call_delay_to_2`
+- `20260430124120` - `atomic_admin_mutations`
+- `20260430124207` - `reset_session_safe_status_ready`
+- `20260430124552` - `tighten_profiles_select`
+- `20260527063058` - `security_hardening_2026_05_27`
+- `20260527080524` - `lockdown_admin_functions_2026_05_27`
+- `20260729231841` - `snowball_audit_and_settlement_guard`
+- `20260729231901` - `ensure_realtime_publication`
+- `20260729231945` - `atomic_host_mutations`
+- `20260729232141` - `public_reveal_delay`
+- `20260730064309` - `winner_idempotency_key`
+- `20260730065446` - `host_can_mark_prize_given`
+- `20260730065531` - `atomic_snowball_settlement`
+- `20260730065639` - `harden_settle_snowball_pot_anon_grant`
+- `20260730070705` - `revoke_anon_execute_on_host_rpcs`
+- `20260730072329` - `revoke_anon_on_bump_game_state_version`
 
 ## `state_version` — Live-State Ordering Field
 
-Both `game_states` and `game_states_public` carry a `state_version bigint not null default 0` column (added by `supabase/migrations/20260430120000_add_state_version.sql`).
+Both `game_states` and `game_states_public` carry a `state_version bigint not null default 0` column (added by `supabase/migrations/20260430094038_add_state_version.sql`).
 
 - The **`bump_game_state_version` BEFORE UPDATE trigger** on `game_states` increments `new.state_version` to `coalesce(old.state_version, 0) + 1` on every row update.
 - The **`sync_game_states_public()` trigger** propagates the row (including the just-bumped `state_version`) into `game_states_public` so the public mirror always carries the same version.
@@ -74,7 +103,7 @@ Both `game_states` and `game_states_public` carry a `state_version bigint not nu
 
 ## `call_delay_seconds` is the Public Reveal Delay
 
-`call_delay_seconds` (on both `game_states` and `game_states_public`) used to do two jobs: the server's minimum gap between host calls, and the delay before the public screens showed a ball. Since `supabase/migrations/20260729120100_public_reveal_delay.sql` it means **only** the public reveal delay: how long `/display` and `/player` wait after `last_call_at` before revealing a ball. Default and backfilled value is `3`, and a `comment on column` on both tables records the meaning.
+`call_delay_seconds` (on both `game_states` and `game_states_public`) used to do two jobs: the server's minimum gap between host calls, and the delay before the public screens showed a ball. Since `supabase/migrations/20260729232141_public_reveal_delay.sql` it means **only** the public reveal delay: how long `/display` and `/player` wait after `last_call_at` before revealing a ball. Default and backfilled value is `3`, and a `comment on column` on both tables records the meaning.
 
 The host gap is a separate constant, `HOST_MIN_CALL_GAP_MS` in `src/lib/call-timing.ts`, passed into `call_next_number` as `p_min_gap_ms`. It is an anti-double-tap window only. Do not reintroduce `call_delay_seconds` as a host gap: with the new code that would put seconds back between the host's calls.
 

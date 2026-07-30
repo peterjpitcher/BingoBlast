@@ -1,5 +1,5 @@
 -- Put bump_game_state_version() into the ACL production has, so
--- 20260730150000_revoke_anon_on_bump_game_state_version.sql has something real
+-- 20260730072329_revoke_anon_on_bump_game_state_version.sql has something real
 -- to repair.
 --
 -- Run against a throwaway database via supabase/tests/run.sh, never against a
