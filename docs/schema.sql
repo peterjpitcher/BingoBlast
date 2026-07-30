@@ -1,5 +1,28 @@
 -- Anchor Bingo Database Schema
--- Run this in the Supabase SQL Editor
+--
+-- WHAT THIS IS. A readable reference for the shape of the database: tables,
+-- columns, defaults, indexes, RLS policies, sync triggers and the Realtime
+-- publication. Kept in step with supabase/migrations/ by hand.
+--
+-- WHAT THIS IS NOT. It is not the whole database and it is not the setup path.
+-- The application also depends on these Postgres functions, which are defined
+-- only in the migrations along with their grants and revokes:
+--
+--   call_next_number, void_last_number, record_winner_atomic,
+--   assert_is_admin, assert_is_host,
+--   delete_game_safe, delete_session_safe, reset_session_safe, update_game_safe
+--
+-- A project built from this file alone has the right table shape but a
+-- non-functional host screen. They are deliberately not duplicated here: they
+-- are large, they change more often than the tables do, and a second copy would
+-- drift silently.
+--
+-- TO SET UP A FRESH PROJECT, run the migrations. They are all guarded with
+-- "if not exists" and are safe to re-run:
+--
+--   npx supabase db push
+--
+-- Migrations are the source of truth. If you change one, update this file too.
 
 -- 1. ENUMS
 create type user_role as enum ('admin', 'host');
@@ -17,7 +40,9 @@ create table public.profiles (
 );
 -- Secure the profiles table
 alter table public.profiles enable row level security;
-create policy "Public profiles are viewable by everyone." on public.profiles for select using (true);
+-- SELECT is restricted to authenticated users. Using (true) with the default public
+-- role let anonymous clients enumerate staff emails and roles.
+create policy "Authenticated users can view profiles" on public.profiles for select to authenticated using (true);
 create policy "Users can insert their own profile." on public.profiles for insert with check (auth.uid() = id);
 create policy "Admins can update profiles." on public.profiles for update using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
@@ -66,7 +91,11 @@ create table public.sessions (
   status session_status default 'draft'::session_status,
   is_test_session boolean default false,
   created_by uuid references public.profiles(id),
-  active_game_id uuid references public.games(id), -- New: ID of the game currently active on display
+  -- The foreign key to public.games is added in section 5, after that table
+  -- exists. Declared inline here it made this file impossible to run top to
+  -- bottom: games is created below, so a fresh run failed on this line with
+  -- 'relation "public.games" does not exist'.
+  active_game_id uuid, -- New: ID of the game currently active on display
   created_at timestamptz default now()
 );
 alter table public.sessions enable row level security;
@@ -77,6 +106,10 @@ create policy "Admins can manage sessions" on public.sessions for all using (
 create policy "Hosts can update sessions" on public.sessions for update using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'host')
 );
+
+-- Enable Realtime for sessions. /display and /player watch active_game_id so they
+-- switch over when the host starts a game.
+alter publication supabase_realtime add table public.sessions;
 
 -- 5. GAMES
 create table public.games (
@@ -98,6 +131,13 @@ create policy "Admins can manage games" on public.games for all using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
 
+-- sessions.active_game_id -> games.id, deferred from section 4 because sessions
+-- is created before games. The constraint name and shape match production
+-- exactly: sessions_active_game_id_fkey, no on delete clause.
+alter table public.sessions
+  add constraint sessions_active_game_id_fkey
+  foreign key (active_game_id) references public.games(id);
+
 -- 6. GAME STATE (Realtime frequent updates)
 create table public.game_states (
   id uuid default gen_random_uuid() primary key,
@@ -107,7 +147,7 @@ create table public.game_states (
   numbers_called_count int default 0,
   current_stage_index int default 0,
   status game_status default 'not_started'::game_status,
-  call_delay_seconds int default 2,
+  call_delay_seconds int default 3, -- Public reveal delay: how long /display and /player wait after last_call_at before showing a ball. NOT the host call gap (that is HOST_MIN_CALL_GAP_MS in src/lib/call-timing.ts)
   on_break boolean default false,
   paused_for_validation boolean default false,
   display_win_type text default null, -- 'line', 'two_lines', 'full_house', 'snowball'
@@ -145,7 +185,7 @@ create table public.game_states_public (
   numbers_called_count int default 0,
   current_stage_index int default 0,
   status game_status default 'not_started'::game_status,
-  call_delay_seconds int default 2,
+  call_delay_seconds int default 3, -- Mirror of game_states.call_delay_seconds. Public reveal delay, not a host call gap.
   on_break boolean default false,
   paused_for_validation boolean default false,
   display_win_type text default null,
@@ -262,6 +302,7 @@ create table public.winners (
   prize_description text,
   prize_given boolean default false,
   call_count_at_win int,
+  is_snowball_eligible boolean not null default false, -- Whether the winner is eligible to receive the snowball jackpot (attendance rule)
   is_snowball_jackpot boolean default false,
   is_void boolean default false,
   void_reason text,
@@ -287,6 +328,7 @@ create policy "Admins can update winners" on public.winners for update using (
 create table public.snowball_pot_history (
   id uuid default gen_random_uuid() primary key,
   snowball_pot_id uuid references public.snowball_pots(id) not null,
+  game_id uuid references public.games(id) on delete set null, -- The game whose end settled the pot. Null on manual admin adjustments.
   change_type text, -- 'manual_adjust', 'game_won', 'rollover'
   old_val_max int,
   new_val_max int,
@@ -295,7 +337,19 @@ create table public.snowball_pot_history (
   changed_by uuid references public.profiles(id),
   created_at timestamptz default now()
 );
+
+-- Once-per-game settlement guard. The audit row doubles as the settlement claim:
+-- a second settlement attempt for the same game raises 23505 instead of moving the
+-- pot again. Partial, so multiple null-game_id rows (manual adjustments) stay legal.
+create unique index snowball_pot_history_pot_game_unique
+  on public.snowball_pot_history (snowball_pot_id, game_id)
+  where game_id is not null;
+
 alter table public.snowball_pot_history enable row level security;
 create policy "Admins view history" on public.snowball_pot_history for select using (
+  exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+);
+-- Without this INSERT policy every audit write is rejected and the pot cannot settle.
+create policy "Admins insert history" on public.snowball_pot_history for insert with check (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );

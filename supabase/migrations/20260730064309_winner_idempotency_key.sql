@@ -1,6 +1,6 @@
 -- Migration: give record_winner_atomic an idempotency key.
 --
--- The problem this closes. 20260729120000_atomic_host_mutations.sql made the
+-- The problem this closes. 20260729231945_atomic_host_mutations.sql made the
 -- winner insert and the win-display update one transaction, so a FAILED call
 -- leaves nothing behind. It says plainly what that does not cover: a call that
 -- commits in the database but whose response is lost on the way back to the host

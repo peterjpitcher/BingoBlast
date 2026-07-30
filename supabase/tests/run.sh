@@ -10,7 +10,7 @@
 #
 # The order below is the real upgrade path, not a shortcut: the harness schema has
 # winners WITHOUT client_request_id and two rows already in it, then
-# 20260729120000 installs the 7-argument record_winner_atomic, then
+# 20260729231945 installs the 7-argument record_winner_atomic, then
 # 20260730120000 drops that and installs the 8-argument version. So the run also
 # proves the migration lands on a populated table and that no ambiguous overload
 # is left behind.
@@ -43,11 +43,11 @@ echo "==> building the harness schema and fixtures"
 psql_strict -d postgres -c 'create database bingo_test;'
 psql_strict -d bingo_test -f "$HERE/harness-schema.sql"
 
-echo "==> applying 20260729120000_atomic_host_mutations.sql"
-psql_strict -d bingo_test -f "$MIGRATIONS/20260729120000_atomic_host_mutations.sql"
+echo "==> applying 20260729231945_atomic_host_mutations.sql"
+psql_strict -d bingo_test -f "$MIGRATIONS/20260729231945_atomic_host_mutations.sql"
 
-echo "==> applying 20260730120000_winner_idempotency_key.sql"
-psql_strict -d bingo_test -f "$MIGRATIONS/20260730120000_winner_idempotency_key.sql"
+echo "==> applying 20260730064309_winner_idempotency_key.sql"
+psql_strict -d bingo_test -f "$MIGRATIONS/20260730064309_winner_idempotency_key.sql"
 
 echo "==> running assertions"
 psql -d bingo_test -f "$HERE/winner-idempotency.test.sql"

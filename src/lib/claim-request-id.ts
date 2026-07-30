@@ -12,7 +12,7 @@
  * for every attempt at that claim including retries, and mint a fresh one for
  * the next claim. "Validate Another Winner" is a next claim.
  *
- * See supabase/migrations/20260730120000_winner_idempotency_key.sql.
+ * See supabase/migrations/20260730064309_winner_idempotency_key.sql.
  */
 
 /**

@@ -68,17 +68,21 @@ export default async function GameControlPage({ params }: PageProps) {
     redirect('/host');
   }
 
-  // Determine whether this is the first game of the session — controls whether
-  // the pre-game briefing surfaces the house rules block.
-  const { data: firstGame } = await supabase
+  // First game controls whether the pre-game briefing shows the house rules.
+  // Last game controls the wording of the post-win buttons: on the final game
+  // there is no next game to move to, so calling it "Move to Next Game" tells
+  // the host the button is not for them and leaves the game running for ever.
+  const { data: gameIndexes } = await supabase
     .from('games')
     .select('game_index')
     .eq('session_id', sessionId)
     .order('game_index', { ascending: true })
-    .limit(1)
-    .single<{ game_index: number }>();
+    .returns<{ game_index: number }[]>();
 
-  const isFirstGameOfSession = !!firstGame && game.game_index === firstGame.game_index;
+  const indexes = gameIndexes ?? [];
+  const isFirstGameOfSession = indexes.length > 0 && game.game_index === indexes[0].game_index;
+  const isLastGameOfSession =
+    indexes.length > 0 && game.game_index === indexes[indexes.length - 1].game_index;
 
   return (
     <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white">
@@ -112,6 +116,7 @@ export default async function GameControlPage({ params }: PageProps) {
         currentUserId={user.id}
         currentUserRole={profile?.role || 'host'}
         isFirstGameOfSession={isFirstGameOfSession}
+        isLastGameOfSession={isLastGameOfSession}
       />
     </div>
   );

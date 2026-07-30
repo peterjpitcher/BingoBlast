@@ -1,4 +1,4 @@
--- Assertions for 20260730120000_winner_idempotency_key.sql.
+-- Assertions for 20260730064309_winner_idempotency_key.sql.
 --
 -- Run against a throwaway database via supabase/tests/run.sh, never against a
 -- real project: it writes and deletes winners rows freely.
