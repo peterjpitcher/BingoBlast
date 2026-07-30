@@ -1,0 +1,43 @@
+-- Reconstructed migration file: harden_settle_snowball_pot_anon_grant
+--
+-- PROVENANCE
+--   Applied to production (Supabase project bcmorqsgeumtmhvctvgu, "BingoBlast")
+--   on 2026-07-30 at applied version 20260730065639. No file for it existed in
+--   this repository, and no branch carried one; recovered on 2026-07-30 from the
+--   exact SQL stored in supabase_migrations.schema_migrations.statements for
+--   that version. The executable statement below is that stored statement,
+--   reproduced verbatim.
+--
+-- WHY IT EXISTS
+--   A production-only follow-up to 20260730065531 (atomic_snowball_settlement),
+--   applied eight minutes later. The commentary stored with the applied
+--   statement reads:
+--
+--     "Supabase default privileges grant EXECUTE on new public-schema functions
+--      to anon, and 'revoke ... from public' does not remove an explicit grant
+--      to a named role. settle_snowball_pot is a money function and must not be
+--      reachable by an unauthenticated role, even though assert_is_host()
+--      already rejects it because auth.uid() is null. Folded into
+--      supabase/migrations/20260730120000_atomic_snowball_settlement.sql in the
+--      repo, so a fresh database gets this end state from that file alone."
+--
+--   That repo path has since been renamed to
+--   20260730065531_atomic_snowball_settlement.sql, to match the version
+--   production actually applied. The fold is real: that file already carries
+--   "revoke all on function public.settle_snowball_pot(uuid) from anon;"
+--   alongside its revoke-from-public, so a rebuild reaches this end state
+--   without needing this file at all.
+--
+-- REBUILD IMPACT: none. This is a re-run of a revoke that
+--   20260730065531_atomic_snowball_settlement.sql already performs. It exists
+--   for migration-history parity, so the remote version 20260730065639 has a
+--   local counterpart and `supabase db push` stops aborting with "Remote
+--   migration versions not found in local migrations directory".
+--
+-- VERIFIED AGAINST LIVE STATE (read-only, 2026-07-30)
+--   anon holds no EXECUTE on public.settle_snowball_pot(uuid) in production.
+--
+-- IDEMPOTENT: yes, revoking a privilege that is not held is a no-op.
+-- NOT re-applied to production; production already holds this end state.
+
+revoke all on function public.settle_snowball_pot(uuid) from anon;

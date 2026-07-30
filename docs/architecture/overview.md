@@ -91,7 +91,7 @@ Recent migration `20260430120300_atomic_admin_mutations.sql` introduces four sec
 
 Each performs precheck-and-mutate atomically under a row lock so a host cannot start a game (or insert a winner) between the application-layer check and the destructive write.
 
-`20260729120000_atomic_host_mutations.sql` extends the same pattern to the live host path with `assert_is_host`, `call_next_number`, `void_last_number` and `record_winner_atomic`. `20260730120000_atomic_snowball_settlement.sql` adds `settle_snowball_pot` on the same pattern, which also keeps `snowball_pots` and `snowball_pot_history` admin-only in RLS while still letting a host settle a pot. See [[server-actions]] for the action contract and [[data-model]] for the locking behaviour.
+`20260729231945_atomic_host_mutations.sql` extends the same pattern to the live host path with `assert_is_host`, `call_next_number`, `void_last_number` and `record_winner_atomic`. `20260730120000_atomic_snowball_settlement.sql` adds `settle_snowball_pot` on the same pattern, which also keeps `snowball_pots` and `snowball_pot_history` admin-only in RLS while still letting a host settle a pot. See [[server-actions]] for the action contract and [[data-model]] for the locking behaviour.
 
 ## Cross-references
 

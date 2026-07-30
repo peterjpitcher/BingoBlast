@@ -32,7 +32,7 @@
 -- flag is housekeeping, and an admin could already do the same with a direct
 -- PATCH under the existing policy.
 --
--- Conventions follow 20260729120000_atomic_host_mutations.sql: plpgsql, security
+-- Conventions follow 20260729231945_atomic_host_mutations.sql: plpgsql, security
 -- definer, set search_path = public, row lock via "for update", revoke all from
 -- public then grant execute to authenticated and service_role. Like every other
 -- host RPC this goes through assert_is_host() and so reads auth.uid(): it must be

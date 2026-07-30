@@ -25,7 +25,7 @@ export type SnowballSettlementOutcome =
 
 /**
  * One row from settle_snowball_pot. Defined in
- * supabase/migrations/20260730120000_atomic_snowball_settlement.sql.
+ * supabase/migrations/20260730065531_atomic_snowball_settlement.sql.
  *
  * settlement is null unless this call actually moved the pot. Every other field
  * is null on the 'not_snowball' and 'test_session' outcomes.
@@ -539,7 +539,7 @@ export interface Database {
       /**
        * Writes only winners.prize_given, so a host can tick a prize as handed
        * over without gaining is_void. Returns the persisted value.
-       * Defined in supabase/migrations/20260730130000_host_can_mark_prize_given.sql.
+       * Defined in supabase/migrations/20260730065446_host_can_mark_prize_given.sql.
        */
       set_winner_prize_given: {
         Args: {

@@ -234,7 +234,7 @@ interface SnowballSettlementResult {
  * writes the audit claim and moves the pot together, and works out reset vs
  * rollover from the winners table server-side. The host names a game id and
  * nothing else: there is no value the client can choose. See
- * supabase/migrations/20260730120000_atomic_snowball_settlement.sql.
+ * supabase/migrations/20260730065531_atomic_snowball_settlement.sql.
  *
  * That function is security definer, which is what lets a host-role account
  * settle while snowball_pots UPDATE and snowball_pot_history INSERT both stay
@@ -1300,7 +1300,7 @@ export async function recordWinner(
  * nothing had been written. The function is security definer, writes exactly the
  * prize_given column, and returns the persisted value so a write that did not
  * land is a real error here. Voiding a win stays admin-only, see
- * supabase/migrations/20260730130000_host_can_mark_prize_given.sql.
+ * supabase/migrations/20260730065446_host_can_mark_prize_given.sql.
  */
 export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, winnerId: string, prizeGiven: boolean): Promise<ActionResult> {
     const startedAtMs = Date.now();

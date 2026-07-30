@@ -29,7 +29,7 @@
 -- server-side from the pot row itself. The host supplies a game id and nothing
 -- else. There is no value a host can name.
 --
--- Conventions follow 20260729120000_atomic_host_mutations.sql: plpgsql, security
+-- Conventions follow 20260729231945_atomic_host_mutations.sql: plpgsql, security
 -- definer, set search_path = public, row lock via "for update", revoke all from
 -- public then grant execute to authenticated and service_role. The function is
 -- owned by postgres, which owns both tables and does not have
@@ -203,7 +203,7 @@ comment on function public.settle_snowball_pot(uuid) is
 -- call the function; assert_is_host() still rejects it, because auth.uid() is
 -- null, but a money function should not be reachable by an unauthenticated role
 -- at all. Verified in production: the four functions from
--- 20260729120000_atomic_host_mutations.sql all carry anon EXECUTE for exactly
+-- 20260729231945_atomic_host_mutations.sql all carry anon EXECUTE for exactly
 -- this reason, while the older admin RPCs do not.
 revoke all on function public.settle_snowball_pot(uuid) from public;
 revoke all on function public.settle_snowball_pot(uuid) from anon;
