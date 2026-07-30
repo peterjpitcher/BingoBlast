@@ -115,5 +115,7 @@ All host actions wrap mutations in auth checks and call `revalidatePath('/host')
 | `record_winner_atomic` | `recordWinner` | Winner insert plus win-display update in one transaction; re-checks the snowball jackpot window |
 | `set_winner_prize_given` | `toggleWinnerPrizeGiven` | Writes only `winners.prize_given` and returns the persisted value. Exists because the `winners` UPDATE policy is admin-only: a host's direct update matched zero rows and, with no `.select()`, was reported as success. Deliberately does **not** grant hosts `is_void` |
 | `assert_is_host` | the host functions above | Raises unless `profiles.role` is `admin` or `host` |
+| `settle_snowball_pot` | `handleSnowballPotUpdate`, called by `endGame`, `advanceToNextStage` and `skipStage` | Audit claim plus pot move in one transaction under a `for update` lock on the pot row. Derives reset-vs-rollover and both new values server-side, so a host settles without `snowball_pots` or `snowball_pot_history` granting a host any write access |
+| `assert_is_host` | the four host functions above | Raises unless `profiles.role` is `admin` or `host` |
 
 See [[relationships]] for the table → action and action → caller cross-reference.
