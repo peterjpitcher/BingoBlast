@@ -12,6 +12,32 @@ export type GameType = 'standard' | 'snowball' | 'jackpot'
 export type GameStatus = 'not_started' | 'in_progress' | 'completed'
 export type WinStage = 'Line' | 'Two Lines' | 'Full House'
 
+/**
+ * What settle_snowball_pot did. Only 'settled' moved the pot. The other three
+ * all mean the pot is already correct and nothing needed doing, so none of them
+ * is a failure the host should see.
+ */
+export type SnowballSettlementOutcome =
+  | 'settled'
+  | 'already_settled'
+  | 'not_snowball'
+  | 'test_session'
+
+/**
+ * One row from settle_snowball_pot. Defined in
+ * supabase/migrations/20260730120000_atomic_snowball_settlement.sql.
+ *
+ * settlement is null unless this call actually moved the pot. Every other field
+ * is null on the 'not_snowball' and 'test_session' outcomes.
+ */
+export interface SnowballSettlementRow {
+  outcome: SnowballSettlementOutcome
+  settlement: 'reset' | 'rollover' | null
+  pot_id: string | null
+  new_max_calls: number | null
+  new_jackpot_amount: number | null
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -495,6 +521,16 @@ export interface Database {
           p_snowball_eligible?: boolean
         }
         Returns: Database['public']['Tables']['game_states']['Row']
+      }
+      /**
+       * Settles the snowball pot for a finished game in one transaction. Host
+       * callable, which is why snowball_pots and snowball_pot_history keep
+       * admin-only RLS. Also security definer and auth.uid()-reading, so it
+       * needs the cookie-based client, never the service-role client.
+       */
+      settle_snowball_pot: {
+        Args: { p_game_id: string }
+        Returns: SnowballSettlementRow[]
       }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }
