@@ -21,6 +21,15 @@ begin
 end;
 $$ language plpgsql;
 
+-- No role calls a trigger function by hand, and a function returning trigger
+-- cannot be invoked directly anyway. Revoke both grantees: CREATE FUNCTION gives
+-- PUBLIC an EXECUTE grant of its own, ALTER DEFAULT PRIVILEGES adds a named anon
+-- one on top, and anon is a member of PUBLIC, so removing one and not the other
+-- leaves it reachable. Matches what lockdown_admin_functions_2026_05_27 did to
+-- handle_new_user() and sync_game_states_public(); this function was created
+-- after that migration ran, which is the only reason it was ever different.
+revoke execute on function public.bump_game_state_version() from anon, authenticated, public;
+
 drop trigger if exists bump_game_state_version on public.game_states;
 
 create trigger bump_game_state_version

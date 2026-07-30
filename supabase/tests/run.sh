@@ -24,11 +24,14 @@
 #            That is what proves the migration did what it says against the
 #            database it actually ran on.
 #
-# Phase 3 re-applies it to prove it is safe to run twice, phase 4 checks the
-# behaviour rather than the catalogue (host flow still works as authenticated,
-# anon is refused with 42501 before the function body), and phase 5 records the
-# gap none of this closes: the default privileges are still armed for the next
-# function anyone creates.
+# Phase 3 re-applies it to prove it is safe to run twice, and phase 4 checks the
+# behaviour rather than the catalogue: the host flow still works as
+# authenticated, and anon is refused with 42501 before the function body.
+#
+# Phase 5 covers the trigger function lockdown_admin_functions_2026_05_27 missed,
+# where the assertion that matters is not the grant but that state_version is
+# still bumped afterwards. Phase 6 records the gap none of this closes: the
+# default privileges are still armed for the next function anyone creates.
 set -euo pipefail
 
 CONTAINER=bingo-grant-tests
@@ -39,6 +42,7 @@ MIGRATIONS="$HERE/../migrations"
 
 HOST_MUTATIONS="$MIGRATIONS/20260729120000_atomic_host_mutations.sql"
 REVOKE_ANON="$MIGRATIONS/20260730070705_revoke_anon_execute_on_host_rpcs.sql"
+REVOKE_TRIGGER="$MIGRATIONS/20260730150000_revoke_anon_on_bump_game_state_version.sql"
 
 export PGPASSWORD=test
 psql() { command psql -h localhost -p "$PORT" -U postgres -q "$@"; }
@@ -90,8 +94,18 @@ psql_strict -d bingo_test -v phase='after second apply' -f "$HERE/grants.test.sq
 echo "==> phase 4: host flow as authenticated, refusal as anon"
 psql_strict -d bingo_test -f "$HERE/host-flow.test.sql"
 
-# --- Phase 5: the gap that is still open -------------------------------------
-echo "==> phase 5: recording the default-privilege gap none of this closes"
+# --- Phase 5: the trigger function lockdown_admin_functions missed ------------
+echo "==> phase 5: recreating the production ACL on bump_game_state_version"
+psql_strict -d bingo_test -f "$HERE/trigger-grant-drift.sql"
+
+echo "==> phase 5: applying $(basename "$REVOKE_TRIGGER")"
+psql_strict -d bingo_test -f "$REVOKE_TRIGGER"
+
+echo "==> phase 5: asserting the revoke, and that the trigger still fires"
+psql_strict -d bingo_test -f "$HERE/trigger-grant.test.sql"
+
+# --- Phase 6: the gap that is still open -------------------------------------
+echo "==> phase 6: recording the default-privilege gap none of this closes"
 psql_strict -d bingo_test -f "$HERE/convention-gap.test.sql"
 
 # --- Results -----------------------------------------------------------------
