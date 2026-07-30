@@ -38,10 +38,26 @@ See [[relationships]] for the inverse mapping (table → actions that touch it).
 | `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session |
 | `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on the `game_states` row: asserts host role, controller, status, remaining balls and the host gap (`p_min_gap_ms`), appends the ball, returns the committed row |
 | `void_last_number` | `voidLastNumber` | Atomic undo under the same row lock: counts non-void winners on the current ball inside the same transaction and refuses when one exists, decrements the count, clears the win display, leaves `last_call_at` untouched |
-| `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked |
+| `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked. Idempotent on `p_client_request_id` |
 | `assert_is_host` | helper, called by the three above | Raises unless `profiles.role` is `admin` or `host` |
 
-The four admin RPCs come from `supabase/migrations/20260430120300_atomic_admin_mutations.sql`; the four host functions from `supabase/migrations/20260729120000_atomic_host_mutations.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
+The four admin RPCs come from `supabase/migrations/20260430120300_atomic_admin_mutations.sql`; the four host functions from `supabase/migrations/20260729120000_atomic_host_mutations.sql`, with `record_winner_atomic` replaced by `supabase/migrations/20260730120000_winner_idempotency_key.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
+
+### Duplicate winners: why the key exists
+
+A transaction protects a call that **fails**. It does nothing for a call that **commits** and then loses its response on the way back to the host's phone. Retried, `record_winner_atomic` used to re-run in full: it mutates none of the fields its prechecks read, so every precheck passed again and a second `winners` row landed at the same stage and the same `call_count_at_win`. The host was then shown the same prize owed twice, and on a snowball Full House two rows carried `is_snowball_jackpot` with the cash amount in `prize_description`. The pot only resets once, so the money was not double-deducted, but the jackpot could be paid out twice.
+
+A unique constraint is not available, because ties are real: two punters can shout on the same ball and both are winners, so `(game_id, stage)` and `(game_id, stage, call_count_at_win)` are legitimately non-unique.
+
+So the identity comes from the caller. `winners.client_request_id` is a nullable `uuid` with a unique index where not null. The host client mints one key when the Record Winner modal opens and sends it with the claim:
+
+- **A retry** is the same tap, so the same key. The function finds it already recorded, inserts nothing, and returns the current `game_states` row rather than raising, so the retry is a safe no-op and the host still lands on Post Win.
+- **A tie** is a different claim, so a different key. Both rows save.
+- **Rows written before this migration** keep a null key. The index ignores nulls, so nothing was backfilled, and a call that omits the key behaves exactly as it did before, with no protection.
+
+The idempotency check runs **before** the controller, status and stage prechecks. Once the write is on record those prechecks can only invent a failure: a lost response gives the game time to move on, and refusing a retry for a win that is already recorded reads to the host as "it did not save". `request_id_reused` is the one case that does raise, for a key presented against a different game, which is a client bug rather than a retry.
+
+What the key does **not** cover: a *fresh* claim on a ticket that was already paid. Reopening Record Winner mints a new key, and it has to, because that is the same path a genuine tie arrives on. `clearSpentClaim()` in `game-control.tsx` is what closes that hole, by making sure the host never sees a live Record Winner button for a win already on record.
 
 ## Migrations Applied
 
