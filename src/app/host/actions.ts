@@ -202,13 +202,14 @@ function generateShuffledNumberSequence(): number[] {
   return numbers;
 }
 
-/** Postgres unique violation. Here it means this game is already settled. */
+/** Postgres unique violation. */
 const UNIQUE_VIOLATION_CODE = '23505'
 
 interface SnowballSettlementResult {
     /**
-     * False ONLY when the pot itself demonstrably did not move. A failed audit
-     * write is not a failed pot write, so it never sets this to false.
+     * False ONLY when the pot itself demonstrably did not move. Three of the four
+     * outcomes settle_snowball_pot can report mean the pot is already correct, so
+     * none of those sets this to false.
      */
     success: boolean
     /** Diagnostic detail for the log. Never shown to the host. */
@@ -219,153 +220,46 @@ interface SnowballSettlementResult {
  * Settles the snowball pot for a game that has just finished: reset if the
  * jackpot was won, rollover if it was not.
  *
- * Once per game, enforced by the database. The audit row in
- * snowball_pot_history carries game_id and is written FIRST, claiming the
- * settlement. A partial unique index on (snowball_pot_id, game_id) turns a
- * second attempt for the same game into a unique violation, which is how a
- * re-opened and re-ended game is stopped from inventing cash. See
- * supabase/migrations/20260729120300_snowball_audit_and_settlement_guard.sql.
+ * One RPC, one transaction. settle_snowball_pot takes a `for update` lock on the
+ * pot row, derives both new values from that row's own base/increment columns,
+ * writes the audit claim and moves the pot together, and works out reset vs
+ * rollover from the winners table server-side. The host names a game id and
+ * nothing else: there is no value the client can choose. See
+ * supabase/migrations/20260730120000_atomic_snowball_settlement.sql.
  *
- * The pot outcome and the audit outcome are reported separately. No path here
- * may tell the host the pot did not move when it did.
+ * That function is security definer, which is what lets a host-role account
+ * settle while snowball_pots UPDATE and snowball_pot_history INSERT both stay
+ * admin-only. Widening those policies instead would have let a host write any
+ * value to the pot by hand-crafted API call.
  *
- * Residual risk to know about: if the claim lands and the pot update then fails,
- * the claim blocks a retry, so that pot has to be corrected by hand on
- * /admin/snowball. The host is told so in plain words, and a missed rollover is
- * correctable in a way that invented cash is not.
+ * Once per game, still enforced by the database: the claim row carries game_id,
+ * and the partial unique index on (snowball_pot_id, game_id) turns a second
+ * attempt into the 'already_settled' outcome, which is how a re-opened and
+ * re-ended game is stopped from inventing cash.
+ *
+ * The old "claim landed but the pot update then failed" gap is gone. Both writes
+ * share one transaction, so a failure leaves no claim behind and the retry
+ * simply works. No pot needs correcting by hand any more.
+ *
+ * Must be called with the cookie-based client. auth.uid() is null under the
+ * service-role client, so the call would be rejected.
  */
-async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, sessionId: string, gameId: string): Promise<SnowballSettlementResult> {
-    // 1. Check session type
-    const { data: session, error: sessionError } = await supabase
-        .from('sessions')
-        .select('is_test_session')
-        .eq('id', sessionId)
-        .single<Pick<Database['public']['Tables']['sessions']['Row'], 'is_test_session'>>();
+async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, gameId: string): Promise<SnowballSettlementResult> {
+    const { data, error } = await supabase.rpc('settle_snowball_pot', { p_game_id: gameId });
 
-    if (sessionError) {
-        return { success: false, error: "Error checking session type for snowball logic: " + sessionError.message };
+    if (error) {
+        return { success: false, error: `Failed to settle the snowball pot: ${error.message}` };
     }
 
-    if (session?.is_test_session) {
-         return { success: true };
+    const settlement = data?.[0];
+    if (!settlement) {
+        return { success: false, error: 'settle_snowball_pot returned no row' };
     }
 
-    // 2. Check game type
-    const { data: gameData, error: gameError } = await supabase
-        .from('games')
-        .select('type, snowball_pot_id')
-        .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'snowball_pot_id'>>();
-
-    if (gameError) {
-        return { success: false, error: 'Error reading game for snowball logic: ' + gameError.message };
-    }
-    if (!gameData) {
-        return { success: false, error: 'Game not found for snowball update' };
-    }
-    if (gameData.type !== 'snowball' || !gameData.snowball_pot_id) return { success: true };
-
-    // 3. Check for jackpot winner. Voided winners must not count: a voided
-    // jackpot winner used to reset the pot at game end, which is a money bug.
-    // is_void is nullable in production, and `eq false` would skip a NULL row
-    // and roll the pot over instead of resetting it, so match NULL as well.
-    // This mirrors coalesce(is_void, false) = false on the SQL side.
-    const { count, error: countError } = await supabase
-        .from('winners')
-        .select('*', { count: 'exact', head: true })
-        .eq('game_id', gameId)
-        .eq('is_snowball_jackpot', true)
-        .not('is_void', 'is', true);
-
-    if (countError) {
-        return { success: false, error: 'Error counting jackpot winners: ' + countError.message };
-    }
-
-    const jackpotWon = count !== null && count > 0;
-
-    const { data: potData, error: potReadError } = await supabase
-        .from('snowball_pots')
-        .select('*')
-        .eq('id', gameData.snowball_pot_id)
-        .single<Database['public']['Tables']['snowball_pots']['Row']>();
-
-    if (potReadError) {
-        return { success: false, error: 'Error reading snowball pot: ' + potReadError.message };
-    }
-    if (!potData) {
-        return { success: false, error: 'Snowball pot row missing for configured pot id' };
-    }
-
-    // 4. Work out both sides of the move before writing anything, so the audit
-    // row can be written first and stand as the settlement claim.
-    const newMaxCalls = jackpotWon
-        ? potData.base_max_calls
-        : potData.current_max_calls + potData.calls_increment;
-    const newJackpot = jackpotWon
-        ? Number(potData.base_jackpot_amount)
-        : Number(potData.current_jackpot_amount) + Number(potData.jackpot_increment);
-    const settlementLabel = jackpotWon ? 'reset' : 'rollover';
-
-    // 5. Claim the settlement. The unique index on (snowball_pot_id, game_id) is
-    // the guard: if this game has already been settled, the insert fails with
-    // 23505 and the pot is left exactly where it is.
-    const historyRow: Database['public']['Tables']['snowball_pot_history']['Insert'] = {
-        snowball_pot_id: potData.id,
-        game_id: gameId,
-        change_type: jackpotWon ? 'jackpot_won' : 'rollover',
-        old_val_max: potData.current_max_calls,
-        new_val_max: newMaxCalls,
-        old_val_jackpot: potData.current_jackpot_amount,
-        new_val_jackpot: newJackpot,
-    };
-    const { error: historyError } = await supabase
-        .from('snowball_pot_history')
-        .insert(historyRow);
-
-    if (historyError?.code === UNIQUE_VIOLATION_CODE) {
-        // Already settled once, most likely a completed game re-opened and ended
-        // again. Report success: the pot is correct, it just moved earlier.
-        logActionFailure('handleSnowballPotUpdate', `${settlementLabel} already settled for this game, pot left unchanged`);
-        return { success: true };
-    }
-
-    if (historyError) {
-        // The claim could not be written for some other reason (a transient
-        // network or RLS failure). Settle anyway and log loudly. Reasoning: a
-        // missed rollover is visible on /admin/snowball and a host can correct
-        // it, whereas a double rollover invents cash out of nothing. A transient
-        // write error is far more likely than a deliberate game re-open, so the
-        // safer bet is to settle once and leave a loud audit gap behind.
-        logActionFailure('handleSnowballPotUpdate', historyError);
-        logActionFailure('handleSnowballPotUpdate', `settling ${settlementLabel} without an audit row; check /admin/snowball`);
-    }
-
-    // 6. Move the pot. Without .select() an RLS-filtered update returns no error
-    // and no rows, which used to be reported to the host as success.
-    const potUpdate: Database['public']['Tables']['snowball_pots']['Update'] = jackpotWon
-        ? {
-            current_max_calls: newMaxCalls,
-            current_jackpot_amount: newJackpot,
-            last_awarded_at: new Date().toISOString(),
-        }
-        : {
-            current_max_calls: newMaxCalls,
-            current_jackpot_amount: newJackpot,
-        };
-    const { data: updatedPots, error: potError } = await supabase
-        .from('snowball_pots')
-        .update(potUpdate)
-        .eq('id', potData.id)
-        .select('id');
-
-    if (potError) {
-        return { success: false, error: `Failed to ${settlementLabel} the snowball pot: ${potError.message}` };
-    }
-    if (!updatedPots || updatedPots.length === 0) {
-        return {
-            success: false,
-            error: `Snowball pot ${settlementLabel} matched no rows. The signed-in account probably lacks admin rights on snowball_pots.`,
-        };
+    if (settlement.outcome === 'already_settled') {
+        // Most likely a completed game re-opened and ended again. The pot is
+        // correct, it simply moved earlier, so this is a success.
+        logActionFailure('handleSnowballPotUpdate', 'already settled for this game, pot left unchanged');
     }
 
     return { success: true };
@@ -903,7 +797,7 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
 
     // Use the shared helper for Snowball Logic. A pot failure here does not stop
     // the game ending, exactly as before, but it is no longer silent.
-    const potResult = await handleSnowballPotUpdate(supabase, sessionId, gameId);
+    const potResult = await handleSnowballPotUpdate(supabase, gameId);
     if (!potResult.success) {
         logActionFailure('endGame', potResult.error ?? 'snowball pot update failed');
     }
@@ -1312,7 +1206,7 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult<{
     // This only fires when the pot itself did not move. A missing audit row is
     // logged inside the helper and never reported to the host as a pot failure.
     if (newGameStatus === 'completed') {
-        const potResult = await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
+        const potResult = await handleSnowballPotUpdate(supabase, gameId);
         if (!potResult.success) {
             return failure('advanceToNextStage', SNOWBALL_POT_NOT_MOVED_ERROR, potResult.error);
         }
@@ -1534,7 +1428,7 @@ export async function skipStage(gameId: string): Promise<ActionResult<{ gameStat
 
     if (newStatus === 'completed') {
         // As in advanceToNextStage: only a genuine pot failure reaches the host.
-        const potResult = await handleSnowballPotUpdate(supabase, gameDetails.session_id, gameId);
+        const potResult = await handleSnowballPotUpdate(supabase, gameId);
         if (!potResult.success) {
             return failure('skipStage', SNOWBALL_POT_NOT_MOVED_ERROR, potResult.error);
         }
