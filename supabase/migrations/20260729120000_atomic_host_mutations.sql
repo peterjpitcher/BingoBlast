@@ -34,6 +34,16 @@
 -- The service_role grant matches the hardened privilege set every other RPC in
 -- this schema carries in production.
 --
+-- Each function also revokes EXECUTE from anon explicitly. This is NOT redundant
+-- with the revoke from PUBLIC: ALTER DEFAULT PRIVILEGES on this project grants
+-- EXECUTE on every new public-schema function to the named role anon, and
+-- revoking from PUBLIC does not touch a grant held by a named role. Without the
+-- anon line these functions are created anon-callable. Dropping it silently
+-- re-opens that. 20260730070705_revoke_anon_execute_on_host_rpcs.sql is the same
+-- revoke applied to the production database, which was built from this file
+-- before these lines existed; the lines here are what stop a FRESH database ever
+-- passing through that state in the first place.
+--
 -- IMPORTANT for callers: every function here goes through assert_is_host(),
 -- which reads auth.uid(). They must be invoked with the cookie-based Supabase
 -- client (the authenticated role), never the service-role client, because
@@ -81,6 +91,7 @@ end;
 $$;
 
 revoke all on function public.assert_is_host() from public;
+revoke execute on function public.assert_is_host() from anon;
 grant execute on function public.assert_is_host() to authenticated;
 grant execute on function public.assert_is_host() to service_role;
 
@@ -170,6 +181,7 @@ end;
 $$;
 
 revoke all on function public.call_next_number(uuid, int) from public;
+revoke execute on function public.call_next_number(uuid, int) from anon;
 grant execute on function public.call_next_number(uuid, int) to authenticated;
 grant execute on function public.call_next_number(uuid, int) to service_role;
 
@@ -264,6 +276,7 @@ end;
 $$;
 
 revoke all on function public.void_last_number(uuid) from public;
+revoke execute on function public.void_last_number(uuid) from anon;
 grant execute on function public.void_last_number(uuid) to authenticated;
 grant execute on function public.void_last_number(uuid) to service_role;
 
@@ -471,5 +484,6 @@ end;
 $$;
 
 revoke all on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) from public;
+revoke execute on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) from anon;
 grant execute on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) to authenticated;
 grant execute on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean) to service_role;
