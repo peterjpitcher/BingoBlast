@@ -496,6 +496,19 @@ export interface Database {
         }
         Returns: Database['public']['Tables']['game_states']['Row']
       }
+      /**
+       * Writes only winners.prize_given, so a host can tick a prize as handed
+       * over without gaining is_void. Returns the persisted value.
+       * Defined in supabase/migrations/20260730130000_host_can_mark_prize_given.sql.
+       */
+      set_winner_prize_given: {
+        Args: {
+          p_winner_id: string
+          p_session_id: string
+          p_prize_given: boolean
+        }
+        Returns: boolean
+      }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }
       reset_session_safe: { Args: { p_session_id: string }; Returns: undefined }

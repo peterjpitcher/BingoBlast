@@ -366,13 +366,20 @@ export async function voidWinner(winnerId: string, voidReason: string): Promise<
     return { success: false, error: 'Void reason is required.' }
   }
 
-  const { error } = await supabase
+  // .select() matters here. Without it an update that matched nothing, whether
+  // because the id was stale or because RLS filtered the row, returns no error
+  // and no rows, and this action used to report that as success.
+  const { data: voidedWinners, error } = await supabase
     .from('winners')
     .update({ is_void: true, void_reason: voidReason.trim() })
     .eq('id', winnerId)
+    .select('id')
 
   if (error) {
     return { success: false, error: error.message }
+  }
+  if (!voidedWinners || voidedWinners.length === 0) {
+    return { success: false, error: 'That winner could not be voided. Reload and check it still exists.' }
   }
 
   return { success: true }
