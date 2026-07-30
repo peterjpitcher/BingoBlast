@@ -91,7 +91,7 @@ create table public.sessions (
   status session_status default 'draft'::session_status,
   is_test_session boolean default false,
   created_by uuid references public.profiles(id),
-  -- active_game_id is added after the games table below, because it references it.
+  active_game_id uuid references public.games(id), -- New: ID of the game currently active on display
   created_at timestamptz default now()
 );
 alter table public.sessions enable row level security;
@@ -126,10 +126,6 @@ create policy "Read access for all" on public.games for select using (true);
 create policy "Admins can manage games" on public.games for all using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
-
--- The game currently active on the display. Deferred to here so the foreign key
--- can resolve; sessions is created before games.
-alter table public.sessions add column active_game_id uuid references public.games(id);
 
 -- 6. GAME STATE (Realtime frequent updates)
 create table public.game_states (
