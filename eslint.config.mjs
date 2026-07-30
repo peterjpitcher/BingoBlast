@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Per-machine Claude Code cache. .claude/worktrees holds full checkouts of
+    // this repo while background tasks run, so without this every worktree gets
+    // linted as if it were source and `npm run lint` reports thousands of
+    // problems that are not in the project at all.
+    ".claude/**",
   ]),
 ]);
 
