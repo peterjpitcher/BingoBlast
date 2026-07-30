@@ -208,6 +208,31 @@ do $$ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- Reproduce the production default privileges. Without this the container is a
+-- friendlier database than the real one and any grant assertion passes for the
+-- wrong reason: anon would never have held EXECUTE in the first place, so a
+-- migration that revokes nothing would still look correct.
+--
+-- Read off production (project bcmorqsgeumtmhvctvgu) on 2026-07-30 from
+-- pg_default_acl, which holds two entries for schema public, objtype 'f':
+--   grantor postgres        -> postgres=X, anon=X, authenticated=X, service_role=X
+--   grantor supabase_admin  -> postgres=X, anon=X, authenticated=X, service_role=X
+-- Only the postgres one is reproduced here, because psql connects to this
+-- container as postgres and default privileges key off the creating role. That
+-- is enough: it is the entry that put anon=X/postgres on the four host RPCs.
+--
+-- This is what makes "revoke all ... from public" insufficient. PUBLIC and anon
+-- are different grantees, so revoking from the former leaves the latter intact.
+-- ---------------------------------------------------------------------------
+alter default privileges for role postgres in schema public
+  grant execute on functions to anon, authenticated, service_role;
+
+-- A canary that proves the line above is live. grants.test.sql asserts anon can
+-- execute this despite it carrying no explicit grant of its own.
+create or replace function public.probe_default_privileges()
+returns boolean language sql immutable as $$ select true $$;
+
+-- ---------------------------------------------------------------------------
 -- Fixtures. One host, one rival host, two standard games mid-Line, and a
 -- snowball game on Full House with the jackpot window open (30 calls <= 48).
 -- ---------------------------------------------------------------------------
