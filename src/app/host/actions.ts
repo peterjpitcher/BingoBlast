@@ -53,6 +53,7 @@ const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
     code: 'winner_on_ball',
   },
   wrong_session: { error: COULD_NOT_READ_GAME_ERROR },
+  winner_not_found: { error: 'Could not find that winner. Please reload.' },
   game_not_found: { error: COULD_NOT_READ_GAME_ERROR },
   game_state_not_found: { error: COULD_NOT_READ_GAME_ERROR },
   unauthorized: { error: 'You do not have permission to do that.' },
@@ -1263,36 +1264,44 @@ export async function recordWinner(
     return { success: true, data: { gameState } };
 }
 
+/**
+ * Marks a recorded prize as handed over, or un-marks it.
+ *
+ * Goes through set_winner_prize_given rather than a direct update on winners.
+ * The winners UPDATE policy is admin-only, so the direct update matched zero rows
+ * for a host-role account, and because it did not call .select() PostgREST
+ * returned no error and no rows: the host was told the tick had saved when
+ * nothing had been written. The function is security definer, writes exactly the
+ * prize_given column, and returns the persisted value so a write that did not
+ * land is a real error here. Voiding a win stays admin-only, see
+ * supabase/migrations/20260730130000_host_can_mark_prize_given.sql.
+ */
 export async function toggleWinnerPrizeGiven(sessionId: string, gameId: string, winnerId: string, prizeGiven: boolean): Promise<ActionResult> {
+    const startedAtMs = Date.now();
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return failure('toggleWinnerPrizeGiven', controlResult.error)
 
-    const { data: winner, error: winnerError } = await supabase
-        .from('winners')
-        .select('session_id')
-        .eq('id', winnerId)
-        .single<Pick<Database['public']['Tables']['winners']['Row'], 'session_id'>>();
+    // Cookie-based client, never the service role: the function reads auth.uid().
+    const { data: persistedPrizeGiven, error: rpcError } = await supabase.rpc('set_winner_prize_given', {
+        p_winner_id: winnerId,
+        p_session_id: sessionId,
+        p_prize_given: prizeGiven,
+    });
 
-    if (winnerError || !winner) {
-        return failure('toggleWinnerPrizeGiven', "Could not find that winner. Please reload.", winnerError ?? 'winner not found');
+    if (rpcError) {
+        return rpcFailure('toggleWinnerPrizeGiven', rpcError, startedAtMs);
     }
-
-    if (winner.session_id !== sessionId) {
-        return failure('toggleWinnerPrizeGiven', "That winner belongs to a different session.");
-    }
-
-    const { error } = await supabase
-        .from('winners')
-        .update({ prize_given: prizeGiven } satisfies Database['public']['Tables']['winners']['Update'])
-        .eq('id', winnerId)
-        .eq('session_id', sessionId);
-
-    if (error) {
-        return failure('toggleWinnerPrizeGiven', GENERIC_ACTION_ERROR, error);
+    if (persistedPrizeGiven !== prizeGiven) {
+        return failure(
+            'toggleWinnerPrizeGiven',
+            GENERIC_ACTION_ERROR,
+            `set_winner_prize_given persisted ${String(persistedPrizeGiven)}, asked for ${String(prizeGiven)}`
+        );
     }
 
     revalidatePath(`/host/${sessionId}/${gameId}`);
+    logActionLatency('toggleWinnerPrizeGiven', startedAtMs);
     return { success: true };
 }
 
@@ -1339,14 +1348,26 @@ export async function voidWinnerFromHost(
         return failure('voidWinnerFromHost', 'That winner belongs to a different session.');
     }
 
-    const { error } = await supabase
+    // .select() matters here. Without it an update that RLS filtered out returns
+    // no error and no rows, and this action would report that as success. The
+    // winners UPDATE policy is admin-only and this action is admin-only, so the
+    // two agree today; the check is what keeps them honest if either moves.
+    const { data: voidedWinners, error } = await supabase
         .from('winners')
         .update({ is_void: true, void_reason: trimmedReason } satisfies Database['public']['Tables']['winners']['Update'])
         .eq('id', winnerId)
-        .eq('session_id', sessionId);
+        .eq('session_id', sessionId)
+        .select('id');
 
     if (error) {
         return failure('voidWinnerFromHost', 'Could not void that winner. Please try again.', error);
+    }
+    if (!voidedWinners || voidedWinners.length === 0) {
+        return failure(
+            'voidWinnerFromHost',
+            'Could not void that winner. Please reload and try again.',
+            'void update matched no rows'
+        );
     }
 
     revalidatePath(`/host/${sessionId}/${gameId}`);

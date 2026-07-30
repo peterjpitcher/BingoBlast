@@ -523,6 +523,17 @@ export interface Database {
         Returns: Database['public']['Tables']['game_states']['Row']
       }
       /**
+       * Writes only winners.prize_given, so a host can tick a prize as handed
+       * over without gaining is_void. Returns the persisted value.
+       * Defined in supabase/migrations/20260730130000_host_can_mark_prize_given.sql.
+       */
+      set_winner_prize_given: {
+        Args: {
+          p_winner_id: string
+          p_session_id: string
+          p_prize_given: boolean
+        }
+        Returns: boolean
        * Settles the snowball pot for a finished game in one transaction. Host
        * callable, which is why snowball_pots and snowball_pot_history keep
        * admin-only RLS. Also security definer and auth.uid()-reading, so it
