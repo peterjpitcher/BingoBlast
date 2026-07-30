@@ -85,7 +85,7 @@ All host actions wrap mutations in auth checks and call `revalidatePath('/host')
 |--------|--------|-----------------|---------|------------------|
 | `callNextNumber` | `game_states` | RPC `call_next_number`, row lock | `game_states` row | apply via `isFreshGameState` |
 | `voidLastNumber` | `game_states` | RPC `void_last_number`, row lock, winner check inside | `game_states` row | apply, close confirm modal |
-| `recordWinner` | `winners` + `game_states` | RPC `record_winner_atomic`, one transaction | `game_states` row | apply, open Post Win |
+| `recordWinner` | `winners` + `game_states` | RPC `record_winner_atomic`, one transaction, idempotent on the claim key | `game_states` row | apply, open Post Win |
 | `toggleBreak` | `game_states` | bound update, controller plus status | `game_states` row | apply |
 | `pauseForValidation` | `game_states` | bound update | `game_states` row | apply |
 | `resumeGame` | `game_states` | bound update | `game_states` row | apply, close validation modal |
@@ -112,10 +112,9 @@ All host actions wrap mutations in auth checks and call `revalidatePath('/host')
 | `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session |
 | `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on `game_states`; host gap passed in as `p_min_gap_ms` |
 | `void_last_number` | `voidLastNumber` | Atomic undo under the same lock, with the non-void winner check inside the transaction |
-| `record_winner_atomic` | `recordWinner` | Winner insert plus win-display update in one transaction; re-checks the snowball jackpot window |
+| `record_winner_atomic` | `recordWinner` | Winner insert plus win-display update in one transaction; re-checks the snowball jackpot window; refuses a repeat of the same `p_client_request_id` and returns current state instead |
 | `set_winner_prize_given` | `toggleWinnerPrizeGiven` | Writes only `winners.prize_given` and returns the persisted value. Exists because the `winners` UPDATE policy is admin-only: a host's direct update matched zero rows and, with no `.select()`, was reported as success. Deliberately does **not** grant hosts `is_void` |
-| `assert_is_host` | the host functions above | Raises unless `profiles.role` is `admin` or `host` |
 | `settle_snowball_pot` | `handleSnowballPotUpdate`, called by `endGame`, `advanceToNextStage` and `skipStage` | Audit claim plus pot move in one transaction under a `for update` lock on the pot row. Derives reset-vs-rollover and both new values server-side, so a host settles without `snowball_pots` or `snowball_pot_history` granting a host any write access |
-| `assert_is_host` | the four host functions above | Raises unless `profiles.role` is `admin` or `host` |
+| `assert_is_host` | the host functions above | Raises unless `profiles.role` is `admin` or `host` |
 
 See [[relationships]] for the table → action and action → caller cross-reference.

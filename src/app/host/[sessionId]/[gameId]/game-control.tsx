@@ -20,6 +20,7 @@ import { isFreshGameState } from '@/lib/game-state-version';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
 import { logError } from '@/lib/log-error';
 import { getNumberNickname } from '@/lib/number-nicknames';
+import { newClaimRequestId } from '@/lib/claim-request-id';
 import { PreGameBriefing } from '@/components/host/pre-game-briefing';
 
 type Game = Database['public']['Tables']['games']['Row'];
@@ -68,6 +69,30 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [isRecordingSnowballWinner, setIsRecordingSnowballWinner] = useState(false);
     const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
     const [sessionWinners, setSessionWinners] = useState<SessionWinner[]>([]);
+
+    // Idempotency keys for recording a win, one per claim attempt. Refs rather
+    // than state: nothing renders them, and a handler must read the current value
+    // rather than the one captured by the render it was created in.
+    //
+    // The key is what makes a retry safe. A record-winner call that commits but
+    // loses its response on the bar wifi used to insert a second winner when the
+    // host tapped again, at the same stage and the same ball, and the same prize
+    // was then owed twice. Same claim, same key, so the server refuses the second
+    // insert and hands back the state instead. A tie is a different claim and gets
+    // a different key, so both winners still save.
+    //
+    // Minted where each modal opens, which is also what regenerates it for
+    // "Validate Another Winner": that path goes back through the claim check and
+    // reopens Record Winner. The two paths keep separate keys so they can never
+    // borrow each other's.
+    const claimRequestIdRef = useRef<string | null>(null);
+    const manualSnowballRequestIdRef = useRef<string | null>(null);
+
+    /** The key for the claim on screen, minted on first use if a path missed it. */
+    const ensureClaimRequestId = (ref: React.RefObject<string | null>): string => {
+        ref.current ??= newClaimRequestId();
+        return ref.current;
+    };
 
     // Undo confirm modal (T4.3): replaces the blocking window.confirm.
     const [showUndoModal, setShowUndoModal] = useState(false);
@@ -705,14 +730,16 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     /**
      * A recorded claim is spent, so every trace of it has to go.
      *
-     * The server cannot refuse a duplicate: ties are legitimate by design, so two
-     * winners on one stage is a valid write. The only thing stopping the same
-     * ticket being paid twice is that the host never sees a second live Record
-     * Winner button for it. Leaving `showValidationModal` open behind the Post Win
-     * modal did exactly that: closing Post Win revealed the green Valid Claim
-     * panel again, with the same numbers highlighted and nothing saying the win
-     * was already recorded. One tap wrote a second winners row, and on a snowball
-     * Full House it paid the jackpot twice.
+     * Still load-bearing after the claim key landed, and worth being exact about
+     * why. The key stops a *retry* of one attempt: same modal, same key, so the
+     * server refuses the second insert. It cannot stop a *fresh* attempt on a
+     * ticket that was already paid, because reopening Record Winner mints a new
+     * key, and it has to: that is the same path a genuine tie arrives on, and the
+     * server has no way to tell the two apart. Leaving `showValidationModal` open
+     * behind the Post Win modal produced exactly that: closing Post Win revealed
+     * the green Valid Claim panel again, with the same numbers highlighted and
+     * nothing saying the win was already recorded. One tap wrote a second winners
+     * row, and on a snowball Full House it paid the jackpot twice.
      *
      * Call this on every path that records a win, and on the Post Win escape.
      */
@@ -808,7 +835,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 prizeDescription,
                 prizeGiven,
                 false,
-                snowballEligibleChoice === true
+                snowballEligibleChoice === true,
+                ensureClaimRequestId(claimRequestIdRef)
             );
 
             if (applyMutation(result, "Failed to record winner.")) {
@@ -822,11 +850,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 setShowPostWinModal(true);
             }
         } catch (err) {
-            // A transport failure here is the worst case: the host sees
-            // "Recording…" flash back to idle and taps again. Say so, in the
-            // modal, rather than leaving it looking like nothing happened.
+            // A transport failure here used to be the worst case: the host sees
+            // "Recording…" flash back to idle with no way to know whether the win
+            // landed, and a second tap could record it twice. The claim key makes
+            // that second tap safe, so the message now says to take it. The key is
+            // deliberately left on the ref for exactly that reason.
             logError('host-control', err);
-            setActionError("Could not reach the server to record that winner. Check the connection, then check the Winners and Prizes list before recording again.");
+            setActionError("Could not reach the server. Check the connection and tap Confirm Winner again: if the win did save, tapping again will not record it twice.");
         } finally {
             setIsRecordingWinner(false);
         }
@@ -852,12 +882,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
      * Opens Record Winner with the eligibility choice cleared, so every win is a
      * fresh decision and a previous "Eligible" can never carry over to the next
      * one.
+     *
+     * This is the only path that opens the modal, so minting the claim key here is
+     * what guarantees one key per claim: every retry inside this modal reuses it,
+     * and the next claim (including the tie that arrives via "Validate Another
+     * Winner") comes back through here for a fresh one.
      */
     const handleOpenRecordWinnerModal = () => {
         // This modal now shows actionError, so clear any stale one from an earlier
         // refusal. Otherwise an unrelated message would greet the host here.
         setActionError(null);
         setSnowballEligibleChoice(null);
+        claimRequestIdRef.current = newClaimRequestId();
         setShowWinnerModal(true);
     };
 
@@ -1187,6 +1223,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         onClick={() => {
                             setActionError(null);
                             setPrizeDescription(`£${currentSnowballPot.current_jackpot_amount} (Manual Snowball Win)`);
+                            // Fresh key per award. This path pays the jackpot, so
+                            // it is the one where a retried tap costs real money.
+                            manualSnowballRequestIdRef.current = newClaimRequestId();
                             setShowManualSnowballModal(true);
                         }}
                     >
@@ -1846,7 +1885,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     prizeDescription,
                                     true, // Prize given immediately for manual close-out.
                                     true, // Force snowball jackpot override for manual award path.
-                                    true
+                                    true,
+                                    ensureClaimRequestId(manualSnowballRequestIdRef)
                                 );
 
                                 if (applyMutation(result, "Failed to record snowball win.")) {
@@ -1858,7 +1898,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 }
                             } catch (err) {
                                 logError('host-control', err);
-                                setActionError("Could not reach the server to record that snowball win. Check the connection, then check the Winners and Prizes list before recording again.");
+                                setActionError("Could not reach the server. Check the connection and tap Confirm Snowball Win again: if it did save, tapping again will not award the jackpot twice.");
                             } finally {
                                 setIsRecordingSnowballWinner(false);
                             }

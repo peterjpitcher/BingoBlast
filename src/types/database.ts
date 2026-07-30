@@ -340,6 +340,11 @@ export interface Database {
           // `coalesce(is_void, false) = false` on the SQL side.
           is_void: boolean | null
           void_reason: string | null
+          // Caller-supplied idempotency key, one per claim attempt. Unique where
+          // not null, so a retried recordWinner cannot insert a second row for
+          // the same claim while a genuine tie (a different key) still can. Null
+          // on every row written before 20260730120000. Not player-identifying.
+          client_request_id: string | null
           created_at: string
         }
         Insert: {
@@ -355,6 +360,7 @@ export interface Database {
           is_snowball_jackpot?: boolean
           is_void?: boolean
           void_reason?: string | null
+          client_request_id?: string | null
           created_at?: string
         }
         Update: {
@@ -370,6 +376,7 @@ export interface Database {
           is_snowball_jackpot?: boolean
           is_void?: boolean
           void_reason?: string | null
+          client_request_id?: string | null
           created_at?: string
         }
         Relationships: [
@@ -494,7 +501,7 @@ export interface Database {
     Functions: {
       assert_is_admin: { Args: Record<string, never>; Returns: undefined }
       // Host hot-path mutations. Defined in
-      // supabase/migrations/20260729120000_atomic_host_mutations.sql. All four are
+      // supabase/migrations/20260729231945_atomic_host_mutations.sql. All four are
       // security definer and read auth.uid(), so they must be called with the
       // cookie-based client, never the service-role client.
       assert_is_host: { Args: Record<string, never>; Returns: undefined }
@@ -519,6 +526,13 @@ export interface Database {
           p_prize_given?: boolean
           p_force_snowball_jackpot?: boolean
           p_snowball_eligible?: boolean
+          /**
+           * Idempotency key for one claim attempt, from newClaimRequestId() in
+           * src/lib/claim-request-id.ts. Pass the same value on a retry of the
+           * same claim; pass a fresh one for the next claim, including a tie.
+           * Null omits the protection, so always send one.
+           */
+          p_client_request_id?: string | null
         }
         Returns: Database['public']['Tables']['game_states']['Row']
       }
@@ -534,6 +548,8 @@ export interface Database {
           p_prize_given: boolean
         }
         Returns: boolean
+      }
+      /**
        * Settles the snowball pot for a finished game in one transaction. Host
        * callable, which is why snowball_pots and snowball_pot_history keep
        * admin-only RLS. Also security definer and auth.uid()-reading, so it

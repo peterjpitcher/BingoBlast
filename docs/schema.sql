@@ -306,8 +306,15 @@ create table public.winners (
   is_snowball_jackpot boolean default false,
   is_void boolean default false,
   void_reason text,
+  client_request_id uuid, -- Caller-supplied idempotency key, one per claim attempt; see the unique index below
   created_at timestamptz default now()
 );
+-- Unique where not null, so a retried record-winner call cannot insert a second
+-- row for the same claim, while a genuine tie (a different key) still can. Ties
+-- are legitimate, so there is no unique constraint on (game_id, stage) to use.
+create unique index if not exists winners_client_request_id_key
+  on public.winners (client_request_id)
+  where client_request_id is not null;
 alter table public.winners enable row level security;
 create policy "Read access for all" on public.winners for select using (true);
 create policy "Hosts/Admins can create winners" on public.winners for insert with check (
