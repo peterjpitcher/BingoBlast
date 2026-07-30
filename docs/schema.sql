@@ -66,7 +66,7 @@ create table public.sessions (
   status session_status default 'draft'::session_status,
   is_test_session boolean default false,
   created_by uuid references public.profiles(id),
-  active_game_id uuid references public.games(id), -- New: ID of the game currently active on display
+  active_game_id uuid, -- New: ID of the game currently active on display (FK added after games is created below)
   created_at timestamptz default now()
 );
 alter table public.sessions enable row level security;
@@ -97,6 +97,14 @@ create policy "Read access for all" on public.games for select using (true);
 create policy "Admins can manage games" on public.games for all using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
+
+-- sessions.active_game_id references games, but sessions is created first (games needs
+-- session_id). The constraint is therefore added here, once both tables exist, so this
+-- file applies cleanly top-to-bottom. Matches the auto-generated name Postgres gives the
+-- constraint in supabase/migrations/20251221101434_add_active_game_id.sql.
+alter table public.sessions
+  add constraint sessions_active_game_id_fkey
+  foreign key (active_game_id) references public.games(id);
 
 -- 6. GAME STATE (Realtime frequent updates)
 create table public.game_states (
