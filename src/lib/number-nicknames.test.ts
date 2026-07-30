@@ -34,15 +34,61 @@ test('every nickname is a non-empty trimmed string', () => {
   }
 });
 
-test('a number without a nickname returns null', () => {
-  assert.equal(getNumberNickname(18), null);
+test('a number outside 1 to 90 returns null', () => {
   assert.equal(getNumberNickname(0), null);
   assert.equal(getNumberNickname(91), null);
 });
 
-test('a familiar handful still read correctly', () => {
-  assert.equal(getNumberNickname(1), "Kelly's Eye");
+test('every ball from 1 to 90 has a call', () => {
+  const missing: number[] = [];
+  for (let n = 1; n <= 90; n += 1) {
+    if (getNumberNickname(n) === null) missing.push(n);
+  }
+  assert.deepEqual(missing, [], `balls with no call: ${missing.join(', ')}`);
+});
+
+// The reason this test exists: guests at The Anchor have lost husbands, and a
+// call is shouted to the whole room with no warning. "Gateway To Heaven" (27)
+// and "Made In Heaven" (67) were removed for exactly this. If you are adding a
+// call and this test fails, pick a different one rather than loosening the list.
+const BEREAVEMENT_WORDS = [
+  'heaven',
+  'death',
+  'dead',
+  'dying',
+  'grave',
+  'coffin',
+  'funeral',
+  'widow',
+  'rest in peace',
+  'afterlife',
+];
+
+test('no call refers to death or the afterlife', () => {
+  const offending = Object.entries(NUMBER_NICKNAMES).filter(([, name]) =>
+    BEREAVEMENT_WORDS.some((word) => name.toLowerCase().includes(word))
+  );
+  assert.deepEqual(offending, [], `these calls need replacing: ${JSON.stringify(offending)}`);
+});
+
+test('the six call-and-response balls keep the wording the room answers', () => {
+  // These pair with CALL_RESPONSES in src/lib/house-rules.ts. Renaming one
+  // without the other leaves the host prompting a quack for a call about
+  // something else entirely.
+  assert.equal(getNumberNickname(2), 'One Little Duck');
   assert.equal(getNumberNickname(11), 'Legs Eleven');
+  assert.equal(getNumberNickname(22), 'Two Little Ducks');
+  assert.equal(getNumberNickname(59), 'Brighton Line');
+  assert.equal(getNumberNickname(69), 'Any Way Up');
   assert.equal(getNumberNickname(88), 'Two Fat Ladies');
+});
+
+test('the classics the crowd shouts back are untouched', () => {
+  assert.equal(getNumberNickname(1), "Kelly's Eye");
+  assert.equal(getNumberNickname(8), 'Garden Gate');
+  assert.equal(getNumberNickname(33), 'All The Threes');
+  assert.equal(getNumberNickname(55), 'All The Fives');
+  assert.equal(getNumberNickname(66), 'Clickety Click');
+  assert.equal(getNumberNickname(77), 'All The Sevens');
   assert.equal(getNumberNickname(90), 'Top Of The Shop');
 });
