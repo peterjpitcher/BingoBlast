@@ -26,6 +26,10 @@ const CHANGE_LABEL: Record<string, { text: string; className: string }> = {
   jackpot_won: { text: 'Jackpot won', className: 'bg-yellow-900/40 text-yellow-300 border-yellow-800' },
   manual_update: { text: 'Manual correction', className: 'bg-blue-900/40 text-blue-300 border-blue-800' },
   manual_reset: { text: 'Manual reset', className: 'bg-red-900/40 text-red-300 border-red-800' },
+  // Derived from the pot's own arithmetic long after the fact, not observed at
+  // the time. Rendered differently on purpose: a reconstructed row must never
+  // read as a recorded one.
+  reconstructed_rollover: { text: 'Rolled over (reconstructed)', className: 'bg-slate-800 text-slate-400 border-dashed border-slate-600' },
 };
 
 export function PotHistory({ rows }: PotHistoryProps) {
@@ -33,6 +37,12 @@ export function PotHistory({ rows }: PotHistoryProps) {
     <Card className="bg-slate-900 border-slate-800">
       <CardHeader>
         <CardTitle>Pot history</CardTitle>
+        <p className="text-xs text-slate-500 max-w-2xl">
+          Rows marked <span className="text-slate-400">reconstructed</span> were worked out from the
+          pot&rsquo;s own base and increment figures after the fact, because nothing was recording
+          movements before 29 July 2026. They explain how the pot reached its current figure; they
+          are not a record made on the night.
+        </p>
       </CardHeader>
       <CardContent className="p-0">
         {rows.length === 0 ? (
@@ -40,7 +50,6 @@ export function PotHistory({ rows }: PotHistoryProps) {
             <p>No pot movements recorded yet.</p>
             <p className="mt-2 text-xs text-slate-600 max-w-lg mx-auto">
               Movements have only been recorded since 29 July 2026, when the audit table was added.
-              Anything before that date happened without a record and is not shown here.
             </p>
           </div>
         ) : (

@@ -606,3 +606,21 @@ begin
             'cash=' || coalesce(v_cash::text,'null') || ' chocolate=' || coalesce(v_choc::text,'null')
               || ': a chocolate bar winner must never be handed half the cash');
 end $$;
+
+-- ===========================================================================
+-- The pot history reconstruction. It runs against the migration's own guards,
+-- which refuse rather than guess whenever the arithmetic does not add up.
+-- ===========================================================================
+do $$
+declare v_rows int;
+begin
+  -- The test pot has been manually adjusted and reset by the assertions above,
+  -- so the reconstruction must have refused rather than invented a story that
+  -- does not end where the pot is.
+  select count(*) into v_rows from public.snowball_pot_history
+   where change_type = 'reconstructed_rollover';
+
+  perform t('backfill :: reconstruction refuses on a pot whose arithmetic does not add up',
+            v_rows = 0,
+            'wrote ' || v_rows || ' reconstructed rows for a pot it should not have touched');
+end $$;
