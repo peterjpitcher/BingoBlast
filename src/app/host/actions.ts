@@ -336,7 +336,11 @@ export async function startGame(
       }
 
       const isFirstStartAttempt = !existingGameState || existingGameState.status === 'not_started';
-      const requiresCashJackpotAmount = isFirstStartAttempt && isCashJackpotGame(gameDetailsForStart.name, gameDetailsForStart.type);
+      // Decided by game type alone. It used to also match a regex on the game
+      // NAME, which meant an ordinary three-stage game called something like
+      // "Game 5 - Mini Jackpot" prompted for a cash amount and then had all
+      // three of its configured prizes overwritten with it, permanently.
+      const requiresCashJackpotAmount = isFirstStartAttempt && isCashJackpotGame(gameDetailsForStart.type);
       const providedCashJackpotAmount = cashJackpotAmountInput?.trim();
 
       if (requiresCashJackpotAmount && !providedCashJackpotAmount) {
@@ -349,22 +353,50 @@ export async function startGame(
           return failure('startGame', "Please enter a valid cash jackpot amount.");
         }
 
+        const jackpotStages = (gameDetailsForStart.stage_sequence || []) as WinStage[];
+
+        // A cash jackpot game plays for one stage, and the amount belongs to
+        // that stage only. Refusing a multi-stage jackpot game is deliberate:
+        // writing one amount across several stages is what destroyed the
+        // admin's configuration before, and silently writing it to only one of
+        // them would leave the host guessing which. This is unreachable through
+        // the admin UI, which forces a jackpot game to Full House alone, so it
+        // only catches a game edited into an impossible shape.
+        if (jackpotStages.length !== 1) {
+          return failure(
+            'startGame',
+            'This jackpot game has more than one stage, so the cash amount cannot be applied. Ask an admin to set it to Full House only.',
+            `jackpot game has ${jackpotStages.length} stages`
+          );
+        }
+
         const jackpotPrizeText = formatCashJackpotPrize(parsedAmount);
         const updatedPrizes = { ...(gameDetailsForStart.prizes || {}) };
-        for (const stage of gameDetailsForStart.stage_sequence || []) {
-          updatedPrizes[stage] = jackpotPrizeText;
-        }
+        updatedPrizes[jackpotStages[0]] = jackpotPrizeText;
 
         const gamePrizeUpdate: Database['public']['Tables']['games']['Update'] = {
           prizes: updatedPrizes,
         };
-        const { error: gamePrizeError } = await dbClient
+        // .select() is what makes this honest. games UPDATE is admin-only in
+        // RLS, so with no service-role key configured a host-role account's
+        // write matches zero rows, and PostgREST answers with no error and no
+        // rows. Without this check the host would be told the jackpot amount
+        // saved while the TV kept showing the old prize.
+        const { data: prizeRows, error: gamePrizeError } = await dbClient
           .from('games')
           .update(gamePrizeUpdate)
-          .eq('id', gameId);
+          .eq('id', gameId)
+          .select('id');
 
         if (gamePrizeError) {
           return failure('startGame', 'Could not save the jackpot amount. Please try again.', gamePrizeError);
+        }
+        if (!prizeRows || prizeRows.length === 0) {
+          return failure(
+            'startGame',
+            'Could not save the jackpot amount. Ask an admin to start this game.',
+            'games prize update matched no rows: RLS filtered it, or the game id is stale'
+          );
         }
       }
 

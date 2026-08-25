@@ -46,6 +46,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const router = useRouter();
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
     const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
+    // 'not-applicable' means this game has no pot linked, which is a fact.
+    // 'failed' means this game HAS a pot and we could not read it, which is an
+    // outage. Collapsing the two into "currentSnowballPot is null" is what let a
+    // failed request quietly withhold a jackpot.
+    const [potLoadState, setPotLoadState] = useState<'not-applicable' | 'loading' | 'loaded' | 'failed'>('not-applicable');
     const [isCallingNumber, setIsCallingNumber] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
     const [showValidationModal, setShowValidationModal] = useState(false);
@@ -122,6 +127,23 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // Any Post Win choice in flight disables all of them, so the host cannot
     // advance a stage and move to the next game with two quick taps.
     const isPostWinBusy = isAdvancing || isMovingGame || isPausing || isTogglingBreak;
+
+    // Everything a page reload would silently destroy. The connection banner's
+    // auto-refresh is suppressed while any of it is true: a claim half tapped
+    // into the grid is the obvious one, but a modal open at all means the host
+    // is mid-decision, and a request in flight means the answer is still coming.
+    // Before this guard, thirty seconds of flaky wifi wiped a claim the host was
+    // reading off a punter's book.
+    const isAnyModalOpen =
+        showValidationModal || showWinnerModal || showManualSnowballModal ||
+        showPostWinModal || showSessionWinnersModal || showCashJackpotModal ||
+        showUndoModal || voidWinnerTarget !== null;
+    const isAnyRequestInFlight =
+        isCallingNumber || isRecordingWinner || isRecordingSnowballWinner ||
+        isTakingControl || isTogglingBreak || isVoiding || isAdvancing ||
+        isSkipping || isResuming || isPausing || isMovingGame || isCheckingWin ||
+        isVoidingWinner || isSubmittingCashJackpot;
+    const hasUnsavedWork = isAnyModalOpen || selectedNumbers.length > 0 || isAnyRequestInFlight;
 
     // Singleton Supabase client — all subscriptions share one WebSocket connection
     const supabaseRef = useRef(createClient());
@@ -212,49 +234,32 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         await Promise.all([fetchGameWinners(), fetchSessionWinners()]);
     }, [fetchGameWinners, fetchSessionWinners]);
 
-    // Winners Subscription
+    // Both winner lists are loaded on mount and then refreshed explicitly after
+    // every mutation that changes them, and when the Winners and Prizes list is
+    // opened.
+    //
+    // They used to be kept up to date by two Supabase Realtime subscriptions on
+    // public.winners. Those could never fire: `winners` is not a member of the
+    // supabase_realtime publication, and only sessions, game_states and
+    // game_states_public are. So the lists were frozen at mount for the life of
+    // the page. In practice the host recorded a Line winner, the card still said
+    // "Winners & Prizes (0)", and they could not tick "prize given" for the
+    // punter standing at the bar. It also broke the documented recovery route
+    // for a mis-called ball, because void_last_number refuses with
+    // `winner_on_ball` and sends the host to a list that did not contain the
+    // blocking winner.
+    //
+    // The fix is deliberately NOT to publish `winners`. Postgres Changes
+    // broadcasts whole rows to subscribers, and winners SELECT is readable by
+    // anon, so publishing it would push prize text and free-text void reasons to
+    // every client. Explicit refresh is both narrower and more reliable, because
+    // it does not depend on replication configuration being right.
     useEffect(() => {
-        const supabase = supabaseRef.current;
-        const fetchWinners = fetchGameWinners;
-
-        fetchWinners();
-
-        const channel = supabase
-            .channel(`winners:${gameId}`)
-            .on(
-                'postgres_changes',
-                { event: '*', schema: 'public', table: 'winners', filter: `game_id=eq.${gameId}` },
-                () => {
-                    fetchWinners();
-                }
-            )
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
-        };
+        void fetchGameWinners();
     }, [gameId, fetchGameWinners]);
 
-    // Session-wide winners subscription so prize status can be managed after moving to later games
     useEffect(() => {
-        const supabase = supabaseRef.current;
-
-        fetchSessionWinners();
-
-        const channel = supabase
-            .channel(`session_winners:${sessionId}`)
-            .on(
-                'postgres_changes',
-                { event: '*', schema: 'public', table: 'winners', filter: `session_id=eq.${sessionId}` },
-                () => {
-                    fetchSessionWinners();
-                }
-            )
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
-        };
+        void fetchSessionWinners();
     }, [sessionId, fetchSessionWinners]);
 
     const handleTogglePrize = async (winnerId: string, currentStatus: boolean) => {
@@ -276,6 +281,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             if (!result?.success) {
                 setActionError(result?.error || "Failed to update prize status.");
                 revert();
+            } else {
+                // Replace the optimistic value with what actually persisted, and
+                // pick up anything another device changed while this was open.
+                void refreshWinnerLists();
             }
         } catch (err) {
             logError('host-control', err);
@@ -336,38 +345,87 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         router.push(destination);
     };
 
+    /**
+     * Loads the snowball pot for this game, and keeps trying until it has it.
+     *
+     * This one request decides whether the host is offered the Eligible / Not
+     * eligible choice at all. It used to be fired once with its error thrown
+     * away (`const { data } = await ...; if (data) setCurrentSnowballPot(data)`),
+     * so a single failed request during page load silently:
+     *   - printed "this game is not linked to a snowball pot" on a game that is,
+     *   - removed the eligibility choice, because isSnowballChoiceRequired needs
+     *     currentSnowballPot to be non-null,
+     *   - and therefore sent snowballEligible = false to record_winner_atomic,
+     *     which records a qualifying Full House inside the window as an ordinary
+     *     win. The punter is not paid the jackpot and the pot rolls over instead
+     *     of resetting.
+     *
+     * Nothing was logged and nothing was shown. Now: the error is kept, the load
+     * is retried with backoff, the failure is distinguishable from "no pot", and
+     * recording is blocked while the pot is unknown (see handleRecordWinner).
+     *
+     * There is deliberately no Realtime subscription here any more. snowball_pots
+     * is not a member of the supabase_realtime publication, so the channel this
+     * effect used to open could never deliver a payload. The pot only moves at
+     * settlement, which is after this screen is finished with it, so the poll on
+     * reconnect below is all this needs.
+     */
     useEffect(() => {
         const supabase = supabaseRef.current;
-        let potChannel: ReturnType<typeof supabase.channel> | null = null;
 
-        const fetchAndSubscribePot = async () => {
-            if (game.type === 'snowball' && game.snowball_pot_id) {
-                const { data } = await supabase
-                    .from('snowball_pots')
-                    .select('*')
-                    .eq('id', game.snowball_pot_id)
-                    .single();
-                if (data) setCurrentSnowballPot(data);
+        if (game.type !== 'snowball' || !game.snowball_pot_id) {
+            setCurrentSnowballPot(null);
+            setPotLoadState('not-applicable');
+            return;
+        }
 
-                potChannel = supabase
-                    .channel(`pot_updates_host:${game.snowball_pot_id}`)
-                    .on<SnowballPot>(
-                        'postgres_changes',
-                        { event: 'UPDATE', schema: 'public', table: 'snowball_pots', filter: `id=eq.${game.snowball_pot_id}` },
-                        (payload) => {
-                            setCurrentSnowballPot(payload.new);
-                        }
-                    )
-                    .subscribe();
-            } else {
-                setCurrentSnowballPot(null);
+        const potId = game.snowball_pot_id;
+        let cancelled = false;
+        let retryTimer: ReturnType<typeof setTimeout> | null = null;
+        let attempt = 0;
+
+        const load = async () => {
+            if (cancelled) return;
+            setPotLoadState((current) => (current === 'loaded' ? current : 'loading'));
+
+            const { data, error } = await supabase
+                .from('snowball_pots')
+                .select('*')
+                .eq('id', potId)
+                .single();
+
+            if (cancelled) return;
+
+            if (error || !data) {
+                logError('host-control:snowball-pot', error ?? new Error('snowball pot lookup returned no row'));
+                setPotLoadState('failed');
+                attempt += 1;
+                // Backs off to a 30 second ceiling and keeps trying: the host may
+                // be standing there for several minutes before the stage that
+                // needs this, and the answer must be right by then.
+                const delay = Math.min(1000 * 2 ** Math.min(attempt, 5), 30000);
+                retryTimer = setTimeout(load, delay);
+                return;
             }
+
+            attempt = 0;
+            setCurrentSnowballPot(data);
+            setPotLoadState('loaded');
         };
 
-        fetchAndSubscribePot();
+        void load();
+
+        // Coming back to the tab is the cheapest moment to re-check a pot that
+        // failed to load while the screen was in the host's pocket.
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') void load();
+        };
+        document.addEventListener('visibilitychange', onVisible);
 
         return () => {
-            if (potChannel) supabase.removeChannel(potChannel);
+            cancelled = true;
+            if (retryTimer) clearTimeout(retryTimer);
+            document.removeEventListener('visibilitychange', onVisible);
         };
     }, [game.type, game.snowball_pot_id]);
 
@@ -819,6 +877,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError("Current stage is not available for this game.");
             return;
         }
+        // Money decision: never record a snowball Full House while the pot is
+        // unknown. With the pot unread, isSnowballChoiceRequired is false, so
+        // the guard below would wave the claim through with eligible = false and
+        // pay an ordinary prize for a jackpot win. Refusing is the only safe
+        // answer: the host can retry once the pot loads, and the claim key means
+        // retrying costs nothing.
+        if (isSnowballEligibilityStage && potLoadState === 'failed') {
+            setActionError("Cannot record this yet: the snowball pot has not loaded, so eligibility cannot be judged. Check the connection and try again in a moment.");
+            return;
+        }
+
         // Money decision: never record a snowball Full House with the jackpot
         // window open until the host has said Eligible or Not eligible.
         if (isSnowballChoiceRequired && snowballEligibleChoice === null) {
@@ -848,6 +917,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 // ticket, which paid a snowball jackpot twice.
                 clearSpentClaim();
                 setShowPostWinModal(true);
+                // The win that just saved has to appear in both lists now. This
+                // is the only thing that puts it there: `winners` is not
+                // published over Realtime.
+                void refreshWinnerLists();
             }
         } catch (err) {
             // A transport failure here used to be the worst case: the host sees
@@ -1057,10 +1130,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </div>
             )}
 
-            {/* Connection Banner — shows during reconnect, auto-refreshes if unhealthy too long */}
+            {/* Connection banner. Shows during a reconnect, and auto-refreshes
+                only when the browser believes it is online AND the host is not
+                mid-way through something a reload would throw away. */}
             <ConnectionBanner
                 visible={health.shouldShowBanner}
                 shouldAutoRefresh={health.shouldAutoRefresh}
+                hasUnsavedWork={hasUnsavedWork}
             />
 
             {/* Alerts. Hidden while any modal that renders the same error inside
@@ -1140,6 +1216,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                                 {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
                                             </p>
                                         </>
+                                    ) : potLoadState === 'failed' ? (
+                                        <p className="text-white font-semibold" role="alert">
+                                            Snowball pot could not be loaded. Still retrying. Do not record a Full
+                                            House on this game until the jackpot figure appears here.
+                                        </p>
+                                    ) : potLoadState === 'loading' ? (
+                                        <p className="text-white/90 font-semibold">Loading the snowball pot…</p>
                                     ) : (
                                         <p className="text-white/90 font-semibold">
                                             Snowball countdown unavailable: this game is not linked to a snowball pot.
@@ -1207,6 +1290,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     onClick={() => {
                         setActionError(null);
                         setShowSessionWinnersModal(true);
+                        // Pick up anything another device recorded. The list is
+                        // not live, so opening it is the moment to re-read it.
+                        void refreshWinnerLists();
                     }}
                 >
                     Winners &amp; Prizes ({sessionWinners.length})
@@ -1563,6 +1649,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                         setShowUndoModal(false);
                                         setUndoError(null);
                                         setShowSessionWinnersModal(true);
+                                        // This is the recovery route from a
+                                        // refused undo, so the blocking winner
+                                        // MUST be in the list when it opens.
+                                        void refreshWinnerLists();
                                     }}
                                 >
                                     Open Winners and Prizes
@@ -1895,6 +1985,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     // it belongs to is spent.
                                     clearSpentClaim();
                                     setShowPostWinModal(true);
+                                    void refreshWinnerLists();
                                 }
                             } catch (err) {
                                 logError('host-control', err);
