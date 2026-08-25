@@ -5,11 +5,15 @@
 ## The short version
 
 The Supabase project is on the **Pro** plan (verified 25 August 2026, org
-"Orange Jelly"), which includes daily backups. So backups exist. What does not
-exist is any evidence that a restore works, because nobody has ever tried one.
+"Orange Jelly"), with **8 days of daily backups** and point-in-time recovery
+**not** enabled.
 
-An untested backup is a hope, not a plan. The single most valuable thing on this
-page is the drill in section 4, and it takes about twenty minutes.
+Worst case, you lose up to 24 hours: one bingo night. That is accepted, because
+a night can be rebuilt from the paper books and the pot is one number you can
+type back in. Nobody has ever tested a restore, and section 4 explains why that
+is a decision rather than an oversight.
+
+If the database is actually lost, go straight to section 5.
 
 ## 1. What a session export is, and what it is not
 
@@ -36,7 +40,7 @@ database is lost", which was the most dangerous sentence in it.
 | Supabase daily backup | The whole database as at the backup point. **8 days retained** | Supabase dashboard, Database, Backups |
 | Point in time recovery | Any moment, to the second, within the retention window | A paid add-on on Pro. **Not enabled**, deliberately |
 | `supabase/migrations` in git | Every table, function, policy and grant, rebuildable from empty | This repository |
-| `supabase/tests/run.sh` | Proof that those migrations still rebuild it. 36 migrations, 78 assertions | This repository, and CI |
+| `supabase/tests/run.sh` | Proof that those migrations still rebuild it. 38 migrations, 147 assertions | This repository, and CI |
 
 Rows three and four matter more than people expect. The schema is not something
 you need a backup to recover: it is in git and it is tested. What only a backup
