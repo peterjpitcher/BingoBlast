@@ -72,6 +72,21 @@ revoke all on function public.handle_new_user() from public;
 revoke all on function public.handle_new_user() from anon;
 revoke all on function public.handle_new_user() from authenticated;
 
+-- ---------------------------------------------------------------------------
+-- The self-insert policy has to name the role too.
+--
+-- "Users can insert their own profile." checked only `auth.uid() = id` and said
+-- nothing about `role`. The trigger normally creates the row, so the policy
+-- looks unreachable, but the moment a profile row is missing (trigger failure,
+-- a manual delete, a restore) the holder of that account can insert their own
+-- with role 'admin'. A policy that grants self-promotion in its failure mode is
+-- worth closing whether or not the failure mode is likely.
+-- ---------------------------------------------------------------------------
+drop policy if exists "Users can insert their own profile." on public.profiles;
+create policy "Users can insert their own profile."
+  on public.profiles for insert
+  with check (auth.uid() = id and role = 'pending'::public.user_role);
+
 comment on function public.handle_new_user() is
   'Creates the profiles row for a new auth user with role pending. An admin promotes it to host or admin afterwards. Never default this to a privileged role.';
 

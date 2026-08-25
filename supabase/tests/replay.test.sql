@@ -310,3 +310,10 @@ select t('audit :: reset_session_safe returns the log row rather than void',
          (select pg_get_function_result(p.oid) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname = 'reset_session_safe'));
+
+select t('security :: a user cannot insert their own profile with a privileged role',
+         (select count(*) = 1 from pg_policies
+           where schemaname = 'public' and tablename = 'profiles' and cmd = 'INSERT'
+             and with_check like '%pending%'),
+         (select coalesce(string_agg(policyname || ' :: ' || coalesce(with_check, '-'), ' | '), '(no INSERT policy)')
+            from pg_policies where schemaname = 'public' and tablename = 'profiles' and cmd = 'INSERT'));

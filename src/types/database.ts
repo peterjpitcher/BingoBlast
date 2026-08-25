@@ -6,7 +6,13 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-export type UserRole = 'admin' | 'host'
+/**
+ * 'pending' is a signed-up account that has not been approved. It can reach
+ * nothing: not /admin, not /host, no RPC and no row through RLS. An admin
+ * promotes it to 'host' or 'admin' deliberately. New accounts land here, so
+ * anything that treats "has a session" as "is staff" is a hole.
+ */
+export type UserRole = 'admin' | 'host' | 'pending'
 export type SessionStatus = 'draft' | 'ready' | 'running' | 'completed'
 export type GameType = 'standard' | 'snowball' | 'jackpot'
 export type GameStatus = 'not_started' | 'in_progress' | 'completed'
