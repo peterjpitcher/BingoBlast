@@ -32,7 +32,9 @@ be changed.
 | D13 | The six pot movements that predate the audit table are reconstructed and marked as reconstructed | Owner, 2026-08-25. Otherwise the £140 on the TV can never be reconciled. The mapping is forced by the arithmetic rather than chosen, and the migration refuses rather than guesses if that stops being true. |
 | D14 | Technical failures go to an external sink, not a database table, through a vendor-neutral boundary | Owner, 2026-08-25. A sink inside the database cannot record the database being unreachable, which is the failure that matters most on a bingo night. No SDK dependency, so it ships without its own regression risk. |
 | D15 | Offline host operation is struck from the PRD rather than built | Owner, 2026-08-25. The database decides which ball comes out, which is what stops two devices drawing the same number. Moving that into a phone with no signal trades a reliability problem for a correctness one. The screens surviving a wobble is already fixed, and the paper fallback is written down. |
-| D16 | Backups: the project is on the Pro plan, so daily backups exist. A restore drill is required before the next live night | Owner, 2026-08-25. Verified the plan; the retention figure and whether point-in-time recovery is enabled still need reading off the dashboard. Drill in `docs/runbooks/backup-and-recovery.md`. |
+| D16 | Backups: the project is on the Pro plan, so daily backups exist | Owner, 2026-08-25. Verified the plan directly. Superseded in detail by D17. |
+| D17 | Backups: 8 days of daily backups, point-in-time recovery NOT enabled, and no restore drill | Owner, 2026-08-25. The worst case is losing one night, and a night is reconstructable from the paper books and one pot figure. Paying for PITR to protect a few hours of pub bingo results is a poor trade. Revisit if the app ever holds something paper cannot rebuild. |
+| D18 | The 43 historic customer names are exported to a file the owner keeps, so nothing depends on the database copy | Owner, 2026-08-25. The in-database archive is a temporary safety net, not the store of record. Once the file is somewhere the owner trusts, the archive table is dropped. |
 
 ---
 

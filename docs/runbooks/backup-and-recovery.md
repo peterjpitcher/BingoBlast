@@ -33,8 +33,8 @@ database is lost", which was the most dangerous sentence in it.
 
 | Layer | What it covers | Where it lives |
 |---|---|---|
-| Supabase daily backup | The whole database as at the backup point | Supabase dashboard, Database, Backups |
-| Point in time recovery | Any moment, to the second, within the retention window | A **paid add-on** on Pro, off unless somebody turned it on |
+| Supabase daily backup | The whole database as at the backup point. **8 days retained** | Supabase dashboard, Database, Backups |
+| Point in time recovery | Any moment, to the second, within the retention window | A paid add-on on Pro. **Not enabled**, deliberately |
 | `supabase/migrations` in git | Every table, function, policy and grant, rebuildable from empty | This repository |
 | `supabase/tests/run.sh` | Proof that those migrations still rebuild it. 36 migrations, 78 assertions | This repository, and CI |
 
@@ -42,23 +42,44 @@ Rows three and four matter more than people expect. The schema is not something
 you need a backup to recover: it is in git and it is tested. What only a backup
 can give you back is the **data**: the sessions, games, winners and the pot.
 
-## 3. Facts to fill in from the dashboard
+## 3. What the backups actually give you
 
-Neither can be read through the API, so both need a human with the dashboard
-open. Do them before the next live night and write the answers here.
+- **Retention: 8 days of daily backups** (owner, 25 August 2026).
+- **Point in time recovery: not enabled.** It is a paid add-on on Pro and nobody
+  turned it on.
 
-- **Retention.** Database, Backups. How many daily backups are kept:
-  _not yet recorded_
-- **Point in time recovery.** Whether the add-on is enabled:
-  _not yet recorded_
-
-Until those are filled in, plan on the worst case that the daily backup allows:
-**up to 24 hours of data could be lost**, which on a Friday could be a whole
+So the worst case is losing **up to 24 hours** of data: whatever happened between
+the last nightly backup and the failure. On a Friday night that is one bingo
 night's results.
+
+Decision, 25 August 2026: that is accepted. A lost night is reconstructable from
+the paper books, the pot can be corrected by hand on `/admin/snowball`, and
+point in time recovery is not worth paying for to protect a few hours of pub
+bingo results.
 
 ## 4. The restore drill
 
-**Do this once, before the next live night.** It is the whole point of this page.
+**Status: not run, and deliberately not scheduled** (owner, 25 August 2026).
+
+The honest case for and against, so this is a decision rather than an oversight.
+
+**Against doing it:** the thing a restore protects is the record of past bingo
+nights and the current pot figure. Both are reconstructable. The winners are
+written on paper on the night, and the pot is one number that can be typed back
+in on `/admin/snowball`. Nobody is paid from this database and nothing legal
+depends on it. Twenty minutes to rehearse recovering something you could rebuild
+by hand in ten is a poor trade.
+
+**For doing it:** restores fail more often than people expect, and you find out
+at the worst moment. But that argument is much stronger for systems where the
+data cannot be recreated. This one can.
+
+So: not scheduled. The steps stay written down below because if the day ever
+comes, reading them cold under pressure is the bad version. If the app ever
+starts holding something that is NOT reconstructable from paper, this decision
+should be revisited.
+
+If you do decide to run it:
 
 1. Supabase dashboard, **Database**, **Backups**. Pick the most recent backup.
 2. Restore it into a **new project**, not over the top of production. Supabase
@@ -91,7 +112,7 @@ Record the result here:
 
 | Drill date | Backup used | Time to restore | Everything present? | Notes |
 |---|---|---|---|---|
-| _not yet run_ | | | | |
+| _not run, see the decision above_ | | | | |
 
 ## 5. If the database is actually lost
 
