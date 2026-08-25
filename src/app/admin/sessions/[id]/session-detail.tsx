@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/modal';
 import { Input } from '@/components/ui/input';
 import { useRouter } from 'next/navigation';
 import { validateGamePrizes } from '@/lib/prize-validation';
+import { formatDateInLondon, formatDateTimeInLondon } from '@/lib/dates';
 
 type Session = Database['public']['Tables']['sessions']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -289,7 +290,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                 <CardContent>
                     <dl className="grid grid-cols-3 gap-4 text-sm">
                         <dt className="text-slate-400">Date</dt>
-                        <dd className="col-span-2 text-white font-medium">{session.start_date}</dd>
+                        <dd className="col-span-2 text-white font-medium">{formatDateInLondon(session.start_date)}</dd>
 
                         <dt className="text-slate-400">Status</dt>
                         <dd className="col-span-2 text-white uppercase font-bold tracking-wider">{session.status}</dd>
@@ -362,7 +363,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                   {winners.map((winner) => (
                     <tr key={winner.id} className="hover:bg-slate-800/30 transition-colors">
                       <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
-                        {new Date(winner.created_at).toLocaleString()}
+                        {formatDateTimeInLondon(winner.created_at)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium text-white">

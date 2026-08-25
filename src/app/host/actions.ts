@@ -280,7 +280,13 @@ async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionI
         .select('id')
         .eq('session_id', sessionId)
 
-    if (error || !games || games.length === 0) return;
+    if (error || !games || games.length === 0) {
+        // Silent before. A read failure here means the session is simply never
+        // marked complete, which looks identical to "there is another game to
+        // play" and is impossible to diagnose the morning after.
+        if (error) logActionFailure('maybeCompleteSession', error);
+        return;
+    }
 
     const gameIds = games.map((g: { id: string }) => g.id);
     const { data: completedStates, error: completedStatesError } = await supabase
@@ -289,16 +295,32 @@ async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionI
         .in('game_id', gameIds)
         .eq('status', 'completed');
 
-    if (completedStatesError) return;
+    if (completedStatesError) {
+        logActionFailure('maybeCompleteSession', completedStatesError);
+        return;
+    }
 
     const completedGameIds = new Set((completedStates || []).map((s: { game_id: string }) => s.game_id));
     const hasIncompleteGame = gameIds.some((id: string) => !completedGameIds.has(id));
 
     if (!hasIncompleteGame) {
-        await supabase
+        // .select() so a write RLS filtered out is a real failure rather than a
+        // silent one. Without it a session could stay 'running' for ever with
+        // nothing anywhere saying why, and the next night's /host and /display
+        // would both still list it as live.
+        const { data: completedRows, error: completeError } = await supabase
             .from('sessions')
             .update({ status: 'completed', active_game_id: null })
             .eq('id', sessionId)
+            .select('id')
+
+        if (completeError) {
+            logActionFailure('maybeCompleteSession', completeError);
+            return;
+        }
+        if (!completedRows || completedRows.length === 0) {
+            logActionFailure('maybeCompleteSession', 'session completion matched no rows');
+        }
     }
 }
 
@@ -316,12 +338,26 @@ export async function startGame(
 
       const { data: gameDetailsForStart, error: gameDetailsError } = await dbClient
         .from('games')
-        .select('name, type, stage_sequence, prizes')
+        .select('session_id, name, type, stage_sequence, prizes')
         .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'name' | 'type' | 'stage_sequence' | 'prizes'>>();
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'name' | 'type' | 'stage_sequence' | 'prizes'>>();
 
       if (gameDetailsError || !gameDetailsForStart) {
         return failure('startGame', COULD_NOT_READ_GAME_ERROR, gameDetailsError ?? 'game not found');
+      }
+
+      // The two ids are supplied by the caller and were never checked against
+      // each other. This action then writes `status: 'running'` and
+      // `active_game_id: gameId` onto whichever session it was named, so a
+      // mismatched pair pointed one session's live game at another session.
+      // Every other host action derives the session from the game; this one is
+      // the last place that trusted the pairing.
+      if (gameDetailsForStart.session_id !== sessionId) {
+        return failure(
+          'startGame',
+          COULD_NOT_READ_GAME_ERROR,
+          'game does not belong to the session it was asked to start in'
+        );
       }
 
       // 1. Check if game_state already exists

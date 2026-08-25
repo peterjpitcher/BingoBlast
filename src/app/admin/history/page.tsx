@@ -5,7 +5,9 @@ import { signout } from '@/app/login/actions';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 import type { Database } from '@/types/database';
+import { formatShortDateTimeInLondon } from '@/lib/dates';
 
 type WinnerWithRelations = Database['public']['Tables']['winners']['Row'] & {
   session: Pick<Database['public']['Tables']['sessions']['Row'], 'name' | 'start_date'> | null;
@@ -82,20 +84,32 @@ export default async function HistoryPage() {
                                   <th className="px-4 py-3 font-medium">Winner</th>
                                   <th className="px-4 py-3 font-medium">Prize</th>
                                   <th className="px-4 py-3 font-medium">Stage</th>
+                                  <th className="px-4 py-3 font-medium">Status</th>
                                   <th className="px-4 py-3 font-medium text-right">Call #</th>
                               </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/50">
-                              {winners.map((winner) => (
-                                  <tr key={winner.id} className="hover:bg-slate-800/30 transition-colors">
-                                      <td className="px-4 py-3 text-slate-400">{new Date(winner.created_at).toLocaleDateString()}</td>
+                              {winners.map((winner) => {
+                                  // A voided win is not a payout, and this screen
+                                  // is the permanent record of who was paid. It
+                                  // used to render voided rows identically to
+                                  // real ones: same prize, same JACKPOT badge,
+                                  // nothing saying it had been reversed. Anyone
+                                  // reconciling a night against the till was
+                                  // reading a number that was never handed over.
+                                  const isVoid = winner.is_void === true;
+                                  return (
+                                  <tr key={winner.id} className={cn("transition-colors", isVoid ? "bg-red-950/20 text-slate-500" : "hover:bg-slate-800/30")}>
+                                      <td className="px-4 py-3 text-slate-400">{formatShortDateTimeInLondon(winner.created_at)}</td>
                                       <td className="px-4 py-3">
-                                          <div className="font-medium text-white">{winner.session?.name}</div>
+                                          <div className={cn("font-medium", isVoid ? "text-slate-400" : "text-white")}>{winner.session?.name}</div>
                                           <div className="text-xs text-slate-500">{winner.game?.name}</div>
                                       </td>
-                                      <td className="px-4 py-3 font-bold text-white">{winner.winner_name}</td>
+                                      <td className={cn("px-4 py-3 font-bold", isVoid ? "text-slate-400" : "text-white")}>{winner.winner_name}</td>
                                       <td className="px-4 py-3 text-slate-300">
-                                          {winner.prize_description}
+                                          <span className={cn(isVoid && "line-through decoration-red-500/70")}>
+                                              {winner.prize_description}
+                                          </span>
                                           {winner.is_snowball_jackpot && (
                                               <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-bold bg-yellow-900/30 text-yellow-500 border border-yellow-800">JACKPOT</span>
                                           )}
@@ -103,9 +117,24 @@ export default async function HistoryPage() {
                                       <td className="px-4 py-3">
                                           <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs border border-slate-700">{winner.stage}</span>
                                       </td>
+                                      <td className="px-4 py-3">
+                                          {isVoid ? (
+                                              <div>
+                                                  <span className="px-2 py-0.5 rounded-full bg-red-900/40 text-red-300 text-xs font-bold border border-red-800">VOID</span>
+                                                  {winner.void_reason && (
+                                                      <div className="text-xs text-slate-500 mt-1 max-w-[16rem]">{winner.void_reason}</div>
+                                                  )}
+                                              </div>
+                                          ) : winner.prize_given ? (
+                                              <span className="px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-300 text-xs font-bold border border-emerald-800">PRIZE GIVEN</span>
+                                          ) : (
+                                              <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-xs border border-slate-700">Not handed over</span>
+                                          )}
+                                      </td>
                                       <td className="px-4 py-3 text-right font-mono text-slate-400">{winner.call_count_at_win}</td>
                                   </tr>
-                              ))}
+                                  );
+                              })}
                           </tbody>
                       </table>
                   </div>

@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { createSession, deleteSession, duplicateSession, updateSession } from './actions';
+import { formatDateInLondon } from '@/lib/dates';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
@@ -153,7 +154,7 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
                   {sessions.map((session) => (
                     <tr key={session.id} className="border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
                       <td className="p-4 font-medium text-white">{session.name}</td>
-                      <td className="p-4 text-slate-300">{session.start_date}</td>
+                      <td className="p-4 text-slate-300">{formatDateInLondon(session.start_date)}</td>
                       <td className="p-4">
                         <span className={getStatusBadge(session.status)}>
                           {session.status.toUpperCase()}

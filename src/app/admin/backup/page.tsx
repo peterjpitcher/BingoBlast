@@ -2,6 +2,7 @@
 import { createClient } from '@/utils/supabase/server';
 import { Database } from '@/types/database';
 import { redirect } from 'next/navigation';
+import { formatDateInLondon } from '@/lib/dates';
 
 type GameWithGameState = Database['public']['Tables']['games']['Row'] & {
   game_states: Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence'> | null;
@@ -58,7 +59,7 @@ export default async function AdminBackupPage() {
           {gamesData.map((game) => (
             <div key={game.id} className="bg-slate-900 p-6 rounded-lg shadow-lg border border-slate-800">
               <h2 className="text-xl font-semibold mb-2">
-                Session: {game.sessions?.name} ({(new Date(game.sessions?.start_date || '')).toLocaleDateString()}) - Game {game.game_index}: {game.name}
+                Session: {game.sessions?.name} ({formatDateInLondon(game.sessions?.start_date)}) - Game {game.game_index}: {game.name}
               </h2>
               {game.game_states?.number_sequence ? (
                 <div className="flex flex-wrap gap-2 text-lg font-mono">
