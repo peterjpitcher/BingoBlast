@@ -714,15 +714,25 @@ export async function getCurrentGameState(gameId: string): Promise<ActionResult<
  * of this touches.
  */
 export async function callNextNumber(
-  gameId: string
+  gameId: string,
+  clientRequestId: string | null = null
 ): Promise<ActionResult<{ nextNumber: number; gameState: GameStateRow }>> {
   const startedAtMs = Date.now()
+
+  // Refused rather than passed through as null, exactly as recordWinner does. A
+  // malformed key would be a silent downgrade to the unprotected path, which is
+  // the failure this parameter exists to stop.
+  if (clientRequestId !== null && !isUuid(clientRequestId)) {
+    return failure('callNextNumber', GENERIC_ACTION_ERROR, `invalid clientRequestId: ${clientRequestId}`)
+  }
+
   // Cookie-based client, never the service role: the function reads auth.uid().
   const supabase = await createClient()
 
   const { data: gameState, error: rpcError } = await supabase.rpc('call_next_number', {
     p_game_id: gameId,
     p_min_gap_ms: HOST_MIN_CALL_GAP_MS,
+    p_client_request_id: clientRequestId,
   })
 
   if (rpcError) {

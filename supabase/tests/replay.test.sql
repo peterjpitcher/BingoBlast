@@ -317,3 +317,29 @@ select t('security :: a user cannot insert their own profile with a privileged r
              and with_check like '%pending%'),
          (select coalesce(string_agg(policyname || ' :: ' || coalesce(with_check, '-'), ' | '), '(no INSERT policy)')
             from pg_policies where schemaname = 'public' and tablename = 'profiles' and cmd = 'INSERT'));
+
+select t('idempotency :: game_states carries the call idempotency key',
+         exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'game_states'
+                    and column_name = 'last_call_request_id'),
+         'without a persisted key compared under the row lock, a client-side key is decoration');
+
+select t('idempotency :: the key is NOT mirrored to the public table',
+         not exists (select 1 from information_schema.columns
+                      where table_schema = 'public' and table_name = 'game_states_public'
+                        and column_name = 'last_call_request_id'),
+         'no public surface reads it and it is a host concern');
+
+select t('idempotency :: only the three-argument call_next_number exists',
+         (select count(*) = 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'call_next_number'),
+         (select string_agg(pg_get_function_identity_arguments(p.oid), ' | ') from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'call_next_number'));
+
+select t('idempotency :: only the eight-argument record_winner_atomic exists',
+         (select count(*) = 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'record_winner_atomic'),
+         (select string_agg(pg_get_function_identity_arguments(p.oid), ' | ') from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'record_winner_atomic'));

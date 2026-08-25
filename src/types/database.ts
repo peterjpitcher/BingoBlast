@@ -199,6 +199,12 @@ export interface Database {
           started_at: string | null
           ended_at: string | null
           last_call_at: string | null
+          /**
+           * Idempotency key of the most recent successful call. Deliberately not
+           * mirrored into game_states_public: it is a host concern and no public
+           * surface reads it.
+           */
+          last_call_request_id: string | null
           updated_at: string
           state_version: number // Monotonic counter bumped on every update; used to order Realtime/polling snapshots
         }
@@ -560,6 +566,14 @@ export interface Database {
           p_game_id: string
           /** Host anti-double-tap window. Pass HOST_MIN_CALL_GAP_MS from src/lib/call-timing.ts. */
           p_min_gap_ms?: number
+          /**
+           * Idempotency key for one intended ball. A retry carrying the key of a
+           * call that already committed returns the state unchanged instead of
+           * drawing a second ball. Mint it on the tap and hold it across retries
+           * of that tap; a fresh key per attempt removes the protection entirely.
+           * See supabase/migrations/20260825080606_call_next_number_idempotency.sql.
+           */
+          p_client_request_id?: string | null
         }
         Returns: Database['public']['Tables']['game_states']['Row']
       }

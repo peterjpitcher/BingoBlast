@@ -91,6 +91,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // reopens Record Winner. The two paths keep separate keys so they can never
     // borrow each other's.
     const claimRequestIdRef = useRef<string | null>(null);
+    /**
+     * Idempotency key for one intended ball, set on the tap and cleared as soon
+     * as any response arrives. It survives only a transport failure, which is
+     * exactly the case where the host will tap again and must not draw twice.
+     */
+    const callRequestIdRef = useRef<string | null>(null);
     const manualSnowballRequestIdRef = useRef<string | null>(null);
 
     /** The key for the claim on screen, minted on first use if a path missed it. */
@@ -611,18 +617,36 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setIsCallingNumber(true);
         setActionError(null);
 
+        // One key per intended call, held across retries of that call and
+        // cleared only once a response arrives. Minting it here rather than in
+        // the action is what makes a retry a retry: the second tap after a
+        // dropped response carries the SAME key, so call_next_number recognises
+        // the draw that already committed and returns the board as it stands
+        // instead of pulling a second ball out of the bag.
+        //
+        // If the first attempt never committed, the key was never stored, so the
+        // retry does not match and draws normally. Both outcomes are correct and
+        // neither needs this code to know which happened.
+        if (!callRequestIdRef.current) {
+            callRequestIdRef.current = newClaimRequestId();
+        }
+
         try {
             // The host is the author of this change, so apply the server's
             // already-synced state snapshot immediately. The freshness gate keeps
             // a slightly older Realtime echo from clobbering it.
-            applyMutation(await callNextNumber(gameId), "Failed to call next number.");
+            const result = await callNextNumber(gameId, callRequestIdRef.current);
+            applyMutation(result, "Failed to call next number.");
+            // A response of any kind ends this call, successful or refused. Only
+            // a transport failure leaves the key in place for the retry.
+            callRequestIdRef.current = null;
         } catch (err) {
             // This is the control the host presses every ten seconds all night.
             // Without the catch and finally, one dropped request left
             // isCallingNumber true forever: the button stayed disabled reading
             // "CALLING..." with no error, and only a reload recovered it.
             logError('host-control', err);
-            setActionError("Could not reach the server to call the next number. Check the connection and try again.");
+            setActionError("Could not reach the server to call the next number. Check the connection and tap again: if the ball did come out, tapping again will not draw a second one.");
         } finally {
             setIsCallingNumber(false);
         }
