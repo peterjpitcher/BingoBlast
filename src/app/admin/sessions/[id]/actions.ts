@@ -341,13 +341,40 @@ export async function resetSession(sessionId: string, confirmationText: string):
     return { success: false, error: 'Type RESET or the session name to confirm.' }
   }
 
-  // RPC wraps every destructive step (winners delete, game_states delete,
-  // session reset) in a single transaction so a partial failure cannot leave
-  // a half-reset session.
-  const { error: rpcError } = await supabase.rpc('reset_session_safe', { p_session_id: sessionId })
+  // RPC wraps every destructive step (the audit snapshot, the winners delete,
+  // the game_states delete and the session reset) in a single transaction, so a
+  // partial failure cannot leave a half-reset session and cannot destroy a night
+  // without recording that it did.
+  const { data: resetLog, error: rpcError } = await supabase.rpc('reset_session_safe', { p_session_id: sessionId })
 
   if (rpcError) {
-    return { success: false, error: 'Failed to reset session: ' + rpcError.message }
+    const raw = (rpcError.message ?? '').trim()
+    const key = raw.split(':')[0]
+
+    if (key === 'snowball_already_settled') {
+      // Deliberately a refusal, not an automatic fix. The pot has already moved
+      // for this session, and rewinding it would overwrite any legitimate later
+      // movement with a stale figure. A wrong pot that looks right is worse than
+      // being told no.
+      const potName = raw.slice(raw.indexOf(':') + 1).trim()
+      return {
+        success: false,
+        error: `Cannot reset this session: its snowball game has already settled the pot${potName ? ` "${potName}"` : ''}. Correct the pot on the Snowball page first, then this session can be reset.`,
+      }
+    }
+    if (key === 'session_not_found') {
+      return { success: false, error: 'Could not find that session. Please reload.' }
+    }
+    if (key === 'unauthorized') {
+      return { success: false, error: 'Only an admin can reset a session.' }
+    }
+
+    console.error('[admin:resetSession]', { code: rpcError.code, message: rpcError.message })
+    return { success: false, error: 'Failed to reset that session. Please try again.' }
+  }
+
+  if (!resetLog) {
+    return { success: false, error: 'Failed to reset that session. Please reload and try again.' }
   }
 
   revalidatePath(`/admin/sessions/${sessionId}`)

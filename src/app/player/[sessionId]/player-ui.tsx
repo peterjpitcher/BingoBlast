@@ -674,8 +674,12 @@ export default function PlayerUI({
         )}
       </div>
 
+      {/* Solid, not a tint. This used to be bg-[#a57626]/20 painted straight over
+          the game colour, which on the pale yellows and peaches the pub uses to
+          match its paper books left white text on near-white at about 1.4:1.
+          The hint was invisible, so phones slept mid-game. */}
       {!isWakeLockActive && (
-        <div className="bg-[#a57626]/20 border-b border-[#a57626]/50 px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-white">
+        <div className="bg-[#003f27] border-b border-[#a57626]/60 px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-white">
           Tap once to keep this screen awake
         </div>
       )}
@@ -778,8 +782,12 @@ export default function PlayerUI({
               </div>
             </div>
 
+            {/* Solid, not a 25 percent tint. Over a pale game colour the old
+                tint left the jackpot figure and the calls-left countdown as
+                white on near-white. This is the most valuable number on the
+                screen, so it gets a background of its own. */}
             {isSnowballGame && (
-              <div className="bg-[#a57626]/25 p-3 rounded-lg border border-[#a57626]/60 shadow-lg shadow-black/25">
+              <div className="bg-[#7a5719] p-3 rounded-lg border border-[#f3d59d]/70 shadow-lg shadow-black/25">
                 {currentSnowballPot && currentGameState && snowballWindowStatus ? (
                   <>
                     <div className="flex justify-between items-center gap-4">
@@ -827,7 +835,9 @@ export default function PlayerUI({
                   </div>
                 </div>
               ) : (
-                <div className="w-48 h-48 rounded-full border-4 border-[#1f7c58] border-dashed flex items-center justify-center">
+                // Filled rather than transparent: the dashed outline used to let
+                // the game colour through behind white text.
+                <div className="w-48 h-48 rounded-full border-4 border-[#1f7c58] border-dashed bg-[#003f27]/90 flex items-center justify-center">
                   <span className="text-white font-bold">READY</span>
                 </div>
               )}
@@ -837,13 +847,19 @@ export default function PlayerUI({
                 allowed to slide sideways rather than shrink: BingoBall carries
                 shrink-0 so the balls stay circular at 320px and at 200 percent
                 text zoom. */}
-            <div>
+            {/* Everything here used to sit on the raw game colour. "View All
+                Numbers" is the only route to the full 1 to 90 board, which is
+                the one thing a punter with a paper book actually wants, and on
+                a pale game colour it was white on near-white and effectively
+                unreachable. The dark panel makes the contrast a property of the
+                component rather than of whichever colour the admin picked. */}
+            <div className="rounded-xl border border-[#1f7c58] bg-[#003f27]/90 p-3">
               <div className="flex justify-between items-end mb-2">
                 <span className="text-sm text-white font-medium">Recent Calls</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-white h-auto p-0 hover:bg-transparent"
+                  className="text-white h-auto min-h-[44px] px-3 underline decoration-[#f3d59d] underline-offset-4 hover:bg-white/10"
                   onClick={() => setShowFullHistory(true)}
                 >
                   View All Numbers

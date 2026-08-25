@@ -23,6 +23,23 @@ export default async function HostPage() {
     redirect('/login');
   }
 
+  // Authentication is not authorisation. This used to be `if (!user)` alone,
+  // which was safe only while every account that could exist was already staff.
+  // New accounts land as 'pending', so a signed-in stranger would otherwise
+  // render the whole host console and every button on it, and be refused only
+  // once they pressed something. RLS and assert_is_host() would still deny the
+  // data, but a screen that looks live and does nothing is worse than a screen
+  // that says why.
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single<Pick<Database['public']['Tables']['profiles']['Row'], 'role'>>();
+
+  if (profile?.role !== 'admin' && profile?.role !== 'host') {
+    redirect('/pending');
+  }
+
   const { data: sessionsData, error: sessionsError } = await supabase
     .from('sessions')
     .select(`

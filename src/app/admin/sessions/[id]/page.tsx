@@ -62,10 +62,13 @@ export default async function SessionDetailPage({ params }: PageProps) {
     console.error('Error fetching games', gamesError.message);
   }
 
-  // Fetch Snowball Pots (for dropdowns)
+  // Fetch Snowball Pots (for dropdowns). Archived pots are excluded: a new game
+  // must not be linked to a retired pot, and the reverse (an already-linked game
+  // keeping its pot) is exactly what archiving preserves.
   const { data: snowballPots } = await supabase
     .from('snowball_pots')
     .select('id, name, current_jackpot_amount, current_max_calls')
+    .is('archived_at', null)
     .order('name');
 
   // Fetch winners for this session so admins can review prize status after game completion

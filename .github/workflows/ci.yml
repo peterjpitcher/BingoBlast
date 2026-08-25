@@ -1,0 +1,98 @@
+name: CI
+
+# Every check that protects this app runs here, on every push and pull request.
+#
+# WHY THIS EXISTS AND WHY IT IS FIRST
+#   Before this file, `npm test`, lint, typecheck, build and the Postgres harness
+#   all passed locally and nothing ran them on a push. The auth and money
+#   migrations that follow in the remediation plan are exactly the changes that
+#   need a repeatable gate in front of them, so this lands before any of them.
+#
+#   The database job matters most. Docker is not available on the developer
+#   machine, so supabase/tests/run.sh has never been executed there. GitHub's
+#   runners have Docker, which makes this the only place the full migration
+#   replay actually runs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Lint, types, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # The build needs the public Supabase env vars to exist, but never needs
+      # them to be real: nothing in the build talks to Supabase. Placeholders
+      # keep the build honest without putting a live key in CI.
+      - name: Build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          NEXT_PUBLIC_SITE_URL: https://placeholder.invalid
+        run: npm run build
+
+  database:
+    name: Migration replay and Postgres assertions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The harness starts its own postgres:17 container on port 55432 and talks
+      # to it with psql, so the runner needs the client but not a service.
+      - name: Install the Postgres client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Run the Postgres harness
+        run: npm run test:db
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    # Advisory only for now. It is turned into a blocking check in the same
+    # change that clears the current backlog of high-severity advisories, so
+    # that this job never lands already red.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --audit-level=high --omit=dev

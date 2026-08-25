@@ -2,13 +2,15 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Database, GameType, WinStage, GameStatus } from '@/types/database';
-import { createGame, deleteGame, duplicateGame, updateSessionStatus, updateGame, resetSession } from './actions';
+import { createGame, deleteGame, duplicateGame, updateSessionStatus, updateGame, resetSession, voidWinner } from './actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { Input } from '@/components/ui/input';
 import { useRouter } from 'next/navigation';
 import { validateGamePrizes } from '@/lib/prize-validation';
+import { formatDateInLondon, formatDateTimeInLondon } from '@/lib/dates';
+import { formatPence, totalPaidOutPence } from '@/lib/money';
 
 type Session = Database['public']['Tables']['sessions']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -57,6 +59,15 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
   const [isDeletingGame, setIsDeletingGame] = useState(false);
   const [deleteGameError, setDeleteGameError] = useState<string | null>(null);
 
+  // Void-a-winner modal state. voidWinner has been exported from ./actions and
+  // called by nothing at all, so an admin reviewing a finished night had no way
+  // to void a wrongly recorded win: the only route was the live host screen,
+  // during the game, which is exactly when nobody is reviewing anything.
+  const [voidTarget, setVoidTarget] = useState<WinnerWithGame | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [isVoiding, setIsVoiding] = useState(false);
+  const [voidError, setVoidError] = useState<string | null>(null);
+
   // Typed-confirm reset-session modal state
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetTyped, setResetTyped] = useState('');
@@ -64,6 +75,13 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
   const [resetError, setResetError] = useState<string | null>(null);
 
   const router = useRouter();
+
+  // Excludes voided wins, and sums each winner's share rather than the whole
+  // prize, so a tie is counted once.
+  const sessionPayout = useMemo(
+    () => totalPaidOutPence(winners.filter((w) => w.is_void !== true)),
+    [winners]
+  );
 
   useEffect(() => {
     setGames(initialGames);
@@ -178,6 +196,31 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
     }
   }
 
+  async function handleConfirmVoidWinner() {
+    if (!voidTarget || isVoiding) return;
+    const reason = voidReason.trim();
+    if (reason.length === 0) {
+      setVoidError('Give a reason before voiding this winner.');
+      return;
+    }
+    setIsVoiding(true);
+    setVoidError(null);
+    try {
+      const result = await voidWinner(voidTarget.id, reason);
+      if (!result?.success) {
+        setVoidError(result?.error || 'Failed to void that winner.');
+        return;
+      }
+      setVoidTarget(null);
+      setVoidReason('');
+      router.refresh();
+    } catch {
+      setVoidError('Could not reach the server. Check the connection and try again.');
+    } finally {
+      setIsVoiding(false);
+    }
+  }
+
   function handleShowDeleteGame(game: Game) {
     setDeleteGameTarget(game);
     setDeleteGameTyped('');
@@ -289,7 +332,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                 <CardContent>
                     <dl className="grid grid-cols-3 gap-4 text-sm">
                         <dt className="text-slate-400">Date</dt>
-                        <dd className="col-span-2 text-white font-medium">{session.start_date}</dd>
+                        <dd className="col-span-2 text-white font-medium">{formatDateInLondon(session.start_date)}</dd>
 
                         <dt className="text-slate-400">Status</dt>
                         <dd className="col-span-2 text-white uppercase font-bold tracking-wider">{session.status}</dd>
@@ -341,6 +384,20 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
       <Card className="bg-slate-900 border-slate-800 mb-6">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Winners ({winners.length})</CardTitle>
+          {/* Sums the shares, never the amounts: on a tied stage the amount is
+              the whole prize and sits on every tied row, so totalling it would
+              count one £10 prize as £20. Voided wins are excluded. */}
+          <div className="text-right">
+            <span className="block text-xs uppercase tracking-wider text-slate-500">Paid out</span>
+            <span className="text-xl font-bold text-white font-mono tabular-nums">
+              {formatPence(sessionPayout.totalPence)}
+            </span>
+            {sessionPayout.uncountedRows > 0 && (
+              <span className="block text-xs text-slate-500">
+                plus {sessionPayout.uncountedRows} non-cash
+              </span>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {winners.length === 0 ? (
@@ -362,7 +419,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                   {winners.map((winner) => (
                     <tr key={winner.id} className="hover:bg-slate-800/30 transition-colors">
                       <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
-                        {new Date(winner.created_at).toLocaleString()}
+                        {formatDateTimeInLondon(winner.created_at)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium text-white">
@@ -382,20 +439,47 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                             JACKPOT
                           </span>
                         )}
+                        {winner.is_void !== true
+                          && winner.prize_share_pence !== null
+                          && winner.prize_share_pence !== undefined && (
+                          <span className="block text-xs font-mono text-slate-400">
+                            {formatPence(winner.prize_share_pence)}
+                            {winner.prize_amount_pence !== null
+                              && winner.prize_amount_pence !== winner.prize_share_pence
+                              && ` (share of ${formatPence(winner.prize_amount_pence)})`}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right">
                         {winner.is_void ? (
-                          <span className="px-2 py-0.5 rounded-full border border-red-700 text-red-300 bg-red-900/20 text-xs font-semibold">
-                            VOID
-                          </span>
-                        ) : winner.prize_given ? (
-                          <span className="px-2 py-0.5 rounded-full border border-green-700 text-green-300 bg-green-900/20 text-xs font-semibold">
-                            Prize Given
-                          </span>
+                          <div className="inline-flex flex-col items-end gap-1">
+                            <span className="px-2 py-0.5 rounded-full border border-red-700 text-red-300 bg-red-900/20 text-xs font-semibold">
+                              VOID
+                            </span>
+                            {winner.void_reason && (
+                              <span className="text-xs text-slate-500 max-w-[14rem] text-right">{winner.void_reason}</span>
+                            )}
+                          </div>
                         ) : (
-                          <span className="px-2 py-0.5 rounded-full border border-yellow-700 text-yellow-300 bg-yellow-900/20 text-xs font-semibold">
-                            Outstanding
-                          </span>
+                          <div className="inline-flex items-center gap-2">
+                            {winner.prize_given ? (
+                              <span className="px-2 py-0.5 rounded-full border border-green-700 text-green-300 bg-green-900/20 text-xs font-semibold">
+                                Prize Given
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full border border-yellow-700 text-yellow-300 bg-yellow-900/20 text-xs font-semibold">
+                                Outstanding
+                              </span>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-400 hover:text-red-300 hover:bg-red-900/20 min-h-[44px]"
+                              onClick={() => { setVoidTarget(winner); setVoidReason(''); setVoidError(null); }}
+                            >
+                              Void
+                            </Button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -773,6 +857,66 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
 
       {/* Typed-confirm reset-session modal */}
       <Modal
+        isOpen={voidTarget !== null}
+        onClose={() => { if (!isVoiding) { setVoidTarget(null); setVoidReason(''); setVoidError(null); } }}
+        title="Void this winner?"
+      >
+        <div className="space-y-4">
+          {voidTarget && (
+            <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-sm">
+              <p className="text-white font-semibold">
+                {voidTarget.stage} on {voidTarget.game ? `Game ${voidTarget.game.game_index}: ${voidTarget.game.name}` : 'an unknown game'}
+              </p>
+              <p className="text-slate-300">{voidTarget.prize_description || 'No prize recorded'}</p>
+            </div>
+          )}
+          <p className="text-sm text-white/85">
+            The win is kept and marked void, with your reason against it. Nothing is deleted, and
+            the row stays visible here and in Winner History so the correction is on the record.
+          </p>
+          <p className="text-sm text-yellow-200/85">
+            If this was a snowball jackpot that has already settled, voiding it here does NOT move
+            the pot back. Correct the pot on the Snowball page as well.
+          </p>
+          <div className="space-y-2">
+            <label htmlFor="voidReason" className="text-sm font-medium text-white/85">
+              Reason (required)
+            </label>
+            <Input
+              id="voidReason"
+              type="text"
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              placeholder="Why is this being voided?"
+              autoComplete="off"
+              disabled={isVoiding}
+            />
+            <p className="text-xs text-slate-500">
+              Do not put a customer&rsquo;s name here. Winners are recorded anonymously on purpose.
+            </p>
+          </div>
+          {voidError && (
+            <div role="alert" className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
+              {voidError}
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" type="button" onClick={() => setVoidTarget(null)} disabled={isVoiding}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              type="button"
+              onClick={handleConfirmVoidWinner}
+              disabled={isVoiding || voidReason.trim().length === 0}
+            >
+              {isVoiding ? 'Voiding…' : 'Void winner'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
         isOpen={showResetModal}
         onClose={handleCloseReset}
         title={`Reset session "${session.name}" to Ready?`}
@@ -798,15 +942,25 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
             </div>
           )}
           <p className="text-sm text-white/85">
-            This will wipe all live history for this session and put it back into the Ready state. The following will be permanently deleted:
+            This wipes the live record of this session and puts it back into the Ready state.
+            The following are deleted:
           </p>
           <ul className="list-disc list-inside text-sm text-white/85 space-y-1 pl-2">
             <li>All game states (called numbers, current stage, current pattern)</li>
-            <li>All recorded winners for this session</li>
-            <li>Any snowball jackpot history captured against winners in this session</li>
+            <li>All recorded winners for this session, including voided ones</li>
           </ul>
+          <p className="text-sm text-white/85">
+            Snowball pot balances, the pot&rsquo;s own history and the game configuration are not
+            touched. The list above used to claim it deleted snowball history; it never did.
+          </p>
+          <p className="text-sm text-emerald-200/90">
+            A record of exactly what was deleted, including the winners, is kept so this can be
+            checked afterwards.
+          </p>
           <p className="text-sm text-yellow-200/85">
-            Snowball pot balances and the underlying game configuration are not touched.
+            If this session&rsquo;s snowball game has already settled the pot, the reset will be
+            refused: the pot has moved and cannot be safely rewound. Correct the pot on the
+            Snowball page first.
           </p>
           <div className="space-y-2">
             <label htmlFor="confirmReset" className="text-sm font-medium text-white/85">

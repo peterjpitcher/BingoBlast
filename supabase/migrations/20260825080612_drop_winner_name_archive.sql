@@ -1,0 +1,35 @@
+-- Deletes the last copy of the customer names held by this application.
+--
+-- APPROVED BY THE OWNER on 2026-08-25, as the final step of the anonymisation
+-- begun in 20260825080610.
+--
+-- WHY THIS IS A SEPARATE MIGRATION
+--   20260825080610 replaced 43 real customer first names with 'Anonymous' and
+--   copied the originals into public.winners_name_archive first, so the change
+--   could be undone. That archive was always a holding step, and its own comment
+--   said so: an archive of the names is still the names. It reduced the exposure
+--   without ending it.
+--
+--   Splitting the deletion into its own migration is what made the intervening
+--   window a deliberate decision rather than an accident. The names were
+--   exported to a file the owner holds before this ran, and the export was
+--   checked against the archive row for row: 43 rows, 19 distinct names, both
+--   sides agreeing, on 2026-08-25.
+--
+-- WHAT THIS MEANS
+--   After this migration, this database holds no customer names at all, and the
+--   claim in CLAUDE.md that winners are "anonymised by policy" is finally true
+--   of the data as well as the code. The only remaining record of who won what
+--   is the owner's own file, outside the application, which is where it belongs.
+--
+-- NOT REVERSIBLE, and that is the point. There is no rollback section here
+-- because there is nothing to roll back to. If the names are ever needed again
+-- they come from the owner's export, by hand, deliberately.
+--
+-- WHAT IS NOT LOST
+--   Every winner row keeps its stage, prize, prize value, share, call count,
+--   void flag, timestamps and its links to game and session. Nothing reads
+--   winner_name for anything except rendering a label that now always says
+--   'Anonymous'. History, payout totals and the audit trail are untouched.
+
+drop table if exists public.winners_name_archive;

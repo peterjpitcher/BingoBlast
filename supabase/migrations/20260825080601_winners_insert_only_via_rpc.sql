@@ -1,0 +1,59 @@
+-- Closes the direct-insert route to public.winners.
+--
+-- WHY
+--   The policy "Hosts/Admins can create winners" checked only the caller's role,
+--   nothing about the row. A host holds a real JWT in a browser, so a host could
+--   send:
+--
+--     POST /rest/v1/winners
+--     { "session_id": ..., "game_id": ..., "stage": "Full House",
+--       "winner_name": "Anonymous", "is_snowball_jackpot": true,
+--       "prize_description": "Snowball Jackpot £5000" }
+--
+--   and it would be accepted. When that game ended, settle_snowball_pot runs
+--
+--     select exists (select 1 from public.winners
+--                     where game_id = p_game_id
+--                       and coalesce(is_snowball_jackpot, false)
+--                       and coalesce(is_void, false) = false)
+--
+--   sees true, and RESETS the live pot to base instead of rolling it over,
+--   stamping last_awarded_at on the way. Real cash, moved by a hand-crafted
+--   request, bypassing every guard in record_winner_atomic: the controller
+--   check, the stage check, the call-window check, the idempotency key and the
+--   derived call count.
+--
+--   This is the same hole the UPDATE side of this table is already defended
+--   against. CLAUDE.md is explicit that widening winners UPDATE to hosts would
+--   let a host set is_void by hand. The INSERT side was simply never closed.
+--
+-- WHY DROPPING THE POLICY DOES NOT BREAK THE HOST FLOW
+--   record_winner_atomic is SECURITY DEFINER and owned by postgres, which holds
+--   rolbypassrls and owns public.winners, and the table does not have FORCE ROW
+--   LEVEL SECURITY. The function therefore writes without consulting policies at
+--   all. Verified against production 2026-08-25:
+--     pg_roles.rolbypassrls for postgres = true
+--     pg_class.relowner for public.winners = postgres
+--     pg_class.relforcerowsecurity for public.winners = false
+--   With no INSERT policy on the table, PostgREST refuses a direct insert and
+--   the RPC keeps working. That is exactly the intended shape.
+--
+-- WHAT IS DELIBERATELY LEFT ALONE
+--   SELECT stays as it is in this migration. Narrowing it is a separate concern
+--   with its own compatibility question (the public screens hold the anon key),
+--   so it gets its own migration rather than being smuggled in here.
+--
+-- ROLLBACK
+--   Recreate the policy exactly as it was:
+--     create policy "Hosts/Admins can create winners" on public.winners
+--       for insert with check (exists (select 1 from public.profiles
+--         where profiles.id = auth.uid()
+--           and (profiles.role = 'admin'::public.user_role
+--                or profiles.role = 'host'::public.user_role)));
+--   Nothing in the application depends on it, so a rollback is only needed if
+--   some out-of-band tool turns out to insert winners directly.
+
+drop policy if exists "Hosts/Admins can create winners" on public.winners;
+
+comment on table public.winners is
+  'One audit row per recorded win, always anonymous. INSERT is only possible through record_winner_atomic (security definer, owned by postgres): there is deliberately no INSERT policy, because a role-only check would let a host hand-craft a jackpot win and force a pot reset. UPDATE is admin-only, except prize_given which goes through set_winner_prize_given.';

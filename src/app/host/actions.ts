@@ -11,6 +11,7 @@ import { formatCashJackpotPrize, isCashJackpotGame, parseCashJackpotAmount } fro
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages'
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
 import { logActionFailure, logActionLatency } from '@/lib/log-action-failure'
+import { reportError } from '@/lib/report-error'
 import { isUuid } from '@/lib/utils'
 
 type GameStateRow = Database['public']['Tables']['game_states']['Row']
@@ -127,9 +128,21 @@ function rpcFailure(
   rpcError: { message?: string } | null,
   startedAtMs: number
 ): { success: false; error: string; conflict?: true; code?: ActionFailureCode } {
-  logActionFailure(action, rpcError)
+  const mapped = mapHostRpcError(rpcError?.message)
+
+  // A refusal is not a fault. `not_controller`, `too_soon`, `on_break` and the
+  // rest are the guards doing their job several times a night, and reporting
+  // them would bury the one that matters. Only an unmapped message, meaning
+  // something nobody anticipated, is worth waking anyone for.
+  const isExpectedRefusal = mapped.error !== GENERIC_ACTION_ERROR
+  if (!isExpectedRefusal) {
+    void reportError({ scope: `host:${action}` }, rpcError)
+  } else {
+    logActionFailure(action, rpcError)
+  }
+
   logActionLatency(action, startedAtMs)
-  return { success: false, ...mapHostRpcError(rpcError?.message) }
+  return { success: false, ...mapped }
 }
 
 type HostAuthResult =
@@ -274,13 +287,52 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, gameI
     return { success: true };
 }
 
+/**
+ * Settles the snowball pot for a game that has already finished.
+ *
+ * Every route to settlement ran inside endGame, advanceToNextStage or skipStage,
+ * and all three refuse once the game is completed. So a settlement that failed,
+ * for any reason including a dropped connection at exactly the wrong moment,
+ * was terminal: the game was completed, the pot had not moved, and there was no
+ * way to try again. The pot then advertised last week's figure until an admin
+ * corrected it by hand on /admin/snowball, which is a manual cash adjustment
+ * standing in for a retry.
+ *
+ * settle_snowball_pot is already safe to call repeatedly: the partial unique
+ * index on (snowball_pot_id, game_id) turns a second attempt into
+ * 'already_settled' and leaves the pot exactly where it is. So the retry needs
+ * no new guard, only a route to it.
+ *
+ * Deliberately does NOT check the game status. The whole point is that the game
+ * is finished.
+ */
+export async function settleSnowballPotForGame(gameId: string): Promise<ActionResult> {
+    const supabase = await createClient();
+    const authResult = await authorizeHost(supabase);
+    if (!authResult.authorized) return failure('settleSnowballPotForGame', authResult.error);
+
+    const result = await handleSnowballPotUpdate(supabase, gameId);
+    if (!result.success) {
+        return failure('settleSnowballPotForGame', SNOWBALL_POT_NOT_MOVED_ERROR, result.error);
+    }
+
+    revalidatePath('/host');
+    return { success: true };
+}
+
 async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionId: string) {
     const { data: games, error } = await supabase
         .from('games')
         .select('id')
         .eq('session_id', sessionId)
 
-    if (error || !games || games.length === 0) return;
+    if (error || !games || games.length === 0) {
+        // Silent before. A read failure here means the session is simply never
+        // marked complete, which looks identical to "there is another game to
+        // play" and is impossible to diagnose the morning after.
+        if (error) logActionFailure('maybeCompleteSession', error);
+        return;
+    }
 
     const gameIds = games.map((g: { id: string }) => g.id);
     const { data: completedStates, error: completedStatesError } = await supabase
@@ -289,16 +341,32 @@ async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionI
         .in('game_id', gameIds)
         .eq('status', 'completed');
 
-    if (completedStatesError) return;
+    if (completedStatesError) {
+        logActionFailure('maybeCompleteSession', completedStatesError);
+        return;
+    }
 
     const completedGameIds = new Set((completedStates || []).map((s: { game_id: string }) => s.game_id));
     const hasIncompleteGame = gameIds.some((id: string) => !completedGameIds.has(id));
 
     if (!hasIncompleteGame) {
-        await supabase
+        // .select() so a write RLS filtered out is a real failure rather than a
+        // silent one. Without it a session could stay 'running' for ever with
+        // nothing anywhere saying why, and the next night's /host and /display
+        // would both still list it as live.
+        const { data: completedRows, error: completeError } = await supabase
             .from('sessions')
             .update({ status: 'completed', active_game_id: null })
             .eq('id', sessionId)
+            .select('id')
+
+        if (completeError) {
+            logActionFailure('maybeCompleteSession', completeError);
+            return;
+        }
+        if (!completedRows || completedRows.length === 0) {
+            logActionFailure('maybeCompleteSession', 'session completion matched no rows');
+        }
     }
 }
 
@@ -316,12 +384,26 @@ export async function startGame(
 
       const { data: gameDetailsForStart, error: gameDetailsError } = await dbClient
         .from('games')
-        .select('name, type, stage_sequence, prizes')
+        .select('session_id, name, type, stage_sequence, prizes')
         .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'name' | 'type' | 'stage_sequence' | 'prizes'>>();
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'name' | 'type' | 'stage_sequence' | 'prizes'>>();
 
       if (gameDetailsError || !gameDetailsForStart) {
         return failure('startGame', COULD_NOT_READ_GAME_ERROR, gameDetailsError ?? 'game not found');
+      }
+
+      // The two ids are supplied by the caller and were never checked against
+      // each other. This action then writes `status: 'running'` and
+      // `active_game_id: gameId` onto whichever session it was named, so a
+      // mismatched pair pointed one session's live game at another session.
+      // Every other host action derives the session from the game; this one is
+      // the last place that trusted the pairing.
+      if (gameDetailsForStart.session_id !== sessionId) {
+        return failure(
+          'startGame',
+          COULD_NOT_READ_GAME_ERROR,
+          'game does not belong to the session it was asked to start in'
+        );
       }
 
       // 1. Check if game_state already exists
@@ -336,7 +418,11 @@ export async function startGame(
       }
 
       const isFirstStartAttempt = !existingGameState || existingGameState.status === 'not_started';
-      const requiresCashJackpotAmount = isFirstStartAttempt && isCashJackpotGame(gameDetailsForStart.name, gameDetailsForStart.type);
+      // Decided by game type alone. It used to also match a regex on the game
+      // NAME, which meant an ordinary three-stage game called something like
+      // "Game 5 - Mini Jackpot" prompted for a cash amount and then had all
+      // three of its configured prizes overwritten with it, permanently.
+      const requiresCashJackpotAmount = isFirstStartAttempt && isCashJackpotGame(gameDetailsForStart.type);
       const providedCashJackpotAmount = cashJackpotAmountInput?.trim();
 
       if (requiresCashJackpotAmount && !providedCashJackpotAmount) {
@@ -349,22 +435,50 @@ export async function startGame(
           return failure('startGame', "Please enter a valid cash jackpot amount.");
         }
 
+        const jackpotStages = (gameDetailsForStart.stage_sequence || []) as WinStage[];
+
+        // A cash jackpot game plays for one stage, and the amount belongs to
+        // that stage only. Refusing a multi-stage jackpot game is deliberate:
+        // writing one amount across several stages is what destroyed the
+        // admin's configuration before, and silently writing it to only one of
+        // them would leave the host guessing which. This is unreachable through
+        // the admin UI, which forces a jackpot game to Full House alone, so it
+        // only catches a game edited into an impossible shape.
+        if (jackpotStages.length !== 1) {
+          return failure(
+            'startGame',
+            'This jackpot game has more than one stage, so the cash amount cannot be applied. Ask an admin to set it to Full House only.',
+            `jackpot game has ${jackpotStages.length} stages`
+          );
+        }
+
         const jackpotPrizeText = formatCashJackpotPrize(parsedAmount);
         const updatedPrizes = { ...(gameDetailsForStart.prizes || {}) };
-        for (const stage of gameDetailsForStart.stage_sequence || []) {
-          updatedPrizes[stage] = jackpotPrizeText;
-        }
+        updatedPrizes[jackpotStages[0]] = jackpotPrizeText;
 
         const gamePrizeUpdate: Database['public']['Tables']['games']['Update'] = {
           prizes: updatedPrizes,
         };
-        const { error: gamePrizeError } = await dbClient
+        // .select() is what makes this honest. games UPDATE is admin-only in
+        // RLS, so with no service-role key configured a host-role account's
+        // write matches zero rows, and PostgREST answers with no error and no
+        // rows. Without this check the host would be told the jackpot amount
+        // saved while the TV kept showing the old prize.
+        const { data: prizeRows, error: gamePrizeError } = await dbClient
           .from('games')
           .update(gamePrizeUpdate)
-          .eq('id', gameId);
+          .eq('id', gameId)
+          .select('id');
 
         if (gamePrizeError) {
           return failure('startGame', 'Could not save the jackpot amount. Please try again.', gamePrizeError);
+        }
+        if (!prizeRows || prizeRows.length === 0) {
+          return failure(
+            'startGame',
+            'Could not save the jackpot amount. Ask an admin to start this game.',
+            'games prize update matched no rows: RLS filtered it, or the game id is stale'
+          );
         }
       }
 
@@ -613,15 +727,25 @@ export async function getCurrentGameState(gameId: string): Promise<ActionResult<
  * of this touches.
  */
 export async function callNextNumber(
-  gameId: string
+  gameId: string,
+  clientRequestId: string | null = null
 ): Promise<ActionResult<{ nextNumber: number; gameState: GameStateRow }>> {
   const startedAtMs = Date.now()
+
+  // Refused rather than passed through as null, exactly as recordWinner does. A
+  // malformed key would be a silent downgrade to the unprotected path, which is
+  // the failure this parameter exists to stop.
+  if (clientRequestId !== null && !isUuid(clientRequestId)) {
+    return failure('callNextNumber', GENERIC_ACTION_ERROR, `invalid clientRequestId: ${clientRequestId}`)
+  }
+
   // Cookie-based client, never the service role: the function reads auth.uid().
   const supabase = await createClient()
 
   const { data: gameState, error: rpcError } = await supabase.rpc('call_next_number', {
     p_game_id: gameId,
     p_min_gap_ms: HOST_MIN_CALL_GAP_MS,
+    p_client_request_id: clientRequestId,
   })
 
   if (rpcError) {
@@ -759,7 +883,10 @@ export async function resumeGame(gameId: string): Promise<ActionResult<{ gameSta
     return { success: true, data: { gameState: rows[0] } };
 }
 
-export async function endGame(gameId: string, sessionId: string): Promise<ActionResult<{ gameState: GameStateRow }>> {
+export async function endGame(
+    gameId: string,
+    sessionId: string
+): Promise<ActionResult<{ gameState: GameStateRow; snowballPotDidNotSettle?: boolean }>> {
     const supabase = await createClient()
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return failure('endGame', controlResult.error)
@@ -804,10 +931,13 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
         return conflictFailure('endGame', STATE_MOVED_ERROR);
     }
 
-    // Use the shared helper for Snowball Logic. A pot failure here does not stop
-    // the game ending, exactly as before, but it is no longer silent.
+    // The game HAS ended: rows[0] proves the write landed, and that must not be
+    // undone by a pot problem. But telling the host it all worked when the pot
+    // demonstrably did not move is how a jackpot silently advertises last week's
+    // figure the following Friday. The game end stands; the answer says so.
     const potResult = await handleSnowballPotUpdate(supabase, gameId);
-    if (!potResult.success) {
+    const potDidNotMove = !potResult.success;
+    if (potDidNotMove) {
         logActionFailure('endGame', potResult.error ?? 'snowball pot update failed');
     }
     await maybeCompleteSession(supabase, sessionId);
@@ -835,6 +965,14 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
 
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the specific game page
     revalidatePath(`/host`); // Revalidate the host dashboard
+
+    if (potDidNotMove) {
+        // Not a failure: the game ended and the client must apply the new state.
+        // The flag is what lets the host screen offer the retry rather than
+        // leaving a stranded pot for somebody to notice next week.
+        return { success: true, data: { gameState: rows[0], snowballPotDidNotSettle: true } };
+    }
+
     return { success: true, data: { gameState: rows[0] } };
 }
 
@@ -1148,7 +1286,40 @@ export async function announceWin(gameId: string, stage: WinStage | 'snowball'):
     return { success: true, data: { gameState: rows[0] } };
 }
 
-export async function advanceToNextStage(gameId: string): Promise<ActionResult<{ gameState: GameStateRow }>> {
+/**
+ * Moves the game on one stage, and optionally starts a break in the same call.
+ *
+ * `expectedStageIndex` is the retry contract, and it is the whole point of this
+ * signature. The client sends the stage index it was looking at when the host
+ * tapped, and holds that value fixed across every retry of the same tap.
+ *
+ * Without it, a request that committed server-side but lost its response on pub
+ * wifi was unrecoverable in the worst way: the host saw the button return to
+ * idle with no message, tapped again, and the second call re-read the now
+ * advanced index, bound to it, and advanced AGAIN. A whole stage was skipped
+ * with its prize unawarded. Binding `.eq('current_stage_index', ...)` to a
+ * freshly read value defends against two devices, but not against the same
+ * device retrying, because the fresh read moves with the state.
+ *
+ * With it, a retry arrives carrying the ORIGINAL index, sees the state is
+ * already exactly one stage past it, and reports success without writing
+ * anything. That is the same shape as the claim key on recordWinner: the retry
+ * is safe because the server can tell it is a retry.
+ *
+ * `putOnBreak` folds "Continue and Take Break" into one round trip. It used to
+ * be two calls from the client, so a break request that failed after a
+ * successful advance left the stage moved and the retry advanced again. Toggling
+ * a break on is naturally idempotent, so the combined call is safe to repeat.
+ */
+export async function advanceToNextStage(
+    gameId: string,
+    expectedStageIndex: number,
+    putOnBreak: boolean = false
+): Promise<ActionResult<{ gameState: GameStateRow }>> {
+    if (!Number.isInteger(expectedStageIndex) || expectedStageIndex < 0) {
+        return failure('advanceToNextStage', GENERIC_ACTION_ERROR, `invalid expectedStageIndex: ${expectedStageIndex}`);
+    }
+
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return failure('advanceToNextStage', controlResult.error)
@@ -1163,10 +1334,6 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult<{
          return failure('advanceToNextStage', COULD_NOT_READ_GAME_ERROR, fetchError ?? 'game state not found');
     }
 
-    if (currentGameState.status === 'completed') {
-        return conflictFailure('advanceToNextStage', 'This game has already finished.');
-    }
-
     const { data: gameDetails, error: gameDetailsError } = await supabase
         .from('games')
         .select('session_id, type, snowball_pot_id, stage_sequence')
@@ -1177,30 +1344,81 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult<{
         return failure('advanceToNextStage', COULD_NOT_READ_GAME_ERROR, gameDetailsError ?? 'game not found');
     }
 
-    let newStageIndex = currentGameState.current_stage_index + 1;
-    let newGameStatus: GameStatus = 'in_progress';
+    const totalStages = (gameDetails.stage_sequence as WinStage[] | null)?.length ?? 0;
+    if (totalStages === 0) {
+        return failure('advanceToNextStage', 'This game has no stages set up.');
+    }
 
-    if (newStageIndex >= (gameDetails.stage_sequence as WinStage[]).length) {
-        newStageIndex = (gameDetails.stage_sequence as WinStage[]).length - 1;
-        newGameStatus = 'completed';
+    // Where the requested advance was always going to land.
+    const intendedStageIndex = Math.min(expectedStageIndex + 1, totalStages - 1);
+    const intendedStatus: GameStatus = expectedStageIndex + 1 >= totalStages ? 'completed' : 'in_progress';
+
+    if (currentGameState.current_stage_index !== expectedStageIndex) {
+        // Already where this call was trying to get to: this is a retry of a
+        // request that committed and lost its answer. Report the truth rather
+        // than advancing a second time.
+        if (currentGameState.current_stage_index === intendedStageIndex
+            && (intendedStatus !== 'completed' || currentGameState.status === 'completed')) {
+            // A retry of a request that committed and lost its answer. Nothing
+            // is advanced. The break is still applied if it was asked for and
+            // did not land, because toggling a break on is idempotent.
+            if (putOnBreak && intendedStatus !== 'completed') {
+                await supabase
+                    .from('game_states')
+                    .update({ on_break: true } satisfies Database['public']['Tables']['game_states']['Update'])
+                    .eq('game_id', gameId)
+                    .eq('controlling_host_id', controlResult.user!.id)
+                    .eq('status', 'in_progress')
+                    .select('id');
+            }
+
+            const { data: settledState, error: settledError } = await supabase
+                .from('game_states')
+                .select('*')
+                .eq('game_id', gameId)
+                .single<GameStateRow>();
+
+            if (settledError || !settledState) {
+                return failure('advanceToNextStage', COULD_NOT_READ_GAME_ERROR, settledError ?? 'game state not found');
+            }
+
+            // Logged, not shown. The host asked for one advance and got one; the
+            // fact that it took two attempts is a diagnostic, not their problem.
+            logActionFailure('advanceToNextStage', `retry absorbed: already at stage ${intendedStageIndex}, nothing written`);
+            return { success: true, data: { gameState: settledState } };
+        }
+        return conflictFailure(
+            'advanceToNextStage',
+            STATE_MOVED_ERROR,
+            `expected stage ${expectedStageIndex}, found ${currentGameState.current_stage_index}`
+        );
+    }
+
+    if (currentGameState.status === 'completed') {
+        return conflictFailure('advanceToNextStage', 'This game has already finished.');
     }
 
     const stageUpdate: Database['public']['Tables']['game_states']['Update'] = {
-        current_stage_index: newStageIndex,
-        status: newGameStatus,
+        current_stage_index: intendedStageIndex,
+        status: intendedStatus,
         paused_for_validation: false,
         display_win_type: null,
         display_win_text: null,
         display_winner_name: null,
+        // A break requested alongside the advance is applied in the same write,
+        // so there is no window in which the stage has moved and the break has
+        // not. Completing the game clears the break instead: a finished game is
+        // never on a break.
+        ...(intendedStatus === 'completed' ? { on_break: false } : (putOnBreak ? { on_break: true } : {})),
     };
-    // Binding the stage index we read is what stops a double tap advancing two
-    // stages: the second write finds no row to update.
+    // Bound to the index the CLIENT named, not to a freshly read one. That is
+    // what makes a retry inert rather than a second advance.
     const { data: rows, error: updateError } = await supabase
         .from('game_states')
         .update(stageUpdate)
         .eq('game_id', gameId)
         .eq('controlling_host_id', controlResult.user!.id)
-        .eq('current_stage_index', currentGameState.current_stage_index)
+        .eq('current_stage_index', expectedStageIndex)
         .neq('status', 'completed')
         .select('*');
 
@@ -1214,7 +1432,7 @@ export async function advanceToNextStage(gameId: string): Promise<ActionResult<{
     // If the game is now completed, check Snowball logic (Rollover vs Reset).
     // This only fires when the pot itself did not move. A missing audit row is
     // logged inside the helper and never reported to the host as a pot failure.
-    if (newGameStatus === 'completed') {
+    if (intendedStatus === 'completed') {
         const potResult = await handleSnowballPotUpdate(supabase, gameId);
         if (!potResult.success) {
             return failure('advanceToNextStage', SNOWBALL_POT_NOT_MOVED_ERROR, potResult.error);
@@ -1407,7 +1625,17 @@ export async function voidWinnerFromHost(
  * games. They used to be passed in by the client, which meant a stale host
  * screen could move the game to a stage the server had already left.
  */
-export async function skipStage(gameId: string): Promise<ActionResult<{ gameState: GameStateRow }>> {
+export async function skipStage(
+    gameId: string,
+    expectedStageIndex: number
+): Promise<ActionResult<{ gameState: GameStateRow }>> {
+    // Same retry contract as advanceToNextStage, for the same reason: a lost
+    // response used to turn a second tap into a second skipped stage, and
+    // skipping a stage means a prize goes unawarded with nothing recording it.
+    if (!Number.isInteger(expectedStageIndex) || expectedStageIndex < 0) {
+        return failure('skipStage', GENERIC_ACTION_ERROR, `invalid expectedStageIndex: ${expectedStageIndex}`);
+    }
+
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return failure('skipStage', controlResult.error)
@@ -1420,10 +1648,6 @@ export async function skipStage(gameId: string): Promise<ActionResult<{ gameStat
 
     if (stateError || !currentGameState) {
         return failure('skipStage', COULD_NOT_READ_GAME_ERROR, stateError ?? 'game state not found');
-    }
-
-    if (currentGameState.status === 'completed') {
-        return conflictFailure('skipStage', 'This game has already finished.');
     }
 
     const { data: gameDetails, error: gameDetailsError } = await supabase
@@ -1441,28 +1665,53 @@ export async function skipStage(gameId: string): Promise<ActionResult<{ gameStat
         return failure('skipStage', 'This game has no stages set up.');
     }
 
-    let newStageIndex = currentGameState.current_stage_index + 1;
-    let newStatus = 'in_progress' as GameStatus;
+    // Cap at the last stage: totalStages is a count, so the highest index is
+    // count - 1. Skipping the last stage ends the game.
+    const intendedStageIndex = Math.min(expectedStageIndex + 1, totalStages - 1);
+    const intendedStatus: GameStatus = expectedStageIndex + 1 >= totalStages ? 'completed' : 'in_progress';
 
-    if (newStageIndex >= totalStages) {
-        newStageIndex = totalStages - 1; // Cap at last stage: totalStages is a count, so the highest index is count - 1
-        newStatus = 'completed'; // If skipping the last stage, the game ends
+    if (currentGameState.current_stage_index !== expectedStageIndex) {
+        if (currentGameState.current_stage_index === intendedStageIndex
+            && (intendedStatus !== 'completed' || currentGameState.status === 'completed')) {
+            const { data: settledState, error: settledError } = await supabase
+                .from('game_states')
+                .select('*')
+                .eq('game_id', gameId)
+                .single<GameStateRow>();
+
+            if (settledError || !settledState) {
+                return failure('skipStage', COULD_NOT_READ_GAME_ERROR, settledError ?? 'game state not found');
+            }
+
+            logActionFailure('skipStage', `retry absorbed: already at stage ${intendedStageIndex}, nothing written`);
+            return { success: true, data: { gameState: settledState } };
+        }
+        return conflictFailure(
+            'skipStage',
+            STATE_MOVED_ERROR,
+            `expected stage ${expectedStageIndex}, found ${currentGameState.current_stage_index}`
+        );
     }
 
-    // Bind the stage index that was read, so a double tap skips one stage only.
+    if (currentGameState.status === 'completed') {
+        return conflictFailure('skipStage', 'This game has already finished.');
+    }
+
+    // Bound to the index the CLIENT named, so a retry finds no row to update.
     const { data: rows, error } = await supabase
         .from('game_states')
         .update({
-            current_stage_index: newStageIndex,
-            status: newStatus,
+            current_stage_index: intendedStageIndex,
+            status: intendedStatus,
             paused_for_validation: false, // Clear validation pause
             display_win_type: null, // Clear any win display
             display_win_text: null,
             display_winner_name: null,
+            ...(intendedStatus === 'completed' ? { on_break: false } : {}),
         } satisfies Database['public']['Tables']['game_states']['Update'])
         .eq('game_id', gameId)
         .eq('controlling_host_id', controlResult.user!.id)
-        .eq('current_stage_index', currentGameState.current_stage_index)
+        .eq('current_stage_index', expectedStageIndex)
         .neq('status', 'completed')
         .select('*');
 
@@ -1473,7 +1722,7 @@ export async function skipStage(gameId: string): Promise<ActionResult<{ gameStat
         return conflictFailure('skipStage', STATE_MOVED_ERROR);
     }
 
-    if (newStatus === 'completed') {
+    if (intendedStatus === 'completed') {
         // As in advanceToNextStage: only a genuine pot failure reaches the host.
         const potResult = await handleSnowballPotUpdate(supabase, gameId);
         if (!potResult.success) {

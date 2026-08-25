@@ -19,6 +19,18 @@ const GAME_SELECT =
 const GAME_STATE_PUBLIC_SELECT =
   'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
 
+/**
+ * PostgREST's "no rows returned by .single()". Anything else is an outage.
+ *
+ * This distinction is the difference between a 404 and a screen that recovers.
+ * Both public pages used to call notFound() on ANY error reading the session, so
+ * a two minute Supabase blip during the display's own auto-reload put the pub TV
+ * on the static "This page could not be found" page: no JavaScript, no poll, no
+ * banner, no reload timer. Supabase came back a minute later and the TV was
+ * still showing a 404 for the rest of the night.
+ */
+const NO_ROWS_RETURNED = 'PGRST116';
+
 export default async function PlayerPage({ params }: PageProps) {
   const { sessionId } = await params;
 
@@ -29,15 +41,34 @@ export default async function PlayerPage({ params }: PageProps) {
   const supabase = await createClient();
 
   // Fetch session details
-  const { data: session, error: sessionError } = await supabase
+  const { data: sessionRow, error: sessionError } = await supabase
     .from('sessions')
     .select(SESSION_SELECT)
     .eq('id', sessionId)
     .single<Database['public']['Tables']['sessions']['Row']>();
 
-  if (sessionError || !session) {
-    logError('player', sessionError ?? new Error('Session not found'));
+  // A session that genuinely does not exist is a 404. A session we could not
+  // read is not: it is an outage, and the screen must be able to come back from
+  // it on its own.
+  if (sessionError && sessionError.code === NO_ROWS_RETURNED) {
     notFound();
+  }
+
+  let sessionLoadFailed = false;
+  let session = sessionRow;
+
+  if (!session) {
+    logError('player', sessionError ?? new Error('Session read returned no row and no error'));
+    sessionLoadFailed = true;
+    // A shell carrying the real id, so the client's poll re-reads the session
+    // and replaces this the moment the database answers again. The name is
+    // deliberately neutral rather than alarming: it is on a pub TV.
+    session = {
+      id: sessionId,
+      name: 'Bingo',
+      status: 'running',
+      active_game_id: null,
+    } as Database['public']['Tables']['sessions']['Row'];
   }
 
   let activeGame: Database['public']['Tables']['games']['Row'] | null = null;
@@ -46,9 +77,9 @@ export default async function PlayerPage({ params }: PageProps) {
   // A failed read is reported to the client as its own load status. It must
   // never be presented to guests as "the host has not started yet": the screen
   // shows a recoverable panel and recovers on the next successful poll.
-  let initialLoadStatus: InitialLoadStatus = 'ready';
+  let initialLoadStatus: InitialLoadStatus = sessionLoadFailed ? 'failed' : 'ready';
 
-  if (session.active_game_id) {
+  if (!sessionLoadFailed && session.active_game_id) {
     // Fetch the active game details
     const { data: game, error: gameError } = await supabase
       .from('games')

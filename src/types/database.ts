@@ -6,7 +6,13 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-export type UserRole = 'admin' | 'host'
+/**
+ * 'pending' is a signed-up account that has not been approved. It can reach
+ * nothing: not /admin, not /host, no RPC and no row through RLS. An admin
+ * promotes it to 'host' or 'admin' deliberately. New accounts land here, so
+ * anything that treats "has a session" as "is staff" is a hole.
+ */
+export type UserRole = 'admin' | 'host' | 'pending'
 export type SessionStatus = 'draft' | 'ready' | 'running' | 'completed'
 export type GameType = 'standard' | 'snowball' | 'jackpot'
 export type GameStatus = 'not_started' | 'in_progress' | 'completed'
@@ -193,6 +199,12 @@ export interface Database {
           started_at: string | null
           ended_at: string | null
           last_call_at: string | null
+          /**
+           * Idempotency key of the most recent successful call. Deliberately not
+           * mirrored into game_states_public: it is a host concern and no public
+           * surface reads it.
+           */
+          last_call_request_id: string | null
           updated_at: string
           state_version: number // Monotonic counter bumped on every update; used to order Realtime/polling snapshots
         }
@@ -329,6 +341,20 @@ export interface Database {
           stage: WinStage
           winner_name: string
           prize_description: string | null
+          /**
+           * What this row's prize text is worth, in pence, or null when the
+           * prize is not money. Read-only from the app: maintained entirely by
+           * the winners_prize_share_sync trigger.
+           */
+          prize_amount_pence: number | null
+          /**
+           * What this winner actually gets, in pence. Equal to the amount for a
+           * single winner; an even split with the odd penny to the earliest
+           * recorded winner when a stage is tied. Null for a voided win and for
+           * a prize that is not money. THIS is the number to total a payout
+           * with: prize_amount_pence counts a shared prize once per winner.
+           */
+          prize_share_pence: number | null
           prize_given: boolean
           call_count_at_win: number | null
           is_snowball_eligible: boolean
@@ -405,6 +431,8 @@ export interface Database {
           current_max_calls: number
           current_jackpot_amount: number
           last_awarded_at: string | null
+          /** Set when the pot is retired. Archived pots are hidden and cannot take a new game. */
+          archived_at: string | null
           created_at: string
         }
         Insert: {
@@ -430,6 +458,48 @@ export interface Database {
           current_jackpot_amount?: number
           last_awarded_at?: string | null
           created_at?: string
+        }
+        Relationships: []
+      }
+      /**
+       * Append-only record of every session reset: who, when, and what was
+       * destroyed. Written only by reset_session_safe (security definer), and
+       * readable by admins. There is no INSERT, UPDATE or DELETE policy, so the
+       * Insert and Update shapes below exist only to satisfy the generic client
+       * types and are never used.
+       */
+      session_reset_log: {
+        Row: {
+          id: string
+          session_id: string
+          /** Snapshotted, so the row still means something if the session is renamed or deleted. */
+          session_name: string | null
+          reset_by: string | null
+          reset_at: string
+          winners_deleted: number
+          game_states_deleted: number
+          /** The winners exactly as they were. Anonymous by policy, so no personal data. */
+          winners_snapshot: unknown | null
+        }
+        Insert: {
+          id?: string
+          session_id: string
+          session_name?: string | null
+          reset_by?: string | null
+          reset_at?: string
+          winners_deleted?: number
+          game_states_deleted?: number
+          winners_snapshot?: unknown | null
+        }
+        Update: {
+          id?: string
+          session_id?: string
+          session_name?: string | null
+          reset_by?: string | null
+          reset_at?: string
+          winners_deleted?: number
+          game_states_deleted?: number
+          winners_snapshot?: unknown | null
         }
         Relationships: []
       }
@@ -510,6 +580,14 @@ export interface Database {
           p_game_id: string
           /** Host anti-double-tap window. Pass HOST_MIN_CALL_GAP_MS from src/lib/call-timing.ts. */
           p_min_gap_ms?: number
+          /**
+           * Idempotency key for one intended ball. A retry carrying the key of a
+           * call that already committed returns the state unchanged instead of
+           * drawing a second ball. Mint it on the tap and hold it across retries
+           * of that tap; a fresh key per attempt removes the protection entirely.
+           * See supabase/migrations/20260825080606_call_next_number_idempotency.sql.
+           */
+          p_client_request_id?: string | null
         }
         Returns: Database['public']['Tables']['game_states']['Row']
       }
@@ -561,7 +639,50 @@ export interface Database {
       }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }
-      reset_session_safe: { Args: { p_session_id: string }; Returns: undefined }
+      /**
+       * Wipes a session back to ready. Records what it destroyed in
+       * session_reset_log first and returns that row, and refuses when the
+       * session has already settled a snowball pot. See
+       * supabase/migrations/20260825080604_session_reset_audit_and_guard.sql.
+       */
+      reset_session_safe: {
+        Args: { p_session_id: string }
+        Returns: Database['public']['Tables']['session_reset_log']['Row']
+      }
+      /**
+       * Retires a snowball pot without deleting it or its history. Admin only,
+       * refuses while a game on the pot is unfinished, idempotent on a retry.
+       * See supabase/migrations/20260825080602_snowball_pot_archive_and_guards.sql.
+       */
+      archive_snowball_pot: {
+        Args: { p_pot_id: string }
+        Returns: Database['public']['Tables']['snowball_pots']['Row']
+      }
+      /**
+       * Manual pot correction. Writes the pot and its audit row in one
+       * transaction under a `for update` lock, and returns the persisted row so
+       * a write that did not land is a real error. Replaces the old
+       * three-round-trip admin path. See
+       * supabase/migrations/20260825080603_atomic_manual_pot_adjustments.sql.
+       */
+      update_snowball_pot_safe: {
+        Args: {
+          p_pot_id: string
+          p_name: string
+          p_base_max_calls: number
+          p_base_jackpot_amount: number
+          p_calls_increment: number
+          p_jackpot_increment: number
+          p_current_max_calls: number
+          p_current_jackpot_amount: number
+        }
+        Returns: Database['public']['Tables']['snowball_pots']['Row']
+      }
+      /** Returns the pot to its base figures, with an audit row, in one transaction. */
+      reset_snowball_pot_safe: {
+        Args: { p_pot_id: string }
+        Returns: Database['public']['Tables']['snowball_pots']['Row']
+      }
       update_game_safe: {
         Args: {
           p_game_id: string

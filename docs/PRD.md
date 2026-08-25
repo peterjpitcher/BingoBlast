@@ -1,5 +1,29 @@
 # Product Requirements Document
 
+> **STATUS, 25 August 2026.** This document is v1.1, dated 24 November 2025, and
+> it no longer describes the application. It is kept for history. Where it and
+> the code disagree, the code is right.
+>
+> Known differences, so nobody builds from the wrong page:
+>
+> - **Offline host operation is struck.** Decision taken by the owner on
+>   25 August 2026: the app requires connectivity. The database decides which
+>   ball comes out, which is what stops two devices drawing the same number, and
+>   moving that decision into a phone with no signal would trade a reliability
+>   problem for a correctness one. The screens no longer die when the connection
+>   wobbles, and the paper fallback is written down in
+>   `docs/runbooks/live-night.md`. See section 2.2 and 3.1 below.
+> - **Sound effects on the display were never built** and are not planned.
+> - **Game templates and password reset were never built.**
+> - **Winners are anonymous.** The PRD's "Winner recording (name, prize...)" is
+>   no longer the intent; there is no name field and no plan for one.
+> - **A player-side follower screen and a display QR code DO exist**, at
+>   `/player/[sessionId]`, despite section 3.2 listing them as out of scope.
+> - The five allowed stage sequences in FR-8 are not enforced anywhere.
+>
+> The current, accurate description of the system is
+> `tasks/2026-08-25-end-to-end-review/APPENDIX-B-architecture.md`.
+
 **Product:** Anchor Bingo Web App  
 **Owner:** Pete  
 **Version:** 1.1 (Integrated Refinements)  
@@ -36,7 +60,7 @@ The system uses **Next.js** for the front end and **Supabase** for auth, data, a
 *   Give guests a clear, attractive TV display.
 *   Let you configure a whole night up front and clone it for future nights.
 *   Track results and snowball pots robustly.
-*   Cope with patchy internet without wrecking the night.
+*   ~~Cope with patchy internet without wrecking the night.~~ **Struck 25 August 2026.** The app requires connectivity; the screens survive a wobble but the host cannot call offline. Paper fallback in `docs/runbooks/live-night.md`.
 
 ### 2.2 Success criteria
 
@@ -45,7 +69,7 @@ The system uses **Next.js** for the front end and **Supabase** for auth, data, a
     *   Laptop for `/admin` and `/display` → TV.
 *   No pen‑and‑paper tracking of numbers or snowball state is required.
 *   Multiple winners, mis‑claims, snowball rollovers and breaks are all handled in‑app.
-*   If Wi‑Fi drops, the host can keep calling and the display can catch up later.
+*   ~~If Wi‑Fi drops, the host can keep calling and the display can catch up later.~~ **Struck 25 August 2026.** The display does catch up; the host cannot keep calling.
 
 ## 3. Scope
 
@@ -77,10 +101,10 @@ The system uses **Next.js** for the front end and **Supabase** for auth, data, a
 *   Snowball pot logic and rollovers.
 *   History of sessions, games, and winners.
 *   Simple roles: Admin vs Host.
-*   Offline resilience for host; display catch‑up.
+*   ~~Offline resilience for host~~ **struck 25 August 2026**; display catch‑up (built).
 *   **Correction/Void capability** for accidentally called numbers.
 *   **Re-open game capability** for false wins after game closure.
-*   **Sound effects** for the display client (Win, Break, Start).
+*   ~~**Sound effects** for the display client (Win, Break, Start).~~ **Never built, not planned.**
 
 ### 3.2 Out of scope (v1)
 

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
+import { formatDateInLondon } from '@/lib/dates';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { startGame } from './actions';
@@ -97,7 +98,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                         <span className="px-2 py-0.5 text-xs font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">TEST</span>
                       )}
                     </div>
-                    <p className="text-sm text-white/80">{session.start_date}</p>
+                    <p className="text-sm text-white/80">{formatDateInLondon(session.start_date)}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     {session.status === 'running' && (

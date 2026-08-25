@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Database } from '@/types/database';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { formatDateInLondon } from '@/lib/dates';
 
 export default async function DisplayPage() {
   const supabase = await createClient();
@@ -47,7 +48,7 @@ export default async function DisplayPage() {
                   <div className="flex items-center justify-between p-4 rounded-lg bg-slate-800 border border-slate-700 hover:border-bingo-primary hover:bg-slate-800/80 transition-all cursor-pointer group">
                     <div>
                       <h5 className="font-bold text-lg group-hover:text-bingo-primary transition-colors">{session.name}</h5>
-                      <p className="text-sm text-slate-500">Started: {new Date(session.start_date).toLocaleDateString()}</p>
+                      <p className="text-sm text-slate-500">Started: {formatDateInLondon(session.start_date)}</p>
                     </div>
                     <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
                         session.status === 'running' 
