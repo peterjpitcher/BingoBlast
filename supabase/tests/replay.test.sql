@@ -72,8 +72,8 @@ select t('rls :: row level security is enabled on every public table',
 -- ---------------------------------------------------------------------------
 -- Enums
 -- ---------------------------------------------------------------------------
-select t('enums :: user_role is exactly {admin,host}',
-         (select string_agg(e.enumlabel, ',' order by e.enumsortorder) = 'admin,host'
+select t('enums :: user_role is exactly {admin,host,pending}',
+         (select string_agg(e.enumlabel, ',' order by e.enumsortorder) = 'admin,host,pending'
             from pg_enum e join pg_type ty on ty.oid = e.enumtypid where ty.typname = 'user_role'),
          (select string_agg(e.enumlabel, ',' order by e.enumsortorder)
             from pg_enum e join pg_type ty on ty.oid = e.enumtypid where ty.typname = 'user_role'));
@@ -223,8 +223,8 @@ select t('realtime :: winners is NOT published',
 -- Policies. The count is a tripwire: a migration that adds or drops one without
 -- updating this number has to say so out loud.
 -- ---------------------------------------------------------------------------
-select t('policies :: twenty one policies exist across the public schema',
-         (select count(*) = 21 from pg_policies where schemaname = 'public'),
+select t('policies :: twenty policies exist across the public schema',
+         (select count(*) = 20 from pg_policies where schemaname = 'public'),
          (select count(*)::text || ' :: ' || string_agg(tablename || '.' || policyname, ', ' order by tablename, policyname)
             from pg_policies where schemaname = 'public'));
 
@@ -234,3 +234,36 @@ select t('policies :: game_states_public has a read policy and no write policy',
                where schemaname = 'public' and tablename = 'game_states_public'),
          (select string_agg(policyname || '=' || cmd, ',' order by policyname) from pg_policies
            where schemaname = 'public' and tablename = 'game_states_public'));
+
+-- ---------------------------------------------------------------------------
+-- The security posture the remediation adds. These are behavioural assertions,
+-- not catalogue ones: they are what would actually be exploited if they broke.
+-- ---------------------------------------------------------------------------
+select t('security :: winners has no INSERT policy, so the only way in is record_winner_atomic',
+         not exists (select 1 from pg_policies
+                      where schemaname = 'public' and tablename = 'winners' and cmd = 'INSERT'),
+         (select string_agg(policyname, ',' order by policyname) from pg_policies
+           where schemaname = 'public' and tablename = 'winners' and cmd = 'INSERT'));
+
+select t('security :: profiles.role defaults to pending',
+         (select column_default like '%pending%' from information_schema.columns
+           where table_schema = 'public' and table_name = 'profiles' and column_name = 'role'),
+         (select coalesce(column_default, '(none)') from information_schema.columns
+           where table_schema = 'public' and table_name = 'profiles' and column_name = 'role'));
+
+-- The trigger is what actually decides what a stranger who signs up becomes, so
+-- assert the behaviour rather than the source text.
+do $$
+declare
+  v_id uuid := gen_random_uuid();
+  v_role text;
+begin
+  insert into auth.users (id, email) values (v_id, 'replay-probe@example.invalid');
+  select role::text into v_role from public.profiles where id = v_id;
+  perform t('security :: a brand new auth user is created as pending, not host',
+            v_role = 'pending',
+            'handle_new_user gave the new account role ' || coalesce(v_role, '(no profile row)'));
+  delete from public.profiles where id = v_id;
+  delete from auth.users where id = v_id;
+end
+$$;
