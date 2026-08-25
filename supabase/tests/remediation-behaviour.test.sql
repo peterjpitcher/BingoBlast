@@ -624,3 +624,76 @@ begin
             v_rows = 0,
             'wrote ' || v_rows || ' reconstructed rows for a pot it should not have touched');
 end $$;
+
+-- ===========================================================================
+-- Anonymising historic winner names. Production held 43 real customer first
+-- names in a table that was, until this branch, readable with the public key.
+-- ===========================================================================
+do $$
+declare v_named int; v_archived int;
+begin
+  -- Everything this suite recorded went through record_winner_atomic, which
+  -- writes the literal, so nothing here should carry a name.
+  select count(*) into v_named from public.winners
+   where winner_name is distinct from 'Anonymous';
+  perform t('anonymity :: every winner recorded through the RPC is Anonymous',
+            v_named = 0,
+            v_named || ' rows carry a name');
+
+  -- Prove the archive-then-rewrite actually works, by putting a name back the
+  -- way production had one and running the same statements the migration runs.
+  update public.winners set winner_name = 'Margaret'
+   where client_request_id = 'cccccccc-0000-4000-8000-000000000001';
+
+  insert into public.winners_name_archive (winner_id, original_name, archived_reason)
+  select id, winner_name, 'test'
+    from public.winners where winner_name is distinct from 'Anonymous'
+  on conflict (winner_id) do nothing;
+
+  update public.winners set winner_name = 'Anonymous'
+   where winner_name is distinct from 'Anonymous';
+
+  select count(*) into v_archived from public.winners_name_archive
+   where original_name = 'Margaret';
+  select count(*) into v_named from public.winners
+   where winner_name is distinct from 'Anonymous';
+
+  perform t('anonymity :: a name is archived before it is overwritten',
+            v_archived = 1,
+            'the archive is the only thing that makes this reversible');
+  perform t('anonymity :: no name survives the rewrite',
+            v_named = 0,
+            v_named || ' rows still carry a name');
+end $$;
+
+do $$
+declare v_restored text;
+begin
+  -- The documented rollback has to actually restore.
+  update public.winners w
+     set winner_name = a.original_name
+    from public.winners_name_archive a
+   where a.winner_id = w.id;
+
+  select winner_name into v_restored from public.winners
+   where client_request_id = 'cccccccc-0000-4000-8000-000000000001';
+
+  perform t('anonymity :: the documented rollback restores the original name',
+            v_restored = 'Margaret',
+            'restored as ' || coalesce(v_restored, 'null'));
+
+  -- Leave the fixtures anonymous again.
+  update public.winners set winner_name = 'Anonymous'
+   where winner_name is distinct from 'Anonymous';
+end $$;
+
+do $$
+begin
+  perform t('anonymity :: the archive is admin-read-only and has no write policy',
+            (select count(*) = 1 from pg_policies
+              where schemaname = 'public' and tablename = 'winners_name_archive')
+            and (select bool_and(cmd = 'SELECT') from pg_policies
+                  where schemaname = 'public' and tablename = 'winners_name_archive'),
+            (select coalesce(string_agg(policyname || '=' || cmd, ','), '(none)')
+               from pg_policies where schemaname = 'public' and tablename = 'winners_name_archive'));
+end $$;
