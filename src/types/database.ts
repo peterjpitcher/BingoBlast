@@ -341,6 +341,20 @@ export interface Database {
           stage: WinStage
           winner_name: string
           prize_description: string | null
+          /**
+           * What this row's prize text is worth, in pence, or null when the
+           * prize is not money. Read-only from the app: maintained entirely by
+           * the winners_prize_share_sync trigger.
+           */
+          prize_amount_pence: number | null
+          /**
+           * What this winner actually gets, in pence. Equal to the amount for a
+           * single winner; an even split with the odd penny to the earliest
+           * recorded winner when a stage is tied. Null for a voided win and for
+           * a prize that is not money. THIS is the number to total a payout
+           * with: prize_amount_pence counts a shared prize once per winner.
+           */
+          prize_share_pence: number | null
           prize_given: boolean
           call_count_at_win: number | null
           is_snowball_eligible: boolean

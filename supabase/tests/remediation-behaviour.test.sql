@@ -240,9 +240,13 @@ begin
   select is_snowball_jackpot into v_second from public.winners
    where client_request_id = 'bbbbbbbb-0000-4000-8000-000000000003';
 
-  perform t('jackpot :: a tied SECOND winner is recorded but does not carry the jackpot',
-            v_second = false,
-            'the pot pays and resets once, so the record must not claim two full jackpots; was '
+  -- Changed by the owner's decision on 2026-08-25: a tie SHARES the prize, and
+  -- the snowball jackpot is a prize like any other. So both are jackpot winners
+  -- and they take half the pot each. The pot still resets exactly once, because
+  -- settle_snowball_pot only asks whether a jackpot winner exists.
+  perform t('jackpot :: a tied second winner is also a jackpot winner, sharing one pot',
+            v_second = true,
+            'the house rule on the pub TV says multiple claims share the prize; was '
               || coalesce(v_second::text, 'null'));
 
   perform t('jackpot :: the tied second winner is still recorded as a winner',
@@ -419,4 +423,186 @@ begin
             not exists (select 1 from pg_policies
                          where schemaname = 'public' and tablename = 'winners' and cmd = 'INSERT'),
             'a role-only INSERT policy let a host fabricate a jackpot and force a pot reset');
+end $$;
+
+-- ===========================================================================
+-- Prize amounts and tie shares. THE bug: two tied winners each recorded the
+-- FULL prize, so the record said the pub paid £130 out of a £65 jackpot.
+-- Ten ties already exist in production, two of them cash jackpots.
+-- ===========================================================================
+do $$
+begin
+  perform t('prize :: a pounds amount is read out of the free text',
+            public.parse_prize_pence('£10 Cash') = 1000
+              and public.parse_prize_pence('£110 Cash Jackpot') = 11000
+              and public.parse_prize_pence('Snowball Jackpot £140') = 14000
+              and public.parse_prize_pence('£12.50') = 1250
+              and public.parse_prize_pence('£1,250') = 125000,
+            'parsing covers every shape the pub actually uses');
+
+  perform t('prize :: a non-money prize has no amount',
+            public.parse_prize_pence('Bar of Chocolate') is null
+              and public.parse_prize_pence('4 tickets to Quiz Night') is null
+              and public.parse_prize_pence(null) is null,
+            'a chocolate bar is not worth a number');
+end $$;
+
+-- A fresh game with a plain cash Line prize, and one winner.
+\set game3_id '''aaaaaaaa-3333-4333-8333-333333333333'''
+insert into public.games (id, session_id, game_index, name, type, stage_sequence, prizes)
+values (:game3_id, :session_id, 3, 'Cash Line', 'standard', '["Line"]'::jsonb, '{"Line": "£10 Cash"}'::jsonb);
+
+insert into public.game_states (
+  game_id, number_sequence, called_numbers, numbers_called_count,
+  current_stage_index, status, controlling_host_id, controller_last_seen_at, started_at
+)
+select :game3_id,
+       (select jsonb_agg(n) from generate_series(1, 90) n),
+       (select jsonb_agg(n) from generate_series(1, 10) n),
+       10, 0, 'in_progress', :host_id, now(), now();
+
+do $$
+declare v_amount int; v_share int;
+begin
+  perform public.record_winner_atomic(
+    '55555555-5555-4555-8555-555555555555',
+    'aaaaaaaa-3333-4333-8333-333333333333',
+    'Line'::public.win_stage, '£10 Cash', false, false, false,
+    'cccccccc-0000-4000-8000-000000000001'
+  );
+
+  select prize_amount_pence, prize_share_pence into v_amount, v_share
+    from public.winners where client_request_id = 'cccccccc-0000-4000-8000-000000000001';
+
+  perform t('prize :: a single winner takes the whole prize',
+            v_amount = 1000 and v_share = 1000,
+            'amount=' || coalesce(v_amount::text,'null') || ' share=' || coalesce(v_share::text,'null'));
+end $$;
+
+do $$
+declare v_shares int[];
+begin
+  -- A tie on the same stage. Both are valid wins; the prize is one prize.
+  perform public.record_winner_atomic(
+    '55555555-5555-4555-8555-555555555555',
+    'aaaaaaaa-3333-4333-8333-333333333333',
+    'Line'::public.win_stage, '£10 Cash', false, false, false,
+    'cccccccc-0000-4000-8000-000000000002'
+  );
+
+  select array_agg(prize_share_pence order by created_at, id) into v_shares
+    from public.winners
+   where game_id = 'aaaaaaaa-3333-4333-8333-333333333333' and stage = 'Line';
+
+  perform t('prize :: a tie splits the prize evenly rather than paying it twice',
+            v_shares = array[500, 500],
+            'shares were ' || v_shares::text || ': the pub pays £10 once, not £10 each');
+end $$;
+
+do $$
+declare v_shares int[]; v_total int;
+begin
+  -- Three ways on an amount that does not divide: 1000 / 3 = 333.33.
+  perform public.record_winner_atomic(
+    '55555555-5555-4555-8555-555555555555',
+    'aaaaaaaa-3333-4333-8333-333333333333',
+    'Line'::public.win_stage, '£10 Cash', false, false, false,
+    'cccccccc-0000-4000-8000-000000000003'
+  );
+
+  select array_agg(prize_share_pence order by created_at, id), sum(prize_share_pence)
+    into v_shares, v_total
+    from public.winners
+   where game_id = 'aaaaaaaa-3333-4333-8333-333333333333' and stage = 'Line'
+     and coalesce(is_void, false) = false;
+
+  perform t('prize :: the odd penny goes to whoever was recorded first',
+            v_shares = array[334, 333, 333],
+            'shares were ' || v_shares::text);
+
+  perform t('prize :: the shares always add up to the prize, with no penny invented or lost',
+            v_total = 1000,
+            'shares summed to ' || v_total || ' out of 1000');
+end $$;
+
+do $$
+declare v_shares int[]; v_voided int;
+begin
+  -- Voiding one of three returns the stage to a two way split, automatically.
+  update public.winners set is_void = true, void_reason = 'test'
+   where client_request_id = 'cccccccc-0000-4000-8000-000000000003';
+
+  select array_agg(prize_share_pence order by created_at, id) into v_shares
+    from public.winners
+   where game_id = 'aaaaaaaa-3333-4333-8333-333333333333' and stage = 'Line'
+     and coalesce(is_void, false) = false;
+
+  select prize_share_pence into v_voided
+    from public.winners where client_request_id = 'cccccccc-0000-4000-8000-000000000003';
+
+  perform t('prize :: voiding a tied winner re-splits the prize between the rest',
+            v_shares = array[500, 500],
+            'shares were ' || v_shares::text || ': a void must give the others their money back');
+
+  perform t('prize :: a voided winner takes no share',
+            v_voided is null,
+            'voided share was ' || coalesce(v_voided::text, 'null'));
+end $$;
+
+-- A non-money prize, on its OWN game, because a stage has one prize. The first
+-- version of this test recorded a chocolate bar onto the same stage as three
+-- cash winners, and the chocolate winner was given a third of the cash. That was
+-- a real flaw in the split, not a bad test: the host can edit the prize text
+-- when recording a winner, so a stage whose rows disagree is reachable.
+\set game4_id '''aaaaaaaa-4444-4444-8444-444444444444'''
+insert into public.games (id, session_id, game_index, name, type, stage_sequence, prizes)
+values (:game4_id, :session_id, 4, 'Chocolate Line', 'standard', '["Line"]'::jsonb, '{"Line": "Bar of Chocolate"}'::jsonb);
+
+insert into public.game_states (
+  game_id, number_sequence, called_numbers, numbers_called_count,
+  current_stage_index, status, controlling_host_id, controller_last_seen_at, started_at
+)
+select :game4_id,
+       (select jsonb_agg(n) from generate_series(1, 90) n),
+       (select jsonb_agg(n) from generate_series(1, 10) n),
+       10, 0, 'in_progress', :host_id, now(), now();
+
+do $$
+declare v_share int; v_amount int;
+begin
+  perform public.record_winner_atomic(
+    '55555555-5555-4555-8555-555555555555',
+    'aaaaaaaa-4444-4444-8444-444444444444',
+    'Line'::public.win_stage, 'Bar of Chocolate', false, false, false,
+    'cccccccc-0000-4000-8000-000000000004'
+  );
+  select prize_amount_pence, prize_share_pence into v_amount, v_share
+    from public.winners where client_request_id = 'cccccccc-0000-4000-8000-000000000004';
+  perform t('prize :: a stage whose prize is not money has no amount and no share',
+            v_share is null and v_amount is null,
+            'amount=' || coalesce(v_amount::text,'null') || ' share=' || coalesce(v_share::text,'null'));
+end $$;
+
+do $$
+declare v_cash int; v_choc int;
+begin
+  -- Rows on one stage that disagree about the prize are not one prize being
+  -- shared. Each keeps its own value rather than averaging into a number nobody
+  -- agreed to.
+  perform public.record_winner_atomic(
+    '55555555-5555-4555-8555-555555555555',
+    'aaaaaaaa-4444-4444-8444-444444444444',
+    'Line'::public.win_stage, '£20 Cash', false, false, false,
+    'cccccccc-0000-4000-8000-000000000005'
+  );
+
+  select prize_share_pence into v_cash
+    from public.winners where client_request_id = 'cccccccc-0000-4000-8000-000000000005';
+  select prize_share_pence into v_choc
+    from public.winners where client_request_id = 'cccccccc-0000-4000-8000-000000000004';
+
+  perform t('prize :: a stage whose rows disagree is not split, each keeps its own value',
+            v_cash = 2000 and v_choc is null,
+            'cash=' || coalesce(v_cash::text,'null') || ' chocolate=' || coalesce(v_choc::text,'null')
+              || ': a chocolate bar winner must never be handed half the cash');
 end $$;

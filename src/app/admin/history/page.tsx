@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { Database } from '@/types/database';
 import { formatShortDateTimeInLondon } from '@/lib/dates';
+import { formatPence, totalPaidOutPence } from '@/lib/money';
 
 type WinnerWithRelations = Database['public']['Tables']['winners']['Row'] & {
   session: Pick<Database['public']['Tables']['sessions']['Row'], 'name' | 'start_date'> | null;
@@ -44,6 +45,13 @@ export default async function HistoryPage() {
 
   const winners: WinnerWithRelations[] = (winnersRaw ?? []) as WinnerWithRelations[];
 
+  // Totals the SHARES, never the amounts. On a tied stage the amount is the
+  // whole prize and appears on every tied row, so totalling it counts one £10
+  // prize as £20. Ten ties already exist in the data, two of them cash
+  // jackpots, so this is the difference between a real figure and one that
+  // overstates what the pub paid. Voided wins carry no share and drop out.
+  const payout = totalPaidOutPence(winners.filter((w) => w.is_void !== true));
+
   if (error) {
       console.error("Error fetching history:", error);
   }
@@ -68,6 +76,30 @@ export default async function HistoryPage() {
       </header>
       
       <main className="container mx-auto p-4">
+          <Card className="bg-slate-900 border-slate-800 mb-4">
+            <CardContent className="p-4 flex flex-wrap items-baseline gap-x-8 gap-y-2">
+              <div>
+                <span className="block text-xs uppercase tracking-wider text-slate-500">Total paid out</span>
+                <span className="text-2xl font-bold text-white font-mono tabular-nums">
+                  {formatPence(payout.totalPence)}
+                </span>
+              </div>
+              <div>
+                <span className="block text-xs uppercase tracking-wider text-slate-500">Cash prizes</span>
+                <span className="text-lg text-slate-300 font-mono tabular-nums">{payout.countedRows}</span>
+              </div>
+              <div>
+                <span className="block text-xs uppercase tracking-wider text-slate-500">Prizes that are not cash</span>
+                <span className="text-lg text-slate-300 font-mono tabular-nums">{payout.uncountedRows}</span>
+              </div>
+              <p className="text-xs text-slate-500 max-w-md">
+                Voided wins are excluded. A shared prize counts once: each winner&rsquo;s share is
+                added, not the whole prize per winner. Shares on wins recorded before 25 August 2026
+                are the current sharing rule applied to older records.
+              </p>
+            </CardContent>
+          </Card>
+
           <Card className="bg-slate-900 border-slate-800">
             <CardContent className="p-0">
               {!winners || winners.length === 0 ? (
@@ -83,6 +115,7 @@ export default async function HistoryPage() {
                                   <th className="px-4 py-3 font-medium">Session / Game</th>
                                   <th className="px-4 py-3 font-medium">Winner</th>
                                   <th className="px-4 py-3 font-medium">Prize</th>
+                                  <th className="px-4 py-3 font-medium text-right">Paid</th>
                                   <th className="px-4 py-3 font-medium">Stage</th>
                                   <th className="px-4 py-3 font-medium">Status</th>
                                   <th className="px-4 py-3 font-medium text-right">Call #</th>
@@ -112,6 +145,23 @@ export default async function HistoryPage() {
                                           </span>
                                           {winner.is_snowball_jackpot && (
                                               <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-bold bg-yellow-900/30 text-yellow-500 border border-yellow-800">JACKPOT</span>
+                                          )}
+                                      </td>
+                                      <td className="px-4 py-3 text-right font-mono whitespace-nowrap">
+                                          {isVoid ? (
+                                              <span className="text-slate-600">-</span>
+                                          ) : winner.prize_share_pence !== null && winner.prize_share_pence !== undefined ? (
+                                              <span className="text-white">
+                                                  {formatPence(winner.prize_share_pence)}
+                                                  {winner.prize_amount_pence !== null
+                                                    && winner.prize_amount_pence !== winner.prize_share_pence && (
+                                                      <span className="block text-xs text-slate-500">
+                                                          share of {formatPence(winner.prize_amount_pence)}
+                                                      </span>
+                                                  )}
+                                              </span>
+                                          ) : (
+                                              <span className="text-slate-500 text-xs">not cash</span>
                                           )}
                                       </td>
                                       <td className="px-4 py-3">

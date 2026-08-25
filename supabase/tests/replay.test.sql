@@ -104,8 +104,8 @@ select t('enums :: win_stage is exactly {Line,Two Lines,Full House}',
 -- ---------------------------------------------------------------------------
 -- Functions: presence, security settings and search_path
 -- ---------------------------------------------------------------------------
-select t('functions :: the seventeen expected functions exist and nothing else',
-         (select count(*) = 17 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+select t('functions :: the twenty expected functions exist and nothing else',
+         (select count(*) = 20 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname <> 't'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace

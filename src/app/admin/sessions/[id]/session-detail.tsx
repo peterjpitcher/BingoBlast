@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { useRouter } from 'next/navigation';
 import { validateGamePrizes } from '@/lib/prize-validation';
 import { formatDateInLondon, formatDateTimeInLondon } from '@/lib/dates';
+import { formatPence, totalPaidOutPence } from '@/lib/money';
 
 type Session = Database['public']['Tables']['sessions']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -74,6 +75,13 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
   const [resetError, setResetError] = useState<string | null>(null);
 
   const router = useRouter();
+
+  // Excludes voided wins, and sums each winner's share rather than the whole
+  // prize, so a tie is counted once.
+  const sessionPayout = useMemo(
+    () => totalPaidOutPence(winners.filter((w) => w.is_void !== true)),
+    [winners]
+  );
 
   useEffect(() => {
     setGames(initialGames);
@@ -376,6 +384,20 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
       <Card className="bg-slate-900 border-slate-800 mb-6">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Winners ({winners.length})</CardTitle>
+          {/* Sums the shares, never the amounts: on a tied stage the amount is
+              the whole prize and sits on every tied row, so totalling it would
+              count one £10 prize as £20. Voided wins are excluded. */}
+          <div className="text-right">
+            <span className="block text-xs uppercase tracking-wider text-slate-500">Paid out</span>
+            <span className="text-xl font-bold text-white font-mono tabular-nums">
+              {formatPence(sessionPayout.totalPence)}
+            </span>
+            {sessionPayout.uncountedRows > 0 && (
+              <span className="block text-xs text-slate-500">
+                plus {sessionPayout.uncountedRows} non-cash
+              </span>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {winners.length === 0 ? (
@@ -415,6 +437,16 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                         {winner.is_snowball_jackpot && (
                           <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-bold bg-yellow-900/30 text-yellow-500 border border-yellow-800">
                             JACKPOT
+                          </span>
+                        )}
+                        {winner.is_void !== true
+                          && winner.prize_share_pence !== null
+                          && winner.prize_share_pence !== undefined && (
+                          <span className="block text-xs font-mono text-slate-400">
+                            {formatPence(winner.prize_share_pence)}
+                            {winner.prize_amount_pence !== null
+                              && winner.prize_amount_pence !== winner.prize_share_pence
+                              && ` (share of ${formatPence(winner.prize_amount_pence)})`}
                           </span>
                         )}
                       </td>
