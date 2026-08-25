@@ -26,13 +26,13 @@ what is done, what is next, and what is blocked.
 
 | Block | What | State |
 |---|---|---|
-| 0 | CI and the full migration replay | Committed. **Never yet run**, because it needs a push |
+| 0 | CI and the full migration replay | Committed **and run**: 33 migrations, 130 assertions, all pass |
 | 1 | Security: signup, roles, direct-insert route | Committed |
 | 2 | Live-night correctness: silent failures, retries, screens | Committed |
 | 3 | Money integrity: pot archive, atomic edits, session reset | Committed |
 | 4 | The record: void display, London dates, pot history on screen | Committed |
-| 5 | Remaining R0: forced jackpot, settlement retry, call idempotency, claim entry | **Next** |
-| 6 | Narrowing the table-wide host grants | Not started, needs replacement RPCs first |
+| 5 | Remaining R0: forced jackpot, settlement retry, call idempotency, claim entry | Committed |
+| 6 | Narrowing the table-wide host grants | **Next**, needs replacement RPCs first |
 | 7 | Export, audit ledger, error monitoring | Blocked on Q7, Q9, Q16 |
 | 8 | Prize and tie accounting | Blocked on Q6 |
 | 9 | Accessibility and performance criteria | Blocked on Q10, Q17 |
@@ -57,8 +57,22 @@ the production build.
   end state asserted object by object and grant by grant against production. 31 assertions.
 - `npm run typecheck`, `npm run test:db`, `npm run verify`.
 
-**Not yet proven.** Docker is unavailable locally, so this has never executed. The first push is the
-first run. Making the CI required is gate 1 in [RELEASE-GATE.md](RELEASE-GATE.md).
+**Now proven, and it found three things.** The harness had never been executed anywhere, because
+"needs Docker" meant "never runs" on a machine without Docker. `run.sh` now falls back to a
+temporary local Postgres 17 cluster, and running it found:
+
+1. `20260825080604` could not be applied at all: changing a function's return type needs an explicit
+   `DROP` first. A migration that fails on apply would have been discovered on production.
+2. `20260430124552_tighten_profiles_select.sql` is not idempotent, the only one in the whole
+   history. Found by applying all 33 migrations twice.
+3. Re-replaying the whole history twice is not an achievable property and asking for it was wrong.
+   A later migration that legitimately changes a return type makes an earlier `create or replace`
+   of the same function fail. The property worth having is that each migration survives being run
+   twice, which is what `db push` against a repaired history can actually ask of it.
+
+Current state: 33 migrations replay from empty, each applied twice, followed by 37 catalogue
+assertions and 29 behavioural ones. 130 assertions, all passing. Making CI required on the branch is
+still gate 1 in [RELEASE-GATE.md](RELEASE-GATE.md).
 
 ### Block 1: `fix(auth): stop new accounts landing as staff...` and `fix(auth): authorise at the route...`
 
@@ -111,26 +125,38 @@ first run. Making the CI required is gate 1 in [RELEASE-GATE.md](RELEASE-GATE.md
 
 ---
 
-## Next: block 5, the remaining R0 items
+### Block 5: the remaining R0 items
 
-In order, each its own commit.
+All committed, and all covered by the behavioural suite.
 
-1. **`money-force-jackpot-ungated`.** `record_winner_atomic` awards the jackpot when
-   `p_force_snowball_jackpot` is true, with no window check at all, and the Manual Snowball Win
-   button sets it for any host at any call count. Gate it and record that it was used.
-2. **`money-snowball-tie-double-jackpot`.** Two tied Full House winners each record a full jackpot
-   against a pot that pays once and resets once. The safe half of this is fixable without Q6: refuse
-   to mark a second jackpot winner on the same game. How the cash is split is Q6 and stays open.
-3. **`money-settlement-failure-no-retry`.** Every route to settlement is gated on a status the game
-   has already left, so a failure is terminal. Give it a route back.
-4. **`qual-completion-paths-report-false-success`.** `endGame` tells the host the game ended even
-   when the pot demonstrably did not move.
-5. **`live-mutation-protocol`.** `callNextNumber` is still not idempotent while its own error copy
-   tells the host to retry. This is the last of the mutation protocol.
-6. **`qual-claim-entry-unsafe-on-a-phone`.** 27px targets, no textual read-back of what was tapped,
-   and called and uncalled numbers differing only by text opacity, on the screen where a mis-tap
-   pays the wrong person.
-7. **`qual-money-and-live-path-test-coverage`.** The tests that would have caught the above.
+- **`money-force-jackpot-ungated`.** The window now binds on the forced route as well, and the
+  Manual Snowball Win button is only offered during Full House while the window is genuinely open.
+- **`money-snowball-tie-double-jackpot`.** At most one winner per game carries the jackpot flag,
+  because the pot pays and resets once. How the cash is split between tied winners is Q6 and is
+  deliberately still open: this fixes only the half that is wrong under every possible answer.
+- **`money-settlement-failure-no-retry`.** `endGame` reports when the pot did not move, the host
+  screen offers a Settle the pot button, and `settleSnowballPotForGame` is the route.
+- **`qual-completion-paths-report-false-success`.** Same change; the game end still stands, but the
+  answer no longer claims the pot moved when it did not.
+- **`live-mutation-protocol`.** `callNextNumber` takes an idempotency key persisted and compared
+  under the same row lock as the draw. This was the last unprotected mutation and the most
+  frequently pressed button in the app.
+- **`qual-claim-entry-unsafe-on-a-phone`.** Six columns on a phone (roughly 48px targets), called
+  state by background rather than text opacity, `aria-pressed` and spoken labels, a sorted read-back
+  of what was tapped with uncalled numbers called out, and the irreversible Skip separated from
+  Record Winner and confirmed.
+- **`qual-money-and-live-path-test-coverage`.** 29 behavioural Postgres assertions plus 28 new Node
+  tests (`snowball`, `jackpot`, `dates`). 95 Node tests and 130 database assertions in total.
+
+---
+
+## Next: block 6, narrowing the table-wide host grants
+
+`sec-game-states-update-unbounded` and `sec-sessions-update-unbounded`. A host can rewrite any
+column of any row in either table, including `is_test_session`, which switches snowball settlement
+off entirely. Neither can be narrowed by editing a policy, because Postgres RLS grants row access,
+not column access. The sequence is: add a replacement RPC for every direct write, deploy the app
+that uses them, then drop the broad policy in a second deploy. Two changesets, in that order.
 
 ---
 
