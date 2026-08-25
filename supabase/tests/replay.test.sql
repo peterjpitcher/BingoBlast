@@ -48,19 +48,18 @@ drop function public.replay_probe_default_privileges();
 -- ---------------------------------------------------------------------------
 -- Tables and row level security
 -- ---------------------------------------------------------------------------
-select t('tables :: the ten expected tables exist',
-         (select count(*) = 10 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+select t('tables :: the nine expected tables exist',
+         (select count(*) = 9 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'
              and c.relname in ('profiles','sessions','games','game_states',
                                'game_states_public','winners','snowball_pots',
-                               'snowball_pot_history','session_reset_log',
-                               'winners_name_archive')),
+                               'snowball_pot_history','session_reset_log')),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'));
 
 select t('tables :: no unexpected tables were created',
-         (select count(*) = 10 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         (select count(*) = 9 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
@@ -233,8 +232,8 @@ select t('realtime :: winners is NOT published',
 -- Policies. The count is a tripwire: a migration that adds or drops one without
 -- updating this number has to say so out loud.
 -- ---------------------------------------------------------------------------
-select t('policies :: twenty two policies exist across the public schema',
-         (select count(*) = 22 from pg_policies where schemaname = 'public'),
+select t('policies :: twenty one policies exist across the public schema',
+         (select count(*) = 21 from pg_policies where schemaname = 'public'),
          (select count(*)::text || ' :: ' || string_agg(tablename || '.' || policyname, ', ' order by tablename, policyname)
             from pg_policies where schemaname = 'public'));
 

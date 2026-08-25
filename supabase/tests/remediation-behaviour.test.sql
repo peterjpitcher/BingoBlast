@@ -626,74 +626,45 @@ begin
 end $$;
 
 -- ===========================================================================
--- Anonymising historic winner names. Production held 43 real customer first
--- names in a table that was, until this branch, readable with the public key.
+-- Anonymity. Production held 43 real customer first names in a table that was,
+-- until this branch, readable with the public key. They were archived, exported
+-- to a file the owner holds, anonymised, and the archive was then dropped, so
+-- this database now holds no customer names at all.
 -- ===========================================================================
 do $$
-declare v_named int; v_archived int;
+declare v_named int;
 begin
-  -- Everything this suite recorded went through record_winner_atomic, which
-  -- writes the literal, so nothing here should carry a name.
   select count(*) into v_named from public.winners
    where winner_name is distinct from 'Anonymous';
-  perform t('anonymity :: every winner recorded through the RPC is Anonymous',
+  perform t('anonymity :: no winner row carries a name',
             v_named = 0,
             v_named || ' rows carry a name');
-
-  -- Prove the archive-then-rewrite actually works, by putting a name back the
-  -- way production had one and running the same statements the migration runs.
-  update public.winners set winner_name = 'Margaret'
-   where client_request_id = 'cccccccc-0000-4000-8000-000000000001';
-
-  insert into public.winners_name_archive (winner_id, original_name, archived_reason)
-  select id, winner_name, 'test'
-    from public.winners where winner_name is distinct from 'Anonymous'
-  on conflict (winner_id) do nothing;
-
-  update public.winners set winner_name = 'Anonymous'
-   where winner_name is distinct from 'Anonymous';
-
-  select count(*) into v_archived from public.winners_name_archive
-   where original_name = 'Margaret';
-  select count(*) into v_named from public.winners
-   where winner_name is distinct from 'Anonymous';
-
-  perform t('anonymity :: a name is archived before it is overwritten',
-            v_archived = 1,
-            'the archive is the only thing that makes this reversible');
-  perform t('anonymity :: no name survives the rewrite',
-            v_named = 0,
-            v_named || ' rows still carry a name');
 end $$;
 
 do $$
-declare v_restored text;
+declare v_name text;
 begin
-  -- The documented rollback has to actually restore.
-  update public.winners w
-     set winner_name = a.original_name
-    from public.winners_name_archive a
-   where a.winner_id = w.id;
-
-  select winner_name into v_restored from public.winners
-   where client_request_id = 'cccccccc-0000-4000-8000-000000000001';
-
-  perform t('anonymity :: the documented rollback restores the original name',
-            v_restored = 'Margaret',
-            'restored as ' || coalesce(v_restored, 'null'));
-
-  -- Leave the fixtures anonymous again.
-  update public.winners set winner_name = 'Anonymous'
-   where winner_name is distinct from 'Anonymous';
+  -- The RPC is the only way a winner is created, so this is the assertion that
+  -- keeps the table clean going forwards. It writes the literal and ignores
+  -- anything a caller might want instead: there is no parameter for a name.
+  perform public.record_winner_atomic(
+    '55555555-5555-4555-8555-555555555555',
+    'aaaaaaaa-4444-4444-8444-444444444444',
+    'Line'::public.win_stage, 'Bar of Chocolate', false, false, false,
+    'cccccccc-0000-4000-8000-000000000009'
+  );
+  select winner_name into v_name from public.winners
+   where client_request_id = 'cccccccc-0000-4000-8000-000000000009';
+  perform t('anonymity :: record_winner_atomic writes the literal Anonymous',
+            v_name = 'Anonymous',
+            'wrote ' || coalesce(v_name, 'null'));
 end $$;
 
 do $$
 begin
-  perform t('anonymity :: the archive is admin-read-only and has no write policy',
-            (select count(*) = 1 from pg_policies
-              where schemaname = 'public' and tablename = 'winners_name_archive')
-            and (select bool_and(cmd = 'SELECT') from pg_policies
-                  where schemaname = 'public' and tablename = 'winners_name_archive'),
-            (select coalesce(string_agg(policyname || '=' || cmd, ','), '(none)')
-               from pg_policies where schemaname = 'public' and tablename = 'winners_name_archive'));
+  -- The holding table is gone. If a future migration reintroduces somewhere to
+  -- keep names, this assertion is what makes that a conscious act.
+  perform t('anonymity :: the name archive no longer exists',
+            to_regclass('public.winners_name_archive') is null,
+            'winners_name_archive is still present, so the database still holds customer names');
 end $$;
