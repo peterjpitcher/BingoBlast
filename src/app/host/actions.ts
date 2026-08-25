@@ -11,6 +11,7 @@ import { formatCashJackpotPrize, isCashJackpotGame, parseCashJackpotAmount } fro
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages'
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
 import { logActionFailure, logActionLatency } from '@/lib/log-action-failure'
+import { reportError } from '@/lib/report-error'
 import { isUuid } from '@/lib/utils'
 
 type GameStateRow = Database['public']['Tables']['game_states']['Row']
@@ -127,9 +128,21 @@ function rpcFailure(
   rpcError: { message?: string } | null,
   startedAtMs: number
 ): { success: false; error: string; conflict?: true; code?: ActionFailureCode } {
-  logActionFailure(action, rpcError)
+  const mapped = mapHostRpcError(rpcError?.message)
+
+  // A refusal is not a fault. `not_controller`, `too_soon`, `on_break` and the
+  // rest are the guards doing their job several times a night, and reporting
+  // them would bury the one that matters. Only an unmapped message, meaning
+  // something nobody anticipated, is worth waking anyone for.
+  const isExpectedRefusal = mapped.error !== GENERIC_ACTION_ERROR
+  if (!isExpectedRefusal) {
+    void reportError({ scope: `host:${action}` }, rpcError)
+  } else {
+    logActionFailure(action, rpcError)
+  }
+
   logActionLatency(action, startedAtMs)
-  return { success: false, ...mapHostRpcError(rpcError?.message) }
+  return { success: false, ...mapped }
 }
 
 type HostAuthResult =
