@@ -196,6 +196,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             // applyMutation is declared further down but only ever runs on a click,
             // by which point the const is initialised for this render.
             applyMutation(await takeControl(gameId), "Failed to take control.");
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to take control. Check the connection and try again.");
         } finally {
             setIsTakingControl(false);
         }
@@ -622,6 +625,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         try {
             const newOnBreakStatus = !currentGameState.on_break;
             applyMutation(await toggleBreak(gameId, newOnBreakStatus), "Failed to toggle break.");
+        } catch (err) {
+            // Without this the button simply returned to idle with nothing on
+            // screen, and the host could not tell a refused break from a lost
+            // request. Starting or ending a break is safe to repeat.
+            logError('host-control', err);
+            setActionError("Could not reach the server to change the break. Check the connection and try again.");
         } finally {
             setIsTogglingBreak(false);
         }
@@ -637,16 +646,27 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         if (!isController || isAdvancing) return;
         setActionError(null);
         setIsAdvancing(true);
+        // The stage the host is looking at, captured before the request. The
+        // server binds to this rather than to a value it reads itself, so a
+        // retry after a lost response cannot advance a second time. Read once
+        // here so both the request and any retry inside this call agree.
+        const expectedStageIndex = currentGameState.current_stage_index;
         try {
-            if (!applyMutation(await advanceToNextStage(gameId), "Failed to continue playing.")) return;
-
-            if (putOnBreak) {
-                if (!applyMutation(await toggleBreak(gameId, true), "Failed to start break.")) return;
-            }
+            // One call, not two. "Continue and Take Break" used to advance the
+            // stage and then issue the break separately, so a break that failed
+            // or was lost left the stage already moved, and the retry advanced
+            // again with a whole stage skipped and its prize unawarded.
+            if (!applyMutation(
+                await advanceToNextStage(gameId, expectedStageIndex, putOnBreak),
+                "Failed to continue playing."
+            )) return;
 
             setShowPostWinModal(false);
             setShowValidationModal(false);
             handleClearSelection();
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to move the game on. Check the connection and tap again: if it did save, tapping again will not skip a stage.");
         } finally {
             setIsAdvancing(false);
         }
@@ -684,6 +704,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setShowValidationModal(false);
             handleClearSelection();
             navigateToHostPath(result.data?.redirectTo);
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to move to the next game. Check the connection and try again.");
         } finally {
             setIsMovingGame(false);
         }
@@ -718,6 +741,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setShowValidationModal(false);
             handleClearSelection();
             navigateToHostPath(result.data?.redirectTo);
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to move to the next game. Check the connection and try again.");
         } finally {
             setIsMovingGame(false);
         }
@@ -821,6 +847,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             if (!applyMutation(pauseResult, "Failed to start claim check.")) {
                 setShowValidationModal(false);
             }
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to pause for a claim check. Check the connection and try again.");
+            setShowValidationModal(false);
         } finally {
             setIsPausing(false);
         }
@@ -863,6 +893,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 }
                 handleOpenRecordWinnerModal();
             }
+        } catch (err) {
+            // Checking a claim writes nothing until the win is announced, so a
+            // retry is always safe. Saying so matters: the host is standing in
+            // front of a punter holding a book.
+            logError('host-control', err);
+            setActionError("Could not reach the server to check that claim. Check the connection and tap Check Claim again.");
+            setValidationResult(null);
         } finally {
             setIsCheckingWin(false);
         }
@@ -939,13 +976,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         if (!isController || isSkipping) return;
         setActionError(null);
         setIsSkipping(true);
+        // As in handleContinuePlaying: the server binds to the stage the host
+        // was looking at, so a retry after a lost response is inert rather than
+        // skipping a second stage and its prize.
+        const expectedStageIndex = currentGameState.current_stage_index;
         try {
-            // The stage index and stage count are derived server-side, so a stale
-            // host screen can no longer move the game to a stage it already left.
-            if (applyMutation(await skipStage(gameId), "Failed to skip stage.")) {
+            if (applyMutation(await skipStage(gameId, expectedStageIndex), "Failed to skip stage.")) {
                 setShowValidationModal(false);
                 handleClearSelection();
             }
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to skip the stage. Check the connection and tap again: if it did save, tapping again will not skip a second stage.");
         } finally {
             setIsSkipping(false);
         }
@@ -1010,6 +1052,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             }
             applyMutation(result, "Failed to undo the last call.");
             setShowUndoModal(false);
+        } catch (err) {
+            // Undo is NOT safe to repeat blindly: a second undo takes a second
+            // ball off the board. The message says to reload and look, not to
+            // tap again.
+            logError('host-control', err);
+            setUndoError({ message: "Could not reach the server. Reload the page and check the board before undoing again: undoing twice takes two balls off." });
         } finally {
             setIsVoiding(false);
         }
@@ -1023,6 +1071,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             if (!applyMutation(await resumeGame(gameId), "Failed to resume game.")) return;
             setShowValidationModal(false);
             handleClearSelection();
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to resume the game. Check the connection and try again.");
         } finally {
             setIsResuming(false);
         }
@@ -1083,6 +1134,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             await refreshWinnerLists();
             setVoidWinnerTarget(null);
             setVoidWinnerReason('');
+        } catch (err) {
+            logError('host-control', err);
+            setVoidWinnerError("Could not reach the server to void that winner. Check the connection and try again.");
         } finally {
             setIsVoidingWinner(false);
         }
