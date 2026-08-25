@@ -350,3 +350,10 @@ select t('idempotency :: only the eight-argument record_winner_atomic exists',
          (select string_agg(pg_get_function_identity_arguments(p.oid), ' | ') from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname = 'record_winner_atomic'));
+
+select t('privacy :: winners is NOT readable without a staff role',
+         not exists (select 1 from pg_policies
+                      where schemaname = 'public' and tablename = 'winners' and cmd = 'SELECT'
+                        and coalesce(qual, '') = 'true'),
+         (select coalesce(string_agg(policyname || ' :: ' || coalesce(qual, '-'), ' | '), '(no SELECT policy)')
+            from pg_policies where schemaname = 'public' and tablename = 'winners' and cmd = 'SELECT'));

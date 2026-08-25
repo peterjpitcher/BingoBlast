@@ -45,9 +45,17 @@ create table if not exists public.session_reset_log (
   reset_at timestamptz not null default now(),
   winners_deleted int not null default 0,
   game_states_deleted int not null default 0,
-  -- The winners exactly as they were. winner_name is always the literal
-  -- 'Anonymous' by policy, so this snapshot carries no personal data: it is
-  -- stages, prizes, call counts, void flags and timestamps.
+  -- The winners exactly as they were: stages, prizes, call counts, void flags
+  -- and timestamps.
+  --
+  -- CORRECTED 2026-08-25. This originally said the snapshot carries no personal
+  -- data "because winner_name is always the literal 'Anonymous' by policy".
+  -- That is true of the code and false of the data: 43 of the 87 rows in
+  -- production carry a real customer first name, recorded before the
+  -- anonymisation policy was applied. So a snapshot of a pre-May 2026 session
+  -- WOULD contain names, and this table is admin-read-only for that reason as
+  -- much as any other. Once the existing names are dealt with, the original
+  -- claim becomes true again.
   winners_snapshot jsonb
 );
 
