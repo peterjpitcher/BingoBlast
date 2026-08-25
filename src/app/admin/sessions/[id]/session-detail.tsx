@@ -799,15 +799,25 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
             </div>
           )}
           <p className="text-sm text-white/85">
-            This will wipe all live history for this session and put it back into the Ready state. The following will be permanently deleted:
+            This wipes the live record of this session and puts it back into the Ready state.
+            The following are deleted:
           </p>
           <ul className="list-disc list-inside text-sm text-white/85 space-y-1 pl-2">
             <li>All game states (called numbers, current stage, current pattern)</li>
-            <li>All recorded winners for this session</li>
-            <li>Any snowball jackpot history captured against winners in this session</li>
+            <li>All recorded winners for this session, including voided ones</li>
           </ul>
+          <p className="text-sm text-white/85">
+            Snowball pot balances, the pot&rsquo;s own history and the game configuration are not
+            touched. The list above used to claim it deleted snowball history; it never did.
+          </p>
+          <p className="text-sm text-emerald-200/90">
+            A record of exactly what was deleted, including the winners, is kept so this can be
+            checked afterwards.
+          </p>
           <p className="text-sm text-yellow-200/85">
-            Snowball pot balances and the underlying game configuration are not touched.
+            If this session&rsquo;s snowball game has already settled the pot, the reset will be
+            refused: the pot has moved and cannot be safely rewound. Correct the pot on the
+            Snowball page first.
           </p>
           <div className="space-y-2">
             <label htmlFor="confirmReset" className="text-sm font-medium text-white/85">

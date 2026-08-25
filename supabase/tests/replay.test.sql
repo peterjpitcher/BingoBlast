@@ -44,18 +44,18 @@ drop function public.replay_probe_default_privileges();
 -- ---------------------------------------------------------------------------
 -- Tables and row level security
 -- ---------------------------------------------------------------------------
-select t('tables :: the eight expected tables exist',
-         (select count(*) = 8 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+select t('tables :: the nine expected tables exist',
+         (select count(*) = 9 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'
              and c.relname in ('profiles','sessions','games','game_states',
                                'game_states_public','winners','snowball_pots',
-                               'snowball_pot_history')),
+                               'snowball_pot_history','session_reset_log')),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'));
 
 select t('tables :: no unexpected tables were created',
-         (select count(*) = 8 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         (select count(*) = 9 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
@@ -225,8 +225,8 @@ select t('realtime :: winners is NOT published',
 -- Policies. The count is a tripwire: a migration that adds or drops one without
 -- updating this number has to say so out loud.
 -- ---------------------------------------------------------------------------
-select t('policies :: twenty policies exist across the public schema',
-         (select count(*) = 20 from pg_policies where schemaname = 'public'),
+select t('policies :: twenty one policies exist across the public schema',
+         (select count(*) = 21 from pg_policies where schemaname = 'public'),
          (select count(*)::text || ' :: ' || string_agg(tablename || '.' || policyname, ', ' order by tablename, policyname)
             from pg_policies where schemaname = 'public'));
 
@@ -294,3 +294,19 @@ select t('policies :: snowball_pot_history has no DELETE policy, so the money au
                       where schemaname = 'public' and tablename = 'snowball_pot_history' and cmd = 'DELETE'),
          (select string_agg(policyname, ',' order by policyname) from pg_policies
            where schemaname = 'public' and tablename = 'snowball_pot_history' and cmd = 'DELETE'));
+
+select t('audit :: session_reset_log is readable by admins and writable by nobody',
+         (select count(*) = 1 from pg_policies
+           where schemaname = 'public' and tablename = 'session_reset_log')
+         and (select bool_and(cmd = 'SELECT') from pg_policies
+               where schemaname = 'public' and tablename = 'session_reset_log'),
+         (select coalesce(string_agg(policyname || '=' || cmd, ',' order by policyname), '(none)')
+            from pg_policies where schemaname = 'public' and tablename = 'session_reset_log'));
+
+select t('audit :: reset_session_safe returns the log row rather than void',
+         (select pg_get_function_result(p.oid) = 'session_reset_log'
+            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'reset_session_safe'),
+         (select pg_get_function_result(p.oid) from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'reset_session_safe'));

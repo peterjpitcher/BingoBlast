@@ -435,6 +435,48 @@ export interface Database {
         }
         Relationships: []
       }
+      /**
+       * Append-only record of every session reset: who, when, and what was
+       * destroyed. Written only by reset_session_safe (security definer), and
+       * readable by admins. There is no INSERT, UPDATE or DELETE policy, so the
+       * Insert and Update shapes below exist only to satisfy the generic client
+       * types and are never used.
+       */
+      session_reset_log: {
+        Row: {
+          id: string
+          session_id: string
+          /** Snapshotted, so the row still means something if the session is renamed or deleted. */
+          session_name: string | null
+          reset_by: string | null
+          reset_at: string
+          winners_deleted: number
+          game_states_deleted: number
+          /** The winners exactly as they were. Anonymous by policy, so no personal data. */
+          winners_snapshot: unknown | null
+        }
+        Insert: {
+          id?: string
+          session_id: string
+          session_name?: string | null
+          reset_by?: string | null
+          reset_at?: string
+          winners_deleted?: number
+          game_states_deleted?: number
+          winners_snapshot?: unknown | null
+        }
+        Update: {
+          id?: string
+          session_id?: string
+          session_name?: string | null
+          reset_by?: string | null
+          reset_at?: string
+          winners_deleted?: number
+          game_states_deleted?: number
+          winners_snapshot?: unknown | null
+        }
+        Relationships: []
+      }
       snowball_pot_history: {
         Row: {
           id: string
@@ -563,7 +605,16 @@ export interface Database {
       }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }
-      reset_session_safe: { Args: { p_session_id: string }; Returns: undefined }
+      /**
+       * Wipes a session back to ready. Records what it destroyed in
+       * session_reset_log first and returns that row, and refuses when the
+       * session has already settled a snowball pot. See
+       * supabase/migrations/20260825080604_session_reset_audit_and_guard.sql.
+       */
+      reset_session_safe: {
+        Args: { p_session_id: string }
+        Returns: Database['public']['Tables']['session_reset_log']['Row']
+      }
       /**
        * Retires a snowball pot without deleting it or its history. Admin only,
        * refuses while a game on the pot is unfinished, idempotent on a retry.
