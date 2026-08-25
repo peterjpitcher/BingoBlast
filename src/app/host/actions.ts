@@ -274,6 +274,39 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, gameI
     return { success: true };
 }
 
+/**
+ * Settles the snowball pot for a game that has already finished.
+ *
+ * Every route to settlement ran inside endGame, advanceToNextStage or skipStage,
+ * and all three refuse once the game is completed. So a settlement that failed,
+ * for any reason including a dropped connection at exactly the wrong moment,
+ * was terminal: the game was completed, the pot had not moved, and there was no
+ * way to try again. The pot then advertised last week's figure until an admin
+ * corrected it by hand on /admin/snowball, which is a manual cash adjustment
+ * standing in for a retry.
+ *
+ * settle_snowball_pot is already safe to call repeatedly: the partial unique
+ * index on (snowball_pot_id, game_id) turns a second attempt into
+ * 'already_settled' and leaves the pot exactly where it is. So the retry needs
+ * no new guard, only a route to it.
+ *
+ * Deliberately does NOT check the game status. The whole point is that the game
+ * is finished.
+ */
+export async function settleSnowballPotForGame(gameId: string): Promise<ActionResult> {
+    const supabase = await createClient();
+    const authResult = await authorizeHost(supabase);
+    if (!authResult.authorized) return failure('settleSnowballPotForGame', authResult.error);
+
+    const result = await handleSnowballPotUpdate(supabase, gameId);
+    if (!result.success) {
+        return failure('settleSnowballPotForGame', SNOWBALL_POT_NOT_MOVED_ERROR, result.error);
+    }
+
+    revalidatePath('/host');
+    return { success: true };
+}
+
 async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionId: string) {
     const { data: games, error } = await supabase
         .from('games')
@@ -827,7 +860,10 @@ export async function resumeGame(gameId: string): Promise<ActionResult<{ gameSta
     return { success: true, data: { gameState: rows[0] } };
 }
 
-export async function endGame(gameId: string, sessionId: string): Promise<ActionResult<{ gameState: GameStateRow }>> {
+export async function endGame(
+    gameId: string,
+    sessionId: string
+): Promise<ActionResult<{ gameState: GameStateRow; snowballPotDidNotSettle?: boolean }>> {
     const supabase = await createClient()
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return failure('endGame', controlResult.error)
@@ -872,10 +908,13 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
         return conflictFailure('endGame', STATE_MOVED_ERROR);
     }
 
-    // Use the shared helper for Snowball Logic. A pot failure here does not stop
-    // the game ending, exactly as before, but it is no longer silent.
+    // The game HAS ended: rows[0] proves the write landed, and that must not be
+    // undone by a pot problem. But telling the host it all worked when the pot
+    // demonstrably did not move is how a jackpot silently advertises last week's
+    // figure the following Friday. The game end stands; the answer says so.
     const potResult = await handleSnowballPotUpdate(supabase, gameId);
-    if (!potResult.success) {
+    const potDidNotMove = !potResult.success;
+    if (potDidNotMove) {
         logActionFailure('endGame', potResult.error ?? 'snowball pot update failed');
     }
     await maybeCompleteSession(supabase, sessionId);
@@ -903,6 +942,14 @@ export async function endGame(gameId: string, sessionId: string): Promise<Action
 
     revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the specific game page
     revalidatePath(`/host`); // Revalidate the host dashboard
+
+    if (potDidNotMove) {
+        // Not a failure: the game ended and the client must apply the new state.
+        // The flag is what lets the host screen offer the retry rather than
+        // leaving a stranded pot for somebody to notice next week.
+        return { success: true, data: { gameState: rows[0], snowballPotDidNotSettle: true } };
+    }
+
     return { success: true, data: { gameState: rows[0] } };
 }
 

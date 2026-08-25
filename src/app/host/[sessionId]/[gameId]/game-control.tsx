@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost, endGame } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost, endGame, settleSnowballPotForGame } from '@/app/host/actions';
 import type { ActionFailureCode, ActionResult } from '@/types/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -100,6 +100,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     };
 
     // Undo confirm modal (T4.3): replaces the blocking window.confirm.
+    // Set when endGame reports that the game ended but the snowball pot did not
+    // move. Before this there was no route back at all: every path to settlement
+    // refuses once the game is completed, so a settlement that failed was
+    // terminal and the pot advertised last week's figure until an admin
+    // corrected it by hand.
+    const [potNeedsSettling, setPotNeedsSettling] = useState(false);
+    const [isSettlingPot, setIsSettlingPot] = useState(false);
     const [showEndGameModal, setShowEndGameModal] = useState(false);
     const [isEndingGame, setIsEndingGame] = useState(false);
     const [endGameError, setEndGameError] = useState<string | null>(null);
@@ -145,7 +152,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         isCallingNumber || isRecordingWinner || isRecordingSnowballWinner ||
         isTakingControl || isTogglingBreak || isVoiding || isAdvancing ||
         isSkipping || isResuming || isPausing || isMovingGame || isCheckingWin ||
-        isVoidingWinner || isSubmittingCashJackpot || isEndingGame;
+        isVoidingWinner || isSubmittingCashJackpot || isEndingGame || isSettlingPot;
     const hasUnsavedWork = isAnyModalOpen || selectedNumbers.length > 0 || isAnyRequestInFlight;
 
     // Singleton Supabase client — all subscriptions share one WebSocket connection
@@ -1095,12 +1102,32 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 return;
             }
             applyMutation(result, 'Failed to end the game.');
+            if (result.data?.snowballPotDidNotSettle) setPotNeedsSettling(true);
             setShowEndGameModal(false);
         } catch (err) {
             logError('host-control', err);
             setEndGameError('Could not reach the server to end the game. Check the connection and try again.');
         } finally {
             setIsEndingGame(false);
+        }
+    };
+
+    const handleRetrySettlement = async () => {
+        if (isSettlingPot) return;
+        setActionError(null);
+        setIsSettlingPot(true);
+        try {
+            const result = await settleSnowballPotForGame(gameId);
+            if (!result?.success) {
+                setActionError(result?.error || 'The snowball pot still did not update.');
+                return;
+            }
+            setPotNeedsSettling(false);
+        } catch (err) {
+            logError('host-control', err);
+            setActionError('Could not reach the server to settle the pot. Check the connection and try again.');
+        } finally {
+            setIsSettlingPot(false);
         }
     };
 
@@ -1330,6 +1357,27 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </CardContent>
             </Card>
 
+            {potNeedsSettling && (
+                <div className="mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/50 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p className="font-bold text-white">The game ended but the snowball pot did not update</p>
+                        <p className="text-sm text-white/85">
+                            The jackpot is still showing its old figure. Trying again is safe: if it did
+                            move after all, this will say so and change nothing.
+                        </p>
+                    </div>
+                    <Button
+                        variant="primary"
+                        size="lg"
+                        className="min-h-[56px] shrink-0"
+                        onClick={handleRetrySettlement}
+                        disabled={isSettlingPot}
+                    >
+                        {isSettlingPot ? 'Settling…' : 'Settle the pot'}
+                    </Button>
+                </div>
+            )}
+
             {/* The way out of a claim pause.
 
                 Resume used to live ONLY inside the validation modal. "Close and
@@ -1433,24 +1481,44 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </Button>
             </div>
 
-            {/* Manual Snowball Win Button (Only for Snowball Games) */}
-            {game.type === 'snowball' && currentSnowballPot && (
-                <div className={cn("flex justify-center mb-8", !isController && "opacity-50 pointer-events-none")}>
-                    <Button
-                        variant="secondary"
-                        size="sm"
-                        className="bg-[#0f6846] border-[#a57626] text-white hover:bg-[#136f4b] min-h-[44px]"
-                        onClick={() => {
-                            setActionError(null);
-                            setPrizeDescription(`£${currentSnowballPot.current_jackpot_amount} (Manual Snowball Win)`);
-                            // Fresh key per award. This path pays the jackpot, so
-                            // it is the one where a retried tap costs real money.
-                            manualSnowballRequestIdRef.current = newClaimRequestId();
-                            setShowManualSnowballModal(true);
-                        }}
-                    >
-                        🏆 Manual Snowball Win
-                    </Button>
+            {/* Manual Snowball Win.
+
+                Offered only while the jackpot window is genuinely open, and only
+                during Full House. It used to be offered at any stage and at any
+                call count, and it set p_force_snowball_jackpot, which skipped the
+                window check inside record_winner_atomic entirely. So the button
+                paid the full pot after the window had closed, on a stage that was
+                not Full House, with nothing recording that it had been forced.
+
+                The database now refuses to award the jackpot outside the window on
+                this route as well. Hiding the button when it cannot legitimately
+                be used is the other half: a control that silently records an
+                ordinary win instead of the jackpot the host thought they were
+                awarding would be worse than no control. */}
+            {isSnowballGame && (
+                <div className={cn("flex flex-col items-center gap-2 mb-8", !isController && "opacity-50 pointer-events-none")}>
+                    {currentSnowballPot && isSnowballEligibilityStage && isSnowballJackpotWindowOpen ? (
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            className="bg-[#0f6846] border-[#a57626] text-white hover:bg-[#136f4b] min-h-[44px]"
+                            onClick={() => {
+                                setActionError(null);
+                                setPrizeDescription(`£${formatPounds(Number(currentSnowballPot.current_jackpot_amount))} (Manual Snowball Win)`);
+                                // Fresh key per award. This path pays the jackpot, so
+                                // it is the one where a retried tap costs real money.
+                                manualSnowballRequestIdRef.current = newClaimRequestId();
+                                setShowManualSnowballModal(true);
+                            }}
+                        >
+                            🏆 Manual Snowball Win
+                        </Button>
+                    ) : currentSnowballPot && isSnowballEligibilityStage ? (
+                        <p className="text-sm text-white/70 text-center max-w-sm">
+                            The jackpot window has closed, so the jackpot cannot be awarded from this
+                            screen. A Full House still records as a normal win.
+                        </p>
+                    ) : null}
                 </div>
             )}
 
