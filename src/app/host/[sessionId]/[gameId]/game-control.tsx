@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost, endGame } from '@/app/host/actions';
 import type { ActionFailureCode, ActionResult } from '@/types/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -100,6 +100,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     };
 
     // Undo confirm modal (T4.3): replaces the blocking window.confirm.
+    const [showEndGameModal, setShowEndGameModal] = useState(false);
+    const [isEndingGame, setIsEndingGame] = useState(false);
+    const [endGameError, setEndGameError] = useState<string | null>(null);
     const [showUndoModal, setShowUndoModal] = useState(false);
     // Undo refusals are held separately so they can render inside the undo modal.
     // `code` lets the modal offer the Winners and Prizes route out without
@@ -137,12 +140,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isAnyModalOpen =
         showValidationModal || showWinnerModal || showManualSnowballModal ||
         showPostWinModal || showSessionWinnersModal || showCashJackpotModal ||
-        showUndoModal || voidWinnerTarget !== null;
+        showUndoModal || showEndGameModal || voidWinnerTarget !== null;
     const isAnyRequestInFlight =
         isCallingNumber || isRecordingWinner || isRecordingSnowballWinner ||
         isTakingControl || isTogglingBreak || isVoiding || isAdvancing ||
         isSkipping || isResuming || isPausing || isMovingGame || isCheckingWin ||
-        isVoidingWinner || isSubmittingCashJackpot;
+        isVoidingWinner || isSubmittingCashJackpot || isEndingGame;
     const hasUnsavedWork = isAnyModalOpen || selectedNumbers.length > 0 || isAnyRequestInFlight;
 
     // Singleton Supabase client — all subscriptions share one WebSocket connection
@@ -1063,6 +1066,44 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
+    /**
+     * Ends the game without needing a winner first.
+     *
+     * There was no such control. The only routes to a completed game were
+     * recording a winner and then working through the Post Win modal, or
+     * skipping the final stage. So a game nobody won, or a game the host walked
+     * away from because the room had thinned out, stayed 'in_progress' for ever.
+     *
+     * That matters most on the snowball game, because settlement only ever runs
+     * from a completion path. An abandoned snowball game left the jackpot frozen
+     * exactly where it was, and the next Friday the pub TV and the pre-game
+     * briefing both announced last week's figure as if it had never been played
+     * for. The only correction was a manual pot edit.
+     *
+     * endGame already settles the pot and completes the session when this was
+     * the last game. This just gives it a button.
+     */
+    const handleConfirmEndGame = async () => {
+        if (!isController || isEndingGame) return;
+        setEndGameError(null);
+        setIsEndingGame(true);
+        try {
+            const result = await endGame(gameId, sessionId);
+            if (!result?.success) {
+                setEndGameError(result?.error || 'Failed to end the game.');
+                if (result && 'conflict' in result && result.conflict) void pollGameState();
+                return;
+            }
+            applyMutation(result, 'Failed to end the game.');
+            setShowEndGameModal(false);
+        } catch (err) {
+            logError('host-control', err);
+            setEndGameError('Could not reach the server to end the game. Check the connection and try again.');
+        } finally {
+            setIsEndingGame(false);
+        }
+    };
+
     const handleResumeGame = async () => {
         if (!isController || isResuming) return;
         setActionError(null);
@@ -1289,6 +1330,36 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 </CardContent>
             </Card>
 
+            {/* The way out of a claim pause.
+
+                Resume used to live ONLY inside the validation modal. "Close and
+                stay paused" closes that modal and leaves paused_for_validation
+                true, and every control on this pad is disabled while it is: no
+                Next Number, no Break, no Undo, no Resume. The host was stuck with
+                nothing to press, and the Post Win modal's own copy told them to
+                "Resume ... from the main pad", which did not exist. The only way
+                out was to reopen Check Claim and cancel it. */}
+            {isPausedForValidation && !isGameCompleted && (
+                <div className={cn(
+                    "mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
+                    !isController && "opacity-50 pointer-events-none"
+                )}>
+                    <div>
+                        <p className="font-bold text-white">Paused for a claim check</p>
+                        <p className="text-sm text-white/85">Calling is on hold until you resume.</p>
+                    </div>
+                    <Button
+                        variant="primary"
+                        size="lg"
+                        className="min-h-[56px] shrink-0"
+                        onClick={handleResumeGame}
+                        disabled={!isController || isResuming}
+                    >
+                        {isResuming ? 'Resuming…' : 'Resume calling'}
+                    </Button>
+                </div>
+            )}
+
             {/* Control Pad */}
             <div className={cn("grid grid-cols-2 gap-3 mb-4", !isController && "opacity-50 pointer-events-none")}>
                 <Button
@@ -1334,6 +1405,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     disabled={isVoidLastNumberDisabled}
                 >
                     Undo Last Call
+                </Button>
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-white/80 hover:text-white hover:bg-[#0f6846] min-h-[44px]"
+                    onClick={() => { setEndGameError(null); setShowEndGameModal(true); }}
+                    disabled={!isController || isGameNotInProgress || isGameCompleted}
+                >
+                    End Game
                 </Button>
             </div>
             <div className="flex justify-center mb-8">
@@ -1684,6 +1764,44 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
             {/* Undo Confirm (T4.3). Names the ball and says plainly that it goes back
                 in the bag, because "undo" reads as "skip" to a host mid-game. */}
+            <Modal
+                isOpen={showEndGameModal}
+                onClose={() => { if (!isEndingGame) { setShowEndGameModal(false); setEndGameError(null); } }}
+                title="End this game now?"
+            >
+                <div className="space-y-4">
+                    <p className="text-white/90">
+                        The game is closed with no further winner recorded. Any stage still to play is
+                        left unplayed.
+                    </p>
+                    {isSnowballGame && (
+                        <p className="text-sm text-[#f3d59d]">
+                            This is the snowball game, so ending it settles the pot: it rolls over if
+                            nobody won the jackpot, and resets if somebody did. Leaving the game open
+                            instead means the pot does not move at all.
+                        </p>
+                    )}
+                    {isLastGameOfSession && (
+                        <p className="text-sm text-white/85">
+                            This is the last game of the session, so the session is marked completed too.
+                        </p>
+                    )}
+                    {endGameError && (
+                        <div role="alert" className="rounded border border-[#a57626] bg-[#a57626]/20 p-3 text-sm text-white">
+                            {endGameError}
+                        </div>
+                    )}
+                    <div className="flex justify-end gap-3 pt-2">
+                        <Button variant="ghost" type="button" onClick={() => setShowEndGameModal(false)} disabled={isEndingGame}>
+                            Keep playing
+                        </Button>
+                        <Button variant="danger" type="button" onClick={handleConfirmEndGame} disabled={isEndingGame}>
+                            {isEndingGame ? 'Ending…' : 'End game'}
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+
             <Modal
                 isOpen={showUndoModal}
                 onClose={handleCloseUndoModal}
