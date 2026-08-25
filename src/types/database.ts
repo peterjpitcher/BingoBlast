@@ -405,6 +405,8 @@ export interface Database {
           current_max_calls: number
           current_jackpot_amount: number
           last_awarded_at: string | null
+          /** Set when the pot is retired. Archived pots are hidden and cannot take a new game. */
+          archived_at: string | null
           created_at: string
         }
         Insert: {
@@ -562,6 +564,40 @@ export interface Database {
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }
       reset_session_safe: { Args: { p_session_id: string }; Returns: undefined }
+      /**
+       * Retires a snowball pot without deleting it or its history. Admin only,
+       * refuses while a game on the pot is unfinished, idempotent on a retry.
+       * See supabase/migrations/20260825080602_snowball_pot_archive_and_guards.sql.
+       */
+      archive_snowball_pot: {
+        Args: { p_pot_id: string }
+        Returns: Database['public']['Tables']['snowball_pots']['Row']
+      }
+      /**
+       * Manual pot correction. Writes the pot and its audit row in one
+       * transaction under a `for update` lock, and returns the persisted row so
+       * a write that did not land is a real error. Replaces the old
+       * three-round-trip admin path. See
+       * supabase/migrations/20260825080603_atomic_manual_pot_adjustments.sql.
+       */
+      update_snowball_pot_safe: {
+        Args: {
+          p_pot_id: string
+          p_name: string
+          p_base_max_calls: number
+          p_base_jackpot_amount: number
+          p_calls_increment: number
+          p_jackpot_increment: number
+          p_current_max_calls: number
+          p_current_jackpot_amount: number
+        }
+        Returns: Database['public']['Tables']['snowball_pots']['Row']
+      }
+      /** Returns the pot to its base figures, with an audit row, in one transaction. */
+      reset_snowball_pot_safe: {
+        Args: { p_pot_id: string }
+        Returns: Database['public']['Tables']['snowball_pots']['Row']
+      }
       update_game_safe: {
         Args: {
           p_game_id: string

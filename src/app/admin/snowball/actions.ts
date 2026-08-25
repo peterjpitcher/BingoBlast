@@ -42,6 +42,35 @@ async function authorizeAdmin(
   return { authorized: true, user, role: profile.role }
 }
 
+/**
+ * Turns the short keys the pot functions raise into words an admin reads, and
+ * keeps the raw Postgres message out of the UI.
+ *
+ * The other admin actions in this file still return `error.message` straight to
+ * the screen, which is the inconsistency the review flagged. The money paths get
+ * the host actions' treatment first.
+ */
+function mapPotRpcError(action: string, error: { code?: string; message?: string } | null, data: unknown): ActionResult | null {
+  if (error) {
+    const key = (error.message ?? '').trim().split(':')[0]
+    const known: Record<string, string | undefined> = {
+      pot_not_found: 'Could not find that pot. Please reload.',
+      pot_archived: 'That pot has been archived, so it cannot be edited.',
+      pot_in_use: 'Cannot do that while a game using this pot has not finished.',
+      unauthorized: 'Only an admin can change a snowball pot.',
+    }
+    console.error(`[admin:${action}]`, { code: error.code, message: error.message })
+    return { success: false, error: known[key] ?? 'Could not save that change. Please try again.' }
+  }
+  if (!data) {
+    // The function returns the persisted row, so no row means nothing was
+    // written, whatever the absence of an error suggests.
+    console.error(`[admin:${action}] returned no row`)
+    return { success: false, error: 'Could not save that change. Please reload and try again.' }
+  }
+  return null
+}
+
 export async function createSnowballPot(_prevState: unknown, formData: FormData): Promise<ActionResult> {
   const supabase = await createClient()
   const authResult = await authorizeAdmin(supabase)
@@ -77,7 +106,7 @@ export async function updateSnowballPot(id: string, _prevState: unknown, formDat
     const supabase = await createClient()
     const authResult = await authorizeAdmin(supabase)
     if (!authResult.authorized) return { success: false, error: authResult.error }
-    
+
     const parsed = SnowballPotSchema.safeParse({
         name: formData.get('name'),
         base_max_calls: formData.get('base_max_calls'),
@@ -87,99 +116,81 @@ export async function updateSnowballPot(id: string, _prevState: unknown, formDat
         current_max_calls: formData.get('current_max_calls'),
         current_jackpot_amount: formData.get('current_jackpot_amount'),
     })
-  
+
     if (!parsed.success) {
       return { success: false, error: parsed.error.issues[0].message }
     }
-  
-    // Fetch old pot data for audit trail
-    const { data: oldPot, error: fetchOldPotError } = await supabase
-        .from('snowball_pots')
-        .select('current_max_calls, current_jackpot_amount')
-        .eq('id', id)
-        .single<{ current_max_calls: number; current_jackpot_amount: number }>()
 
-    if (fetchOldPotError || !oldPot) {
-        return { success: false, error: fetchOldPotError?.message || "Pot not found for audit." }
-    }
-    
-    const { error } = await supabase
-      .from('snowball_pots')
-      .update(parsed.data)
-      .eq('id', id)
-  
-    if (error) {
-      return { success: false, error: error.message }
-    }
+    // One RPC, one transaction. This used to be three round trips: read the old
+    // values, write the new ones with a bare .update(), then insert the audit row
+    // separately and swallow its failure with a console.error and a comment
+    // saying it was "not critical to block action". So the pot could move with no
+    // audit row, or an audit row could be written for a move that did not happen,
+    // and because the update had no .select() a write RLS filtered out was
+    // reported as success. On a table that holds real cash.
+    const { data, error } = await supabase.rpc('update_snowball_pot_safe', {
+      p_pot_id: id,
+      p_name: parsed.data.name,
+      p_base_max_calls: parsed.data.base_max_calls,
+      p_base_jackpot_amount: parsed.data.base_jackpot_amount,
+      p_calls_increment: parsed.data.calls_increment,
+      p_jackpot_increment: parsed.data.jackpot_increment,
+      p_current_max_calls: parsed.data.current_max_calls,
+      p_current_jackpot_amount: parsed.data.current_jackpot_amount,
+    })
 
-    // Insert audit record
-    const { error: auditError } = await supabase.from('snowball_pot_history').insert({
-        snowball_pot_id: id,
-        change_type: 'manual_update',
-        old_val_max: oldPot.current_max_calls,
-        new_val_max: parsed.data.current_max_calls,
-        old_val_jackpot: oldPot.current_jackpot_amount,
-        new_val_jackpot: parsed.data.current_jackpot_amount,
-        changed_by: authResult.user!.id,
-    });
-    if (auditError) {
-        console.error("Error logging snowball pot update history:", auditError.message);
-        // Continue despite error, not critical to block action
-    }
-  
+    const failed = mapPotRpcError('updateSnowballPot', error, data)
+    if (failed) return failed
+
     revalidatePath('/admin/snowball')
     return { success: true }
 }
 
-export async function deleteSnowballPot(id: string): Promise<ActionResult> {
+/**
+ * Retires a pot. It is not deleted, and its history is not touched.
+ *
+ * The old deleteSnowballPot ran three separate, non-transactional statements:
+ * unlink every game from the pot, delete the pot's entire history, then delete
+ * the pot. The unlink committed on its own, so historical games silently stopped
+ * being snowball games and the host screen said "this game is not linked to a
+ * snowball pot" about games that had been played for a jackpot. The history
+ * delete matched zero rows because snowball_pot_history has no DELETE policy,
+ * returned no error, and then the pot delete failed on the foreign key. The
+ * links were gone for good and the pot was still there.
+ *
+ * Even when it worked, it destroyed the only record of how a real cash pot
+ * reached its figure. Money history is not something to delete, so a retired pot
+ * is archived: hidden from the list, unavailable to new games, everything kept.
+ *
+ * One RPC, one transaction, one `for update` lock, and admin-only inside the
+ * function rather than only in this action.
+ */
+export async function archiveSnowballPot(id: string): Promise<ActionResult> {
     const supabase = await createClient()
     const authResult = await authorizeAdmin(supabase)
     if (!authResult.authorized) return { success: false, error: authResult.error }
 
-    // Check if linked to any in_progress games
-    const { data: activeGames, error: activeGamesError } = await supabase
-        .from('games')
-        .select('id, game_states!inner(status)')
-        .eq('snowball_pot_id', id)
-        .eq('game_states.status', 'in_progress')
+    const { data, error } = await supabase.rpc('archive_snowball_pot', { p_pot_id: id })
 
-    if (activeGamesError) {
-        return { success: false, error: activeGamesError.message }
-    }
-    
-    if (activeGames && activeGames.length > 0) {
-        return { success: false, error: "Cannot delete pot: It is currently in use by an active game." }
-    }
-
-    // Unlink any historical/future games that still reference this pot.
-    const { error: unlinkGamesError } = await supabase
-      .from('games')
-      .update({ snowball_pot_id: null })
-      .eq('snowball_pot_id', id)
-
-    if (unlinkGamesError) {
-      return { success: false, error: unlinkGamesError.message }
-    }
-
-    // Remove audit rows first to satisfy FK constraints if cascade isn't configured.
-    const { error: deleteHistoryError } = await supabase
-      .from('snowball_pot_history')
-      .delete()
-      .eq('snowball_pot_id', id)
-
-    if (deleteHistoryError) {
-      return { success: false, error: deleteHistoryError.message }
-    }
-    
-    const { error } = await supabase
-      .from('snowball_pots')
-      .delete()
-      .eq('id', id)
-  
     if (error) {
-      return { success: false, error: error.message }
+        const key = (error.message ?? '').trim().split(':')[0]
+        if (key === 'pot_in_use') {
+            return { success: false, error: 'Cannot archive this pot: a game using it has not finished yet.' }
+        }
+        if (key === 'pot_not_found') {
+            return { success: false, error: 'Could not find that pot. Please reload.' }
+        }
+        if (key === 'unauthorized') {
+            return { success: false, error: 'Only an admin can archive a snowball pot.' }
+        }
+        console.error('[admin:archiveSnowballPot]', { code: error.code, message: error.message })
+        return { success: false, error: 'Could not archive that pot. Please try again.' }
     }
-  
+
+    if (!data) {
+        return { success: false, error: 'Could not archive that pot. Please reload and try again.' }
+    }
+
     revalidatePath('/admin/snowball')
     return { success: true }
 }
@@ -189,70 +200,17 @@ export async function resetSnowballPot(id: string): Promise<ActionResult> {
     const authResult = await authorizeAdmin(supabase)
     if (!authResult.authorized) return { success: false, error: authResult.error }
 
-    // Check if linked to any in_progress games
-    const { data: activeGames, error: activeGamesError } = await supabase
-        .from('games')
-        .select('id, game_states!inner(status)')
-        .eq('snowball_pot_id', id)
-        .eq('game_states.status', 'in_progress')
+    // As updateSnowballPot: one transaction, and the audit row is no longer
+    // optional. The refusal while a game is unfinished now lives inside the
+    // function, under the same lock as the write, so it cannot be raced.
+    //
+    // This also stops clearing last_awarded_at, which erased the record of when
+    // the jackpot was last actually won. A manual correction to the current
+    // figures says nothing about that.
+    const { data, error } = await supabase.rpc('reset_snowball_pot_safe', { p_pot_id: id })
 
-    if (activeGamesError) {
-        return { success: false, error: activeGamesError.message }
-    }
-    
-    if (activeGames && activeGames.length > 0) {
-        return { success: false, error: "Cannot reset pot: It is currently in use by an active game." }
-    }
-
-    // Fetch old pot data for audit trail
-    const { data: oldPot, error: fetchOldPotError } = await supabase
-        .from('snowball_pots')
-        .select('base_max_calls, base_jackpot_amount, current_max_calls, current_jackpot_amount')
-        .eq('id', id)
-        .single<{ base_max_calls: number; base_jackpot_amount: number, current_max_calls: number; current_jackpot_amount: number }>()
-    
-    if (fetchOldPotError || !oldPot) {
-        return { success: false, error: fetchOldPotError?.message || "Pot not found for audit." }
-    }
-
-    // Fetch base values
-    const { data: pot, error: fetchError } = await supabase
-        .from('snowball_pots')
-        .select('base_max_calls, base_jackpot_amount')
-        .eq('id', id)
-        .single<{ base_max_calls: number; base_jackpot_amount: number }>()
-    
-    if (fetchError || !pot) {
-        return { success: false, error: "Pot not found" }
-    }
-
-    const { error } = await supabase
-        .from('snowball_pots')
-        .update({
-            current_max_calls: pot.base_max_calls,
-            current_jackpot_amount: pot.base_jackpot_amount,
-            last_awarded_at: null // Optional: reset this or keep history
-        })
-        .eq('id', id)
-
-    if (error) {
-        return { success: false, error: error.message }
-    }
-
-    // Insert audit record
-    const { error: auditError } = await supabase.from('snowball_pot_history').insert({
-        snowball_pot_id: id,
-        change_type: 'manual_reset',
-        old_val_max: oldPot.current_max_calls,
-        new_val_max: oldPot.base_max_calls,
-        old_val_jackpot: oldPot.current_jackpot_amount,
-        new_val_jackpot: oldPot.base_jackpot_amount,
-        changed_by: authResult.user!.id,
-    });
-    if (auditError) {
-        console.error("Error logging snowball pot reset history:", auditError.message);
-        // Continue despite error
-    }
+    const failed = mapPotRpcError('resetSnowballPot', error, data)
+    if (failed) return failed
 
     revalidatePath('/admin/snowball')
     return { success: true }

@@ -99,8 +99,8 @@ select t('enums :: win_stage is exactly {Line,Two Lines,Full House}',
 -- ---------------------------------------------------------------------------
 -- Functions: presence, security settings and search_path
 -- ---------------------------------------------------------------------------
-select t('functions :: the fourteen expected functions exist and nothing else',
-         (select count(*) = 14 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+select t('functions :: the seventeen expected functions exist and nothing else',
+         (select count(*) = 17 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'));
@@ -145,13 +145,14 @@ select t('grants :: no function in public carries a bare PUBLIC EXECUTE grant',
            where n.nspname = 'public' and p.proacl is not null
              and array_to_string(p.proacl, ',') like '=X/%'));
 
-select t('grants :: the eleven caller-facing functions are executable by authenticated',
-         (select count(*) = 11 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+select t('grants :: the fourteen caller-facing functions are executable by authenticated',
+         (select count(*) = 14 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public'
              and p.proname in ('assert_is_admin','assert_is_host','call_next_number',
                                'delete_game_safe','delete_session_safe','record_winner_atomic',
                                'reset_session_safe','set_winner_prize_given','settle_snowball_pot',
-                               'update_game_safe','void_last_number')
+                               'update_game_safe','void_last_number','archive_snowball_pot',
+                               'update_snowball_pot_safe','reset_snowball_pot_safe')
              and has_function_privilege('authenticated', p.oid, 'EXECUTE')),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
@@ -159,7 +160,8 @@ select t('grants :: the eleven caller-facing functions are executable by authent
              and p.proname in ('assert_is_admin','assert_is_host','call_next_number',
                                'delete_game_safe','delete_session_safe','record_winner_atomic',
                                'reset_session_safe','set_winner_prize_given','settle_snowball_pot',
-                               'update_game_safe','void_last_number')
+                               'update_game_safe','void_last_number','archive_snowball_pot',
+                               'update_snowball_pot_safe','reset_snowball_pot_safe')
              and not has_function_privilege('authenticated', p.oid, 'EXECUTE')));
 
 select t('grants :: the three trigger functions are NOT executable by authenticated',
@@ -267,3 +269,28 @@ begin
   delete from auth.users where id = v_id;
 end
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Constraints and columns added by the remediation. These are the guards that
+-- stop a typo becoming a cash error, so they are asserted rather than assumed.
+-- ---------------------------------------------------------------------------
+select t('constraints :: a snowball pot cannot be given a window wider than 90 balls',
+         exists (select 1 from pg_constraint where conname = 'snowball_pots_max_calls_within_90'),
+         'a 90-ball game can never call more than 90, so a wider window makes every Full House a jackpot');
+
+select t('constraints :: two games in one session cannot share a game_index',
+         exists (select 1 from pg_indexes where schemaname = 'public'
+                   and indexname = 'games_session_game_index_unique'),
+         'a duplicate index makes the host screen ambiguous about which game is first and last');
+
+select t('columns :: snowball_pots.archived_at exists, so a pot can be retired without being deleted',
+         exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'snowball_pots'
+                    and column_name = 'archived_at'),
+         'pot history is the audit trail for real cash and must never be deletable');
+
+select t('policies :: snowball_pot_history has no DELETE policy, so the money audit is append-only',
+         not exists (select 1 from pg_policies
+                      where schemaname = 'public' and tablename = 'snowball_pot_history' and cmd = 'DELETE'),
+         (select string_agg(policyname, ',' order by policyname) from pg_policies
+           where schemaname = 'public' and tablename = 'snowball_pot_history' and cmd = 'DELETE'));

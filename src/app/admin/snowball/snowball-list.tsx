@@ -3,7 +3,8 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
-import { createSnowballPot, deleteSnowballPot, resetSnowballPot, updateSnowballPot } from './actions';
+import { archiveSnowballPot, createSnowballPot, resetSnowballPot, updateSnowballPot } from './actions';
+import { formatPounds } from '@/lib/snowball';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
@@ -21,6 +22,19 @@ export default function SnowballList({ pots }: SnowballListProps) {
   const [editingPot, setEditingPot] = useState<SnowballPot | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // These two used to be window.confirm(). They are the most money-sensitive
+  // controls in the app, and everywhere else that touches real money (deleting a
+  // game, resetting a session) already uses a typed confirmation. Resetting a
+  // pot throws away a jackpot that has been building across sessions, so it asks
+  // for the pot's name to be typed. Archiving is reversible and keeps
+  // everything, so a plain confirmation is enough for it.
+  const [archiveTarget, setArchiveTarget] = useState<SnowballPot | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [resetTarget, setResetTarget] = useState<SnowballPot | null>(null);
+  const [resetTyped, setResetTyped] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const handleClose = () => {
     setShowModal(false);
@@ -58,28 +72,58 @@ export default function SnowballList({ pots }: SnowballListProps) {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (confirm('Delete this snowball pot? This will unlink any games using it.')) {
-        setActionError(null);
-        const result = await deleteSnowballPot(id);
-        if (!result?.success) {
-          setActionError(result?.error || "Failed to delete snowball pot.");
-          return;
-        }
-        router.refresh();
+  function handleShowArchive(pot: SnowballPot) {
+    setArchiveTarget(pot);
+    setModalError(null);
+  }
+
+  function handleShowReset(pot: SnowballPot) {
+    setResetTarget(pot);
+    setResetTyped('');
+    setModalError(null);
+  }
+
+  async function handleConfirmArchive() {
+    if (!archiveTarget || isArchiving) return;
+    setIsArchiving(true);
+    setModalError(null);
+    try {
+      const result = await archiveSnowballPot(archiveTarget.id);
+      if (!result?.success) {
+        setModalError(result?.error || 'Failed to archive that pot.');
+        return;
+      }
+      setArchiveTarget(null);
+      router.refresh();
+    } catch {
+      setModalError('Could not reach the server. Check the connection and try again.');
+    } finally {
+      setIsArchiving(false);
     }
   }
 
-  async function handleReset(id: string) {
-      if (confirm('Reset this pot to its BASE values? This clears the current jackpot.')) {
-          setActionError(null);
-          const result = await resetSnowballPot(id);
-          if (!result?.success) {
-            setActionError(result?.error || "Failed to reset snowball pot.");
-            return;
-          }
-          router.refresh();
+  async function handleConfirmReset() {
+    if (!resetTarget || isResetting) return;
+    if (resetTyped.trim() !== resetTarget.name) {
+      setModalError('Type the pot name exactly to confirm.');
+      return;
+    }
+    setIsResetting(true);
+    setModalError(null);
+    try {
+      const result = await resetSnowballPot(resetTarget.id);
+      if (!result?.success) {
+        setModalError(result?.error || 'Failed to reset that pot.');
+        return;
       }
+      setResetTarget(null);
+      setResetTyped('');
+      router.refresh();
+    } catch {
+      setModalError('Could not reach the server. Check the connection and try again.');
+    } finally {
+      setIsResetting(false);
+    }
   }
 
   return (
@@ -131,9 +175,9 @@ export default function SnowballList({ pots }: SnowballListProps) {
                           £{pot.base_jackpot_amount} / {pot.base_max_calls} calls
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
-                        <Button variant="ghost" size="sm" className="text-yellow-500 hover:text-yellow-400 hover:bg-yellow-900/20 h-8 px-2" onClick={() => handleReset(pot.id)}>Reset</Button>
+                        <Button variant="ghost" size="sm" className="text-yellow-500 hover:text-yellow-400 hover:bg-yellow-900/20 min-h-[44px] px-2" onClick={() => handleShowReset(pot)}>Reset</Button>
                         <Button variant="ghost" size="sm" className="text-slate-300 hover:text-white hover:bg-slate-800 h-8 px-2" onClick={() => handleShowEdit(pot)}>Edit</Button>
-                        <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-400 hover:bg-red-900/20 h-8 px-2" onClick={() => handleDelete(pot.id)}>Delete</Button>
+                        <Button variant="ghost" size="sm" className="text-red-400 hover:text-red-300 hover:bg-red-900/20 min-h-[44px] px-2" onClick={() => handleShowArchive(pot)}>Archive</Button>
                       </td>
                     </tr>
                   ))}
@@ -263,6 +307,90 @@ export default function SnowballList({ pots }: SnowballListProps) {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Archive. Reversible and keeps everything, so a plain confirmation. */}
+      <Modal
+        isOpen={archiveTarget !== null}
+        onClose={() => { if (!isArchiving) { setArchiveTarget(null); setModalError(null); } }}
+        title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive pot'}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-white/90">
+            The pot is hidden from this list and cannot be linked to a new game. Nothing is deleted:
+            its history and the games that played for it are kept exactly as they are.
+          </p>
+          <p className="text-sm text-white/70">
+            It will refuse if a game using this pot has not finished yet.
+          </p>
+          {modalError && (
+            <div role="alert" className="rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+              {modalError}
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" type="button" onClick={() => setArchiveTarget(null)} disabled={isArchiving}>
+              Cancel
+            </Button>
+            <Button variant="danger" type="button" onClick={handleConfirmArchive} disabled={isArchiving}>
+              {isArchiving ? 'Archiving…' : 'Archive pot'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reset. Throws away a jackpot built across sessions, so it is typed. */}
+      <Modal
+        isOpen={resetTarget !== null}
+        onClose={() => { if (!isResetting) { setResetTarget(null); setResetTyped(''); setModalError(null); } }}
+        title={resetTarget ? `Reset "${resetTarget.name}" to base?` : 'Reset pot'}
+      >
+        <div className="space-y-4">
+          {resetTarget && (
+            <div className="rounded-lg border border-[#a57626]/60 bg-[#7a5719]/40 p-3 text-sm text-white">
+              <p className="font-semibold">
+                £{formatPounds(Number(resetTarget.current_jackpot_amount))} at {resetTarget.current_max_calls} calls
+                {' → '}
+                £{formatPounds(Number(resetTarget.base_jackpot_amount))} at {resetTarget.base_max_calls} calls
+              </p>
+              <p className="mt-1 text-white/85">
+                This is the pot that has been building across sessions. Resetting it here is a manual
+                correction, not a normal part of a game night: a won jackpot resets by itself when the
+                game ends.
+              </p>
+            </div>
+          )}
+          <div>
+            <label htmlFor="reset-pot-confirm" className="block text-sm text-white/85 mb-1">
+              Type <span className="font-bold">{resetTarget?.name}</span> to confirm
+            </label>
+            <Input
+              id="reset-pot-confirm"
+              value={resetTyped}
+              onChange={(e) => setResetTyped(e.target.value)}
+              autoComplete="off"
+              disabled={isResetting}
+            />
+          </div>
+          {modalError && (
+            <div role="alert" className="rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+              {modalError}
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" type="button" onClick={() => { setResetTarget(null); setResetTyped(''); }} disabled={isResetting}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              type="button"
+              onClick={handleConfirmReset}
+              disabled={isResetting || resetTyped.trim() !== (resetTarget?.name ?? '')}
+            >
+              {isResetting ? 'Resetting…' : 'Reset pot'}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </>
   );

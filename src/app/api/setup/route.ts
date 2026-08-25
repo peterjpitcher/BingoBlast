@@ -8,6 +8,18 @@ type SetupPayload = {
   email?: string
 }
 
+/**
+ * The bootstrap endpoint. Promotes an existing auth user to admin, given the
+ * shared secret.
+ *
+ * OPERATIONAL EXPECTATION: this exists to create the FIRST admin on a fresh
+ * deployment. Once that admin exists, unset SETUP_SECRET, which turns this route
+ * into a 404. Leaving it armed means the whole security model reduces to one
+ * environment variable, and there is no reason to keep that risk after the one
+ * time it is needed. Since new accounts now land as 'pending', this is also the
+ * only route that can create a working account without database access, so it is
+ * worth being deliberate about when it is on.
+ */
 function getSetupSecret() {
   return process.env.SETUP_SECRET
 }
@@ -88,14 +100,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 })
   }
 
-  const { error: updateError } = await supabase
+  // .select() so a write that changed nothing is a failure rather than a lie.
+  // Without it, promoting a user who has no profiles row at all returned
+  // { success: true, role: 'admin' } while writing nothing, and whoever ran it
+  // would then spend a while wondering why the account still had no access.
+  const { data: promoted, error: updateError } = await supabase
     .from('profiles')
     .update({ role: 'admin' })
     .eq('id', user.id)
+    .select('id, role')
 
   if (updateError) {
+    console.error('[api:setup] promote failed', { code: updateError.code, message: updateError.message })
     return NextResponse.json({ error: updateError.message }, { status: 500 })
   }
+
+  if (!promoted || promoted.length === 0) {
+    console.error('[api:setup] promote matched no rows: the user exists in auth but has no profiles row')
+    return NextResponse.json(
+      { error: 'That user has no profile row, so there was nothing to promote.' },
+      { status: 409 }
+    )
+  }
+
+  // Granting the admin role is the most privileged thing this deployment can do
+  // and it happened with no trace at all. This is not an audit trail, but it is
+  // the difference between "we can see it happened" and "we cannot".
+  console.warn(`[api:setup] granted admin role via the setup endpoint to a user id ending ${user.id.slice(-4)}`)
 
   return NextResponse.json({ success: true, user: user.email, role: 'admin' })
 }
