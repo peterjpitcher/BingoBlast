@@ -20,6 +20,10 @@
 --
 -- Run via supabase/tests/run.sh, never against a real project.
 
+-- Harness scaffolding. `test_results` and `t()` are created by this file, so
+-- every assertion that COUNTS or SWEEPS objects has to exclude them, or the
+-- suite fails on its own presence. They are named explicitly rather than
+-- filtered by a prefix so a future harness object cannot hide behind the rule.
 create table if not exists test_results (seq serial, name text, ok boolean, detail text);
 
 create or replace function t(p_name text, p_ok boolean, p_detail text default null)
@@ -56,18 +60,19 @@ select t('tables :: the nine expected tables exist',
 
 select t('tables :: no unexpected tables were created',
          (select count(*) = 9 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-           where n.nspname = 'public' and c.relkind = 'r'),
+           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
-           where n.nspname = 'public' and c.relkind = 'r'));
+           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'));
 
 select t('rls :: row level security is enabled on every public table',
          (select bool_and(c.relrowsecurity) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
-           where n.nspname = 'public' and c.relkind = 'r'),
+           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
          (select string_agg(c.relname || '=' || c.relrowsecurity::text, ',' order by c.relname)
             from pg_class c join pg_namespace n on n.oid = c.relnamespace
-           where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity));
+           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'
+             and not c.relrowsecurity));
 
 -- ---------------------------------------------------------------------------
 -- Enums
@@ -101,9 +106,10 @@ select t('enums :: win_stage is exactly {Line,Two Lines,Full House}',
 -- ---------------------------------------------------------------------------
 select t('functions :: the seventeen expected functions exist and nothing else',
          (select count(*) = 17 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public'),
+           where n.nspname = 'public' and p.proname <> 't'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
-            join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'));
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname <> 't'));
 
 select t('functions :: every security definer function pins search_path',
          (select bool_and(p.proconfig is not null
@@ -129,20 +135,21 @@ select t('functions :: bump_game_state_version is security INVOKER',
 -- ---------------------------------------------------------------------------
 select t('grants :: no function in public is executable by anon',
          (select count(*) = 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public'
+           where n.nspname = 'public' and p.proname <> 't'
              and has_function_privilege('anon', p.oid, 'EXECUTE')),
          (select string_agg(p.proname || ' ' || coalesce(p.proacl::text, 'DEFAULT'), ' | ' order by p.proname)
             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'EXECUTE')));
+           where n.nspname = 'public' and p.proname <> 't'
+             and has_function_privilege('anon', p.oid, 'EXECUTE')));
 
 select t('grants :: no function in public carries a bare PUBLIC EXECUTE grant',
          (select count(*) = 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public'
+           where n.nspname = 'public' and p.proname <> 't'
              and p.proacl is not null
              and array_to_string(p.proacl, ',') like '=X/%'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and p.proacl is not null
+           where n.nspname = 'public' and p.proname <> 't' and p.proacl is not null
              and array_to_string(p.proacl, ',') like '=X/%'));
 
 select t('grants :: the fourteen caller-facing functions are executable by authenticated',

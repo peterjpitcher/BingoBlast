@@ -73,6 +73,14 @@ create index if not exists session_reset_log_session_idx
 -- ---------------------------------------------------------------------------
 -- The reset itself
 -- ---------------------------------------------------------------------------
+-- The return type changes from void to the log row, and `create or replace`
+-- cannot change a return type ("cannot change return type of existing
+-- function"). The drop is required, and it is safe: the function is recreated
+-- immediately below in the same transaction, and the grants are reasserted after
+-- it, which they must be anyway because dropping and recreating rebuilds the ACL
+-- from the schema default privileges.
+drop function if exists public.reset_session_safe(uuid);
+
 create or replace function public.reset_session_safe(p_session_id uuid)
 returns public.session_reset_log
 language plpgsql

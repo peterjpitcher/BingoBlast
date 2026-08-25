@@ -47,13 +47,14 @@
 # migration order replays what production did.
 #
 # SUITE D (bingo_replay_test) replays EVERY migration in supabase/migrations, in
-# filename order, twice, against a database bootstrapped by supabase-bootstrap.sql
-# to look like a fresh Supabase project. Suites A to C each test a hand-picked
-# handful of migrations, which leaves the failure none of them can see: a
-# migration that is correct alone and wrong in sequence, or a repo history that
-# no longer rebuilds what production holds. replay.test.sql asserts the end
-# state, object by object and grant by grant, against what production actually
-# carries. The second replay proves every migration is safe to run twice.
+# filename order, against a database bootstrapped by supabase-bootstrap.sql to
+# look like a fresh Supabase project, applying each one twice as it goes. Suites
+# A to C each test a hand-picked handful of migrations, which leaves the failure
+# none of them can see: a migration that is correct alone and wrong in sequence,
+# or a repo history that no longer rebuilds what production holds.
+# replay.test.sql then asserts the end state object by object and grant by grant
+# against what production actually carries, and remediation-behaviour.test.sql
+# asserts what the functions DO, by acting as a real host against real fixtures.
 set -euo pipefail
 
 CONTAINER=bingo-migration-tests
@@ -68,15 +69,49 @@ REVOKE_ANON="$MIGRATIONS/20260730070705_revoke_anon_execute_on_host_rpcs.sql"
 REVOKE_TRIGGER="$MIGRATIONS/20260730072329_revoke_anon_on_bump_game_state_version.sql"
 
 export PGPASSWORD=test
-psql() { command psql -h localhost -p "$PORT" -U postgres -q "$@"; }
+psql() { command psql -h 127.0.0.1 -p "$PORT" -U postgres -q "$@"; }
 psql_strict() { psql -v ON_ERROR_STOP=1 "$@"; }
 
-cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+# ---------------------------------------------------------------------------
+# Where the throwaway Postgres comes from.
+#
+# Docker is preferred, because it pins the exact server version. But Docker is
+# not available on every machine this repo is worked on, and a test suite nobody
+# can run is a test suite that does not exist: this harness sat unexecuted for
+# weeks for exactly that reason. So if Docker is missing and a local Postgres 17
+# is installed, a temporary cluster is used instead. Same assertions, same
+# server version, no daemon.
+#
+# LC_ALL is pinned on the local path deliberately. Homebrew's postgres refuses to
+# start under some macOS locales with "postmaster became multithreaded during
+# startup", which is a confusing failure to hand somebody who only wanted to run
+# the tests.
+# ---------------------------------------------------------------------------
+LOCAL_PGDATA=""
 
-echo "==> starting $IMAGE as $CONTAINER on port $PORT"
-cleanup
-docker run -d --name "$CONTAINER" -e POSTGRES_PASSWORD=test -p "$PORT:5432" "$IMAGE" >/dev/null
+cleanup() {
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  if [ -n "$LOCAL_PGDATA" ]; then
+    pg_ctl -D "$LOCAL_PGDATA" stop -m immediate >/dev/null 2>&1 || true
+    rm -rf "$LOCAL_PGDATA"
+  fi
+}
 trap cleanup EXIT
+
+if docker info >/dev/null 2>&1; then
+  echo "==> starting $IMAGE as $CONTAINER on port $PORT"
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker run -d --name "$CONTAINER" -e POSTGRES_PASSWORD=test -p "$PORT:5432" "$IMAGE" >/dev/null
+elif command -v initdb >/dev/null 2>&1 && command -v pg_ctl >/dev/null 2>&1; then
+  echo "==> Docker unavailable; using a temporary local cluster ($(postgres --version))"
+  export LC_ALL=C LANG=C
+  LOCAL_PGDATA="$(mktemp -d "${TMPDIR:-/tmp}/bingo-pgdata.XXXXXX")"
+  initdb -D "$LOCAL_PGDATA" -U postgres --auth=trust >/dev/null
+  pg_ctl -D "$LOCAL_PGDATA" -o "-p $PORT -h 127.0.0.1" -l "$LOCAL_PGDATA/server.log" start >/dev/null
+else
+  echo "FAILED: needs either Docker, or initdb and pg_ctl on PATH (brew install postgresql@17)" >&2
+  exit 1
+fi
 
 for _ in $(seq 1 60); do
   if psql -d postgres -c 'select 1' >/dev/null 2>&1; then break; fi
@@ -252,27 +287,35 @@ echo "==> suite D: bootstrapping a production-shaped empty database"
 psql_strict -d postgres -c 'create database bingo_replay_test;'
 psql_strict -d bingo_replay_test -f "$HERE/supabase-bootstrap.sql"
 
+# Each migration is applied, then applied AGAIN immediately, before moving on.
+#
+# That is the idempotency property worth having: `db push` against a repaired
+# history can re-offer a single migration, so each one must survive being run
+# twice. Re-running the WHOLE history a second time is a stronger property and
+# not an achievable one: a later migration that legitimately changes a
+# function's return type (20260825080604 does, from void to a row type) makes an
+# earlier `create or replace` of the same function fail with "cannot change
+# return type of existing function". Testing per migration catches real
+# non-idempotency without demanding something no real deployment ever does.
 MIGRATION_COUNT=0
 for f in "$MIGRATIONS"/*.sql; do
   MIGRATION_COUNT=$((MIGRATION_COUNT + 1))
   echo "==> suite D: [$MIGRATION_COUNT] $(basename "$f")"
-  psql_strict -d bingo_replay_test -f "$f"
+  psql_strict -d bingo_replay_test -f "$f" >/dev/null
+  psql_strict -d bingo_replay_test -f "$f" >/dev/null   # twice, deliberately
 done
-echo "==> suite D: replayed $MIGRATION_COUNT migrations"
+echo "==> suite D: replayed $MIGRATION_COUNT migrations, each applied twice"
 
 echo "==> suite D: asserting the replayed end state"
-psql_strict -d bingo_replay_test -f "$HERE/replay.test.sql"
+psql_strict -d bingo_replay_test -f "$HERE/replay.test.sql" >/dev/null
 
-# A second replay must be a no-op. Every migration in this repo is expected to
-# be idempotent, because `db push` against a repaired history can re-offer one.
-echo "==> suite D: replaying a second time to prove idempotency"
-for f in "$MIGRATIONS"/*.sql; do
-  psql_strict -d bingo_replay_test -f "$f" >/dev/null
-done
-
-echo "==> suite D: asserting the end state again after the second replay"
-psql_strict -d bingo_replay_test -c 'delete from test_results;'
-psql_strict -d bingo_replay_test -f "$HERE/replay.test.sql"
+# The catalogue is not the behaviour. replay.test.sql proves the objects and
+# grants exist; this proves the functions actually do what the remediation
+# claims, by creating a staff account, a session, a game and a pot and acting as
+# that host. A catalogue assertion cannot tell you that a retried call draws a
+# second ball; only calling it twice can.
+echo "==> suite D: behavioural assertions against the replayed schema"
+psql_strict -d bingo_replay_test -f "$HERE/remediation-behaviour.test.sql" >/dev/null
 
 # --- Results -----------------------------------------------------------------
 echo
