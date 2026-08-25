@@ -27,11 +27,23 @@
 --   this migration is left exactly as it is. Only accounts created AFTER this
 --   runs are affected.
 --
--- POSTGRES NOTE
---   `alter type ... add value` may not have its new value USED in the same
---   transaction that adds it. The function below only mentions 'pending' inside
---   a plpgsql body, which is not evaluated at creation time, so this is safe to
---   run as one migration. Do not add a backfill that writes 'pending' here.
+-- WHY THIS MIGRATION CONTAINS ONE STATEMENT
+--   Postgres refuses to USE a new enum value in the same transaction that adds
+--   it, and `supabase db push` wraps each migration file in a transaction. This
+--   file originally also set the column default to 'pending' and replaced
+--   handle_new_user, and production rejected it:
+--
+--     ERROR: unsafe use of new value "pending" of enum type user_role (55P04)
+--     At statement: alter table public.profiles alter column role set default ...
+--
+--   The whole migration rolled back, so nothing was half applied. But it did not
+--   fail locally, because psql runs a file statement by statement in autocommit
+--   while db push does not, which is a fidelity gap now closed in
+--   supabase/tests/run.sh by replaying each migration with --single-transaction.
+--
+--   So the value is added here, alone, and everything that USES it lives in
+--   20260825080611_pending_role_default_and_trigger.sql. Do not merge them back
+--   together, and do not add a backfill that writes 'pending' to this file.
 --
 -- APPLICATION COMPATIBILITY
 --   Deploy the app first, or together. src/utils/supabase/middleware.ts must
@@ -41,54 +53,3 @@
 --   destination for such an account.
 
 alter type public.user_role add value if not exists 'pending';
-
--- The default matters as much as the trigger. A hand-written insert that omits
--- the role must also land inert.
-alter table public.profiles alter column role set default 'pending'::public.user_role;
-
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path to 'public', 'pg_catalog'
-as $function$
-begin
-  -- 'pending' on purpose. An account is created by signing up; it is made staff
-  -- by an admin, deliberately, afterwards. Never default this to a role that can
-  -- do anything.
-  insert into public.profiles (id, email, role)
-  values (new.id, new.email, 'pending');
-  return new;
-end;
-$function$;
-
--- Recreating the function rebuilds its ACL from the schema default privileges,
--- which in this project grant EXECUTE to anon, authenticated and service_role.
--- Both revokes are required: CREATE FUNCTION grants to PUBLIC by itself, and
--- anon holds a grant in its own name as well, so neither revoke covers the
--- other. This is the trap documented in
--- 20260730070705_revoke_anon_execute_on_host_rpcs.sql.
-revoke all on function public.handle_new_user() from public;
-revoke all on function public.handle_new_user() from anon;
-revoke all on function public.handle_new_user() from authenticated;
-
--- ---------------------------------------------------------------------------
--- The self-insert policy has to name the role too.
---
--- "Users can insert their own profile." checked only `auth.uid() = id` and said
--- nothing about `role`. The trigger normally creates the row, so the policy
--- looks unreachable, but the moment a profile row is missing (trigger failure,
--- a manual delete, a restore) the holder of that account can insert their own
--- with role 'admin'. A policy that grants self-promotion in its failure mode is
--- worth closing whether or not the failure mode is likely.
--- ---------------------------------------------------------------------------
-drop policy if exists "Users can insert their own profile." on public.profiles;
-create policy "Users can insert their own profile."
-  on public.profiles for insert
-  with check (auth.uid() = id and role = 'pending'::public.user_role);
-
-comment on function public.handle_new_user() is
-  'Creates the profiles row for a new auth user with role pending. An admin promotes it to host or admin afterwards. Never default this to a privileged role.';
-
-comment on type public.user_role is
-  'pending = signed up but not yet approved, no access to anything. host = can run a game night. admin = can also configure sessions, games and the snowball pot.';

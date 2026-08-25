@@ -297,12 +297,19 @@ psql_strict -d bingo_replay_test -f "$HERE/supabase-bootstrap.sql"
 # earlier `create or replace` of the same function fail with "cannot change
 # return type of existing function". Testing per migration catches real
 # non-idempotency without demanding something no real deployment ever does.
+# --single-transaction is not a detail, it is the point. `supabase db push`
+# wraps each migration file in a transaction, and psql WITHOUT that flag runs a
+# file statement by statement in autocommit. The difference is not cosmetic:
+# Postgres refuses to USE a new enum value in the same transaction that adds it,
+# so a migration that does both passes here in autocommit and is rejected by
+# production with SQLSTATE 55P04. That happened on 2026-08-25. Replaying the way
+# production applies is the only way this suite can speak for production.
 MIGRATION_COUNT=0
 for f in "$MIGRATIONS"/*.sql; do
   MIGRATION_COUNT=$((MIGRATION_COUNT + 1))
   echo "==> suite D: [$MIGRATION_COUNT] $(basename "$f")"
-  psql_strict -d bingo_replay_test -f "$f" >/dev/null
-  psql_strict -d bingo_replay_test -f "$f" >/dev/null   # twice, deliberately
+  psql_strict --single-transaction -d bingo_replay_test -f "$f" >/dev/null
+  psql_strict --single-transaction -d bingo_replay_test -f "$f" >/dev/null   # twice, deliberately
 done
 echo "==> suite D: replayed $MIGRATION_COUNT migrations, each applied twice"
 
