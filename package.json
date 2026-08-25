@@ -8,7 +8,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test --import tsx"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx",
+    "test:db": "bash supabase/tests/run.sh",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",
