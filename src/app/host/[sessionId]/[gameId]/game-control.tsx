@@ -113,6 +113,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // corrected it by hand.
     const [potNeedsSettling, setPotNeedsSettling] = useState(false);
     const [isSettlingPot, setIsSettlingPot] = useState(false);
+    const [showSkipConfirm, setShowSkipConfirm] = useState(false);
+    const [skipError, setSkipError] = useState<string | null>(null);
     const [showEndGameModal, setShowEndGameModal] = useState(false);
     const [isEndingGame, setIsEndingGame] = useState(false);
     const [endGameError, setEndGameError] = useState<string | null>(null);
@@ -153,7 +155,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isAnyModalOpen =
         showValidationModal || showWinnerModal || showManualSnowballModal ||
         showPostWinModal || showSessionWinnersModal || showCashJackpotModal ||
-        showUndoModal || showEndGameModal || voidWinnerTarget !== null;
+        showUndoModal || showEndGameModal || showSkipConfirm || voidWinnerTarget !== null;
     const isAnyRequestInFlight =
         isCallingNumber || isRecordingWinner || isRecordingSnowballWinner ||
         isTakingControl || isTogglingBreak || isVoiding || isAdvancing ||
@@ -1009,19 +1011,25 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleSkipStage = async () => {
         if (!isController || isSkipping) return;
         setActionError(null);
+        setSkipError(null);
         setIsSkipping(true);
         // As in handleContinuePlaying: the server binds to the stage the host
         // was looking at, so a retry after a lost response is inert rather than
         // skipping a second stage and its prize.
         const expectedStageIndex = currentGameState.current_stage_index;
         try {
-            if (applyMutation(await skipStage(gameId, expectedStageIndex), "Failed to skip stage.")) {
+            const result = await skipStage(gameId, expectedStageIndex);
+            if (!result?.success) {
+                setSkipError(result?.error || 'Failed to skip stage.');
+            }
+            if (applyMutation(result, "Failed to skip stage.")) {
+                setShowSkipConfirm(false);
                 setShowValidationModal(false);
                 handleClearSelection();
             }
         } catch (err) {
             logError('host-control', err);
-            setActionError("Could not reach the server to skip the stage. Check the connection and tap again: if it did save, tapping again will not skip a second stage.");
+            setSkipError("Could not reach the server to skip the stage. Check the connection and tap again: if it did save, tapping again will not skip a second stage.");
         } finally {
             setIsSkipping(false);
         }
@@ -1632,14 +1640,27 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             </div>
                         )}
 
+                        {/* Record Winner and Skip used to sit 8px apart on the same
+                            row, on a phone, at the moment the host is looking at a
+                            punter rather than at the screen. Skip closes the stage
+                            with its prize unawarded and cannot be undone, while the
+                            cheaper Undo Last Call has a confirmation. Skip is now
+                            separated, quieter, and confirmed. */}
                         {validationResult ? (
                             validationResult.valid ? (
-                                <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg flex flex-wrap items-center justify-between gap-2 mb-4">
-                                    <span className="text-white font-bold text-lg">Valid Claim</span>
-                                    <div className="flex gap-2">
-                                        <Button className="min-h-[44px]" onClick={handleOpenRecordWinnerModal}>Record Winner</Button>
-                                        <Button variant="ghost" onClick={handleSkipStage} disabled={isSkipping} className="text-white/80 hover:text-white hover:bg-[#0f6846] min-h-[44px]">
-                                            {isSkipping ? 'Skipping…' : 'Skip (No Winner)'}
+                                <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg mb-4">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <span className="text-white font-bold text-lg">Valid Claim</span>
+                                        <Button className="min-h-[48px]" onClick={handleOpenRecordWinnerModal}>Record Winner</Button>
+                                    </div>
+                                    <div className="mt-4 pt-3 border-t border-[#1f7c58]/70">
+                                        <Button
+                                            variant="ghost"
+                                            onClick={() => { setSkipError(null); setShowSkipConfirm(true); }}
+                                            disabled={isSkipping}
+                                            className="text-white/70 hover:text-white hover:bg-[#0f6846] min-h-[44px] text-sm"
+                                        >
+                                            {isSkipping ? 'Skipping…' : 'Skip this stage with no winner'}
                                         </Button>
                                     </div>
                                 </div>
@@ -1667,33 +1688,61 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         )}
                     </div>
 
+                    {/* The claim grid.
+
+                        This is the screen where a mis-tap pays the wrong person,
+                        and it was the least forgiving screen in the app. Ten
+                        columns inside a max-w-lg modal put the targets at roughly
+                        27px on a phone, well under the 44px minimum, with a 4px
+                        gap between them. Called and uncalled numbers differed only
+                        by text opacity (white/55 against white) plus a 60 percent
+                        alpha hairline, which is not a difference you can rely on
+                        in a dim pub at arm's length.
+
+                        Six columns on a phone gives roughly 48px targets. The
+                        called state is now a different background, not a different
+                        text opacity, and every button carries aria-pressed and a
+                        spoken label so the state is not conveyed by colour alone. */}
                     <div className="flex-1 overflow-y-auto bg-[#003f27]/80 rounded-lg p-2 border border-[#1f7c58]">
-                        <div className="grid grid-cols-10 gap-1 sm:gap-2">
+                        <div className="grid grid-cols-6 sm:grid-cols-10 gap-1.5 sm:gap-2">
                             {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
                                 const isSelected = selectedNumbers.includes(num);
                                 const isCalled = (currentGameState.called_numbers as number[]).includes(num);
                                 const isLastCalled = num === currentNumber;
 
-                                let buttonStyle = "bg-[#0f6846] text-white/55 hover:bg-[#136f4b]";
+                                // Uncalled: dark and flat. Anything tapped that is
+                                // not called is the fault the host needs to see, so
+                                // it is the loudest state on the grid.
+                                let buttonStyle = "bg-[#00301d] text-white/70 border border-[#1f7c58]/60 hover:bg-[#0f6846]";
 
                                 if (isSelected) {
                                     if (isCalled) {
-                                        buttonStyle = "bg-[#005131] text-white shadow-lg shadow-black/30 scale-105 z-10 border border-[#a57626]";
+                                        buttonStyle = "bg-[#f3d59d] text-[#00301d] font-bold shadow-lg shadow-black/30 z-10 border-2 border-white";
                                     } else {
-                                        buttonStyle = "bg-[#a57626] text-white shadow-lg shadow-black/30 scale-105 z-10 border border-white/70";
+                                        buttonStyle = "bg-red-600 text-white font-bold shadow-lg shadow-black/30 z-10 border-2 border-white";
                                     }
                                 } else if (isLastCalled) {
                                     buttonStyle = "bg-[#a57626] text-white font-bold border-2 border-white ring-2 ring-[#f3d59d] ring-offset-0";
                                 } else if (isCalled) {
-                                    buttonStyle = "bg-[#0f6846] text-white font-bold border border-[#a57626]/60";
+                                    buttonStyle = "bg-[#0f6846] text-white font-bold border border-[#a57626]";
                                 }
+
+                                const stateLabel = isSelected
+                                    ? (isCalled ? 'selected, called' : 'selected, NOT called')
+                                    : isLastCalled
+                                        ? 'last ball called'
+                                        : isCalled ? 'called' : 'not called';
 
                                 return (
                                     <button
                                         key={num}
+                                        type="button"
                                         onClick={() => handleToggleNumber(num)}
+                                        aria-pressed={isSelected}
+                                        aria-label={`${num}, ${stateLabel}`}
                                         className={cn(
-                                            "aspect-square flex items-center justify-center text-sm sm:text-base rounded transition-all active:scale-95",
+                                            "aspect-square min-h-[44px] sm:min-h-0 flex items-center justify-center text-base sm:text-base rounded transition-colors",
+                                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
                                             buttonStyle
                                         )}
                                         disabled={!isController}
@@ -1704,6 +1753,31 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             })}
                         </div>
                     </div>
+
+                    {/* Read-back. The host is comparing a paper ticket against a
+                        grid of ninety cells; asking them to verify the tap by
+                        finding it again in the grid is asking them to make the
+                        same mistake twice. Sorted, because that is the order the
+                        numbers are on the ticket. Numbers that were tapped but
+                        never called are called out separately, because that is the
+                        one case that must not reach "Check Win" unnoticed. */}
+                    {selectedNumbers.length > 0 && !validationResult && (
+                        <div className="shrink-0 mt-3 rounded-lg border border-[#1f7c58] bg-[#00301d] p-3" aria-live="polite">
+                            <p className="text-xs uppercase tracking-wider text-white/70 mb-1">You have tapped</p>
+                            <p className="font-mono text-lg text-white tabular-nums break-words">
+                                {[...selectedNumbers].sort((a, b) => a - b).join('  ')}
+                            </p>
+                            {selectedNumbers.some((n) => !(currentGameState.called_numbers as number[]).includes(n)) && (
+                                <p className="mt-2 text-sm font-semibold text-red-300">
+                                    Not called yet:{' '}
+                                    {[...selectedNumbers]
+                                        .filter((n) => !(currentGameState.called_numbers as number[]).includes(n))
+                                        .sort((a, b) => a - b)
+                                        .join(', ')}
+                                </p>
+                            )}
+                        </div>
+                    )}
 
                     <div className="shrink-0 pt-4 mt-4 border-t border-[#1f7c58] flex justify-between gap-3">
                         <Button variant="secondary" className="min-h-[44px]" onClick={handleResumeGame} disabled={isResuming}>
@@ -1856,6 +1930,43 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
             {/* Undo Confirm (T4.3). Names the ball and says plainly that it goes back
                 in the bag, because "undo" reads as "skip" to a host mid-game. */}
+            <Modal
+                isOpen={showSkipConfirm}
+                onClose={() => { if (!isSkipping) { setShowSkipConfirm(false); setSkipError(null); } }}
+                title={`Skip ${currentStageName || 'this stage'} with no winner?`}
+                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+            >
+                <div className="space-y-4">
+                    <p className="text-white/90">
+                        The stage closes and its prize is not awarded to anyone. This cannot be undone:
+                        a game can only move forwards through its stages.
+                    </p>
+                    {plannedStagePrize && (
+                        <p className="text-sm text-[#f3d59d]">
+                            Unawarded: {plannedStagePrize}
+                        </p>
+                    )}
+                    {isFinalStage && (
+                        <p className="text-sm text-white/85">
+                            This is the last stage, so skipping it ends the game.
+                        </p>
+                    )}
+                    {skipError && (
+                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+                            {skipError}
+                        </div>
+                    )}
+                    <div className="flex justify-end gap-3 pt-2">
+                        <Button variant="ghost" type="button" onClick={() => setShowSkipConfirm(false)} disabled={isSkipping}>
+                            Keep the stage open
+                        </Button>
+                        <Button variant="danger" type="button" onClick={handleSkipStage} disabled={isSkipping}>
+                            {isSkipping ? 'Skipping…' : 'Skip the stage'}
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+
             <Modal
                 isOpen={showEndGameModal}
                 onClose={() => { if (!isEndingGame) { setShowEndGameModal(false); setEndGameError(null); } }}
