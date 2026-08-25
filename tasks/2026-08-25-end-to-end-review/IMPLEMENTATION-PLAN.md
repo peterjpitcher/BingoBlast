@@ -33,9 +33,9 @@ what is done, what is next, and what is blocked.
 | 4 | The record: void display, London dates, pot history on screen | Committed |
 | 5 | Remaining R0: forced jackpot, settlement retry, call idempotency, claim entry | Committed |
 | 6 | Narrowing the table-wide host grants | **Next**, needs replacement RPCs first |
-| 7 | Export, audit ledger, error monitoring | Blocked on Q7, Q9, Q16 |
-| 8 | Prize and tie accounting | Blocked on Q6 |
-| 9 | Accessibility and performance criteria | Blocked on Q10, Q17 |
+| 7 | Error monitoring, backup and staff runbooks | Committed. Export and audit ledger still open |
+| 8 | Prize and tie accounting | Committed |
+| 9 | Accessibility and performance criteria | Blocked on the two remaining device questions |
 | 10 | Dependency upgrade | Not started, deliberately its own changeset |
 | 11 | Refactor | Not started, and should not start until the tests in block 5 exist |
 
@@ -147,6 +147,40 @@ All committed, and all covered by the behavioural suite.
   Record Winner and confirmed.
 - **`qual-money-and-live-path-test-coverage`.** 29 behavioural Postgres assertions plus 28 new Node
   tests (`snowball`, `jackpot`, `dates`). 95 Node tests and 130 database assertions in total.
+
+---
+
+### Blocks 7 and 8: the owner's six answers, 25 August 2026
+
+- **Tie splitting (D9 to D11).** `prize_amount_pence` and `prize_share_pence`, a
+  trigger that keeps them in step from every write path including the two admin
+  void routes, and payout totals on Winner History and the session screen that
+  sum shares rather than amounts. The jackpot splits too. Backfilled across all
+  87 rows.
+- **Staff lifecycle (D12).** `docs/runbooks/staff-accounts.md`: add, promote,
+  remove, revoke a live session, forgotten password, and what to check when
+  somebody says they cannot get in.
+- **Backups (D16).** Verified the project is on the Pro plan, so daily backups
+  exist. `docs/runbooks/backup-and-recovery.md` carries the restore drill, which
+  is the part that has never been done, and the plain statement that a session
+  export is reporting and not a backup.
+- **Pot history reconstruction (D13).** Six rows, marked `reconstructed_rollover`
+  and rendered as such, with a read-only dry run against production recorded in
+  the migration header showing they land exactly on 54 calls / £140.
+- **Error monitoring (D14).** `src/lib/report-error.ts`, a vendor-neutral
+  boundary with no new dependency. Seven tests assert what must never reach the
+  sink.
+- **Offline struck (D15).** `docs/PRD.md` carries a status banner and the two
+  offline requirements are struck through. `docs/runbooks/live-night.md` carries
+  the paper fallback that replaces it.
+
+Also, found while implementing and fixed the same day: **43 of the 87 winner rows
+carry real customer first names**, and the winners table was readable with the
+public key that ships in the `/display` and `/player` bundles. CLAUDE.md says
+winners are "anonymised by policy", which is true of the code and false of the
+data. Read access is now staff only. The 43 names are untouched, because
+rewriting customer data in production is the owner's decision and not a side
+effect of a security fix.
 
 ---
 
