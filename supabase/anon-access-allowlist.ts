@@ -272,11 +272,11 @@ with table_privs as (
 rel as (
   select case c.relkind when 'r' then 'table' when 'p' then 'table'
                         when 'v' then 'view' when 'm' then 'materialized view' end as kind,
-         -- Cast to text: relname is the `name` type, capped at 63 bytes, and a
-         -- UNION ALL takes its column type from the first branch. Without this
-         -- the function signatures below are truncated, so two overloads that
-         -- differ only after character 63 collapse into one key and drift in
-         -- either of them goes unnoticed.
+         -- Cast to text: relname uses the Postgres name type, capped at 63
+         -- bytes, and a UNION ALL takes its column type from the first branch.
+         -- Without this the function signatures below are truncated, so two
+         -- overloads that differ only after character 63 collapse into one key
+         -- and drift in either of them goes unnoticed.
          c.relname::text as name,
          (select coalesce(array_agg(p order by p), array[]::text[])
             from table_privs, unnest(table_privs.names) p
