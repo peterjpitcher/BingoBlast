@@ -272,7 +272,12 @@ with table_privs as (
 rel as (
   select case c.relkind when 'r' then 'table' when 'p' then 'table'
                         when 'v' then 'view' when 'm' then 'materialized view' end as kind,
-         c.relname as name,
+         -- Cast to text: relname is the `name` type, capped at 63 bytes, and a
+         -- UNION ALL takes its column type from the first branch. Without this
+         -- the function signatures below are truncated, so two overloads that
+         -- differ only after character 63 collapse into one key and drift in
+         -- either of them goes unnoticed.
+         c.relname::text as name,
          (select coalesce(array_agg(p order by p), array[]::text[])
             from table_privs, unnest(table_privs.names) p
            where has_table_privilege('anon', c.oid, p)) as privileges
@@ -281,7 +286,7 @@ rel as (
    where n.nspname = 'public' and c.relkind in ('r','p','v','m')
 ),
 seq as (
-  select 'sequence' as kind, c.relname as name,
+  select 'sequence' as kind, c.relname::text as name,
          (select coalesce(array_agg(p order by p), array[]::text[])
             from unnest(array[${SEQUENCE_PRIVILEGES.map((p) => `'${p}'`).join(',')}]) p
            where has_sequence_privilege('anon', c.oid, p)) as privileges
@@ -291,7 +296,7 @@ seq as (
 ),
 fn as (
   select 'function' as kind,
-         p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as name,
+         (p.proname::text || '(' || pg_get_function_identity_arguments(p.oid) || ')')::text as name,
          array['EXECUTE'] as privileges
     from pg_proc p
    where p.pronamespace = 'public'::regnamespace
