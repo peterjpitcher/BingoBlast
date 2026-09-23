@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx",
+    "test": "TZ=Europe/London node --test --import tsx",
+    "test:utc": "TZ=UTC node --test --import tsx",
     "test:db": "bash supabase/tests/run.sh",
     "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
