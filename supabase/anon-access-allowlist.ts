@@ -58,14 +58,19 @@
  *      set, and paste the result into the pull request.
  *
  * A NOTE ON THE TABLE ENTRIES
- *   Anon holds every table privilege on every table in `public`. That is not a
- *   decision anyone here made: it is what Supabase's default privileges grant,
- *   and removing it project-wide is a change with real blast radius. RLS is
- *   therefore the control, and every table below carries RLS with policies. The
- *   `why` on each entry records what RLS actually lets anon do, checked against
- *   the live REST API with the public anon key on 4 September 2026, not inferred
- *   from the policy text. The value of listing them is that a NEW table appears
- *   here as a failure the day it is created, while it is still empty.
+ *   Anon holds every table privilege on the seven baseline tables in `public`.
+ *   That is not a decision anyone here made: it is what Supabase's default
+ *   privileges granted, and removing it project-wide is a change with real blast
+ *   radius. RLS is therefore the control, and every table below carries RLS with
+ *   policies. The `why` on each entry records what RLS actually lets anon do,
+ *   checked against the live REST API with the public anon key on 4 September
+ *   2026, not inferred from the policy text. The value of listing them is that a
+ *   NEW table appears here as a failure the day it is created, while it is still
+ *   empty.
+ *
+ *   The two exceptions state their own grants, since 20260929101118:
+ *   game_states_public is SELECT only, and session_reset_log is not reachable by
+ *   anon at all, so it is not listed.
  *
  * EVIDENCE
  *   Read from project bcmorqsgeumtmhvctvgu (BingoBlast) on 4 September 2026,
@@ -137,8 +142,8 @@ export const ANON_ALLOWLIST: readonly AnonAllowlistEntry[] = [
   {
     kind: 'table',
     name: 'game_states_public',
-    privileges: SUPABASE_DEFAULT_TABLE_GRANT,
-    why: 'Deliberately public. This is the trigger-synced mirror the pub TV at /display and the phone follower at /player subscribe to over Realtime, both of which are unauthenticated by design. Its SELECT policy is USING (true). It carries no player-identifying data and no money.',
+    privileges: ['SELECT'],
+    why: 'Deliberately public, and SELECT only since 20260929101118, which states the grant rather than inheriting it: on the current Supabase image an inherited grant gave anon no SELECT and the pub TV failed with 42501. This is the trigger-synced mirror the pub TV at /display and the phone follower at /player read over REST and Realtime, both unauthenticated by design. Its SELECT policy is USING (true). Only the security definer sync trigger writes it. It carries no player-identifying data and no money.',
   },
   {
     kind: 'table',
@@ -151,12 +156,6 @@ export const ANON_ALLOWLIST: readonly AnonAllowlistEntry[] = [
     name: 'profiles',
     privileges: SUPABASE_DEFAULT_TABLE_GRANT,
     why: 'Grant is the Supabase default; RLS is the control. SELECT is scoped to the authenticated role, and the INSERT policy requires auth.uid() = id with role pending, which anon cannot satisfy. Verified: the REST API returns an empty array to the anon key. Staff identities stay closed.',
-  },
-  {
-    kind: 'table',
-    name: 'session_reset_log',
-    privileges: SUPABASE_DEFAULT_TABLE_GRANT,
-    why: 'Grant is the Supabase default; RLS is the control. The only policy is admin SELECT. Verified: the REST API returns an empty array to the anon key.',
   },
   {
     kind: 'table',
