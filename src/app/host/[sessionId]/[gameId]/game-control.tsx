@@ -385,11 +385,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
      * is retried with backoff, the failure is distinguishable from "no pot", and
      * recording is blocked while the pot is unknown (see handleRecordWinner).
      *
-     * There is deliberately no Realtime subscription here any more. snowball_pots
-     * is not a member of the supabase_realtime publication, so the channel this
-     * effect used to open could never deliver a payload. The pot only moves at
-     * settlement, which is after this screen is finished with it, so the poll on
-     * reconnect below is all this needs.
+     * There is deliberately no Realtime subscription here any more. The channel
+     * this effect used to open never delivered, because snowball_pots was not
+     * in the supabase_realtime publication until 20260929091809 (added for the
+     * public screens). The pot only moves at settlement, which is after this
+     * screen is finished with it, so the poll on reconnect below is all this
+     * needs.
      */
     useEffect(() => {
         const supabase = supabaseRef.current;

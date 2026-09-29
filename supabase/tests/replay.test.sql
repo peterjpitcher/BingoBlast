@@ -212,16 +212,34 @@ select t('indexes :: snowball_pot_history_pot_game_unique exists and is partial 
          'settle_snowball_pot relies on this to turn a second settlement into already_settled');
 
 -- ---------------------------------------------------------------------------
--- Realtime publication. The public screens read game_states_public; nothing
--- reads winners over realtime, and it must not be published without a
--- deliberate decision (see the review spec, R13).
+-- Realtime publication. The public screens read game_states_public and watch
+-- their snowball pot (20260929091809); nothing reads winners over realtime, and
+-- it must not be published without a deliberate decision (see the review spec,
+-- R13).
 -- ---------------------------------------------------------------------------
-select t('realtime :: the publication contains exactly sessions, game_states and game_states_public',
+select t('realtime :: the publication contains exactly sessions, game_states, game_states_public and snowball_pots',
          (select coalesce(string_agg(tablename, ',' order by tablename), '')
-                 = 'game_states,game_states_public,sessions'
+                 = 'game_states,game_states_public,sessions,snowball_pots'
             from pg_publication_tables where pubname = 'supabase_realtime'),
          (select coalesce(string_agg(tablename, ',' order by tablename), '(none)')
             from pg_publication_tables where pubname = 'supabase_realtime'));
+
+select t('realtime :: snowball_pots has a replica identity, so publishing it cannot break pot updates',
+         (select c.relreplident = 'f'
+                 or (c.relreplident = 'd' and exists (select 1 from pg_constraint
+                       where conrelid = c.oid and contype = 'p'))
+                 or (c.relreplident = 'i' and exists (select 1 from pg_index
+                       where indrelid = c.oid and indisreplident))
+            from pg_class c where c.oid = 'public.snowball_pots'::regclass),
+         'a published table with no usable replica identity rejects every UPDATE (55000), which would stop settle_snowball_pot. relreplident='
+           || (select relreplident::text from pg_class where oid = 'public.snowball_pots'::regclass));
+
+select t('realtime :: snowball_pots stays readable only through its one SELECT policy',
+         (select count(*) = 1 from pg_policies
+           where schemaname = 'public' and tablename = 'snowball_pots' and cmd = 'SELECT'),
+         'Realtime sends a pot change to exactly the subscribers this policy lets read the row, so a new or widened SELECT policy widens the broadcast too: '
+           || (select coalesce(string_agg(policyname || '=' || cmd, ', ' order by policyname), '(none)')
+                 from pg_policies where schemaname = 'public' and tablename = 'snowball_pots'));
 
 select t('realtime :: winners is NOT published',
          not exists (select 1 from pg_publication_tables
