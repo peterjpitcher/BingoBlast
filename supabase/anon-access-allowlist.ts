@@ -28,7 +28,7 @@
  *   `create function` picked anon straight back up with nobody having written a
  *   grant. 20260905053040 stopped it for tables and sequences. It did not stop
  *   it for functions: a per-schema default cannot revoke the built-in global
- *   EXECUTE that PUBLIC gets, and anon is a member of PUBLIC. 20260929101722
+ *   EXECUTE that PUBLIC gets, and anon is a member of PUBLIC. 20260929103001
  *   revokes that globally for postgres. `supabase/tests/convention-gap.test.sql`
  *   walks through all three states in a container. Functions created by
  *   supabase_admin in `public` still come out anon-callable, and no migration

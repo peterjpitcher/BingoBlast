@@ -44,7 +44,7 @@ $$;
 -- production default privileges then every grant assertion below is meaningless
 -- because the container is friendlier than the thing it is modelling.
 --
--- Until 20260929101722 the first canary was "a function postgres creates is
+-- Until 20260929103001 the first canary was "a function postgres creates is
 -- anon-callable". The replay now closes that, so it is asserted as a result
 -- further down, and the generosity this canary needs is found where no
 -- migration can reach: supabase_admin's default privileges in public, which
@@ -66,7 +66,7 @@ drop function public.replay_probe_admin_function();
 -- The second canary tells the two worlds apart for functions, as the table one
 -- below does for tables: production's postgres defaults in public name
 -- authenticated on a new function, the current image's do not. It reads the
--- ACL rather than has_function_privilege, because without 20260929101722 PUBLIC
+-- ACL rather than has_function_privilege, because without 20260929103001 PUBLIC
 -- would hand authenticated EXECUTE in both worlds and blur the difference.
 create function public.replay_probe_postgres_function() returns int
 language sql immutable as $$ select 1 $$;
@@ -85,7 +85,7 @@ select t('canary :: a new function names authenticated only under production def
 -- function postgres creates after the whole history has run must carry no PUBLIC
 -- grant and must not be anon-callable, with nobody having written a revoke.
 -- 20260905053040 alone did not achieve this: a per-schema default cannot revoke
--- the built-in global PUBLIC EXECUTE. 20260929101722 does, globally.
+-- the built-in global PUBLIC EXECUTE. 20260929103001 does, globally.
 select t('default privileges :: a function postgres creates after the replay is NOT anon-callable',
          not has_function_privilege('anon', 'public.replay_probe_postgres_function()', 'EXECUTE'),
          'ACL: ' || coalesce((select proacl::text from pg_proc
@@ -272,7 +272,7 @@ select t('grants :: the three trigger functions are NOT executable by authentica
              and has_function_privilege('authenticated', p.oid, 'EXECUTE')));
 
 -- The general form, as for tables below: under the current defaults a function
--- nobody granted to service_role fails this. Eight did until 20260929101723.
+-- nobody granted to service_role fails this. Eight did until 20260929103018.
 select t('grants :: every public function is executable by service_role',
          (select count(*) = 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname <> 't'

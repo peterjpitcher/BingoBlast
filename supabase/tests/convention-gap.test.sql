@@ -13,7 +13,7 @@
 --                    PUBLIC keeps EXECUTE, anon is a member of PUBLIC, so the gap
 --                    is still open. This stage exists so that mistake cannot be
 --                    made again unnoticed.
---   closed           after 20260929101722, which revokes PUBLIC globally for
+--   closed           after 20260929103001, which revokes PUBLIC globally for
 --                    postgres. A new function is no longer anon-callable.
 --
 -- The explicit pair, `revoke ... from public` and `revoke ... from anon`, is
@@ -76,7 +76,7 @@ select t('convention gap [open] :: anon holds that EXECUTE in its own name, from
 \elif :is_per_schema_only
 select t('convention gap [per_schema_only] :: after 20260905053040 alone, a NEW function is STILL anon-callable',
          has_function_privilege('anon', 'public.gap_probe_new()', 'EXECUTE'),
-         'if false, a per-schema revoke now removes the built-in PUBLIC grant and 20260929101722 was unnecessary. ACL: '
+         'if false, a per-schema revoke now removes the built-in PUBLIC grant and 20260929103001 was unnecessary. ACL: '
            || pg_temp.acl_of('public.gap_probe_new()'));
 
 select t('convention gap [per_schema_only] :: anon no longer holds it by name, only through PUBLIC',
@@ -84,7 +84,7 @@ select t('convention gap [per_schema_only] :: anon no longer holds it by name, o
            and pg_temp.grants_public('public.gap_probe_new()'),
          'ACL: ' || pg_temp.acl_of('public.gap_probe_new()'));
 \elif :is_closed
-select t('convention gap [closed] :: after 20260929101722, a NEW function is NOT anon-callable',
+select t('convention gap [closed] :: after 20260929103001, a NEW function is NOT anon-callable',
          not has_function_privilege('anon', 'public.gap_probe_new()', 'EXECUTE'),
          'ACL: ' || pg_temp.acl_of('public.gap_probe_new()'));
 

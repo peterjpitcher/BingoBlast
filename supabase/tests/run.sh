@@ -40,7 +40,7 @@
 # still bumped afterwards. Phase 6 covers the mechanism behind all of it, the
 # default privileges that arm the next function anyone creates: open as built,
 # still open after 20260905053040 (a per-schema revoke cannot remove the
-# built-in PUBLIC grant), and closed after 20260929101722 revokes it globally.
+# built-in PUBLIC grant), and closed after 20260929103001 revokes it globally.
 #
 # SUITE C (bingo_fresh_test) is the fresh-build end state the repo produces NOW
 # that winner_idempotency_key is part of its history: 20260730064309 installs the
@@ -78,7 +78,7 @@ WINNER_IDEMPOTENCY="$MIGRATIONS/20260730064309_winner_idempotency_key.sql"
 REVOKE_ANON="$MIGRATIONS/20260730070705_revoke_anon_execute_on_host_rpcs.sql"
 REVOKE_TRIGGER="$MIGRATIONS/20260730072329_revoke_anon_on_bump_game_state_version.sql"
 DEFAULTS_PER_SCHEMA="$MIGRATIONS/20260905053040_default_privileges_stop_anon_inheriting.sql"
-DEFAULTS_GLOBAL="$MIGRATIONS/20260929101722_default_privileges_revoke_public_execute_globally.sql"
+DEFAULTS_GLOBAL="$MIGRATIONS/20260929103001_default_privileges_revoke_public_execute_globally.sql"
 
 export PGPASSWORD=test
 psql() { command psql -h 127.0.0.1 -p "$PORT" -U postgres -q "$@"; }
