@@ -18,7 +18,7 @@ npm run test:db          # supabase/tests/run.sh: migration replay + Postgres as
 npm run verify           # lint, typecheck, test, build
 ```
 
-`test:db` needs Docker and `psql` (throwaway `postgres:17`, never a real project). Docker is not on the dev machine, so it runs only in CI (`.github/workflows/ci.yml`). ESLint ignores `.claude/**` (worktrees).
+`test:db` needs Docker and `psql` (throwaway `postgres:17`, never a real project). Docker works on the dev machine (confirmed 29 Sep 2026), so run it locally before pushing any migration; CI runs it too (`.github/workflows/ci.yml`). Without Docker, `run.sh` falls back to a temporary local Postgres 17 cluster. ESLint ignores `.claude/**` (worktrees).
 
 ## What this app is
 
