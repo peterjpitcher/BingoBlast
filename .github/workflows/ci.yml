@@ -8,10 +8,10 @@ name: CI
 #   migrations that follow in the remediation plan are exactly the changes that
 #   need a repeatable gate in front of them, so this lands before any of them.
 #
-#   The database job matters most. Docker is not available on the developer
-#   machine, so supabase/tests/run.sh has never been executed there. GitHub's
-#   runners have Docker, which makes this the only place the full migration
-#   replay actually runs.
+#   The database job matters most. supabase/tests/run.sh also runs on the
+#   developer machine now (Docker works there, confirmed 29 Sep 2026), but this
+#   is the gate that no pull request can skip: every migration is replayed here
+#   before it merges.
 
 on:
   push:
