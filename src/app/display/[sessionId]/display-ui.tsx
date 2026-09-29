@@ -14,6 +14,7 @@ import {
 } from '@/lib/snowball';
 import { HOUSE_RULES, CALL_RESPONSES } from '@/lib/house-rules';
 import { isFreshGameState } from '@/lib/game-state-version';
+import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
@@ -155,6 +156,8 @@ export default function DisplayUI({
   // refreshActiveGame request-order guard: if active_game_id flips A to B and
   // A's fetch resolves last, the wrong game would win.
   const refreshSeqRef = useRef(0);
+  // When the pot channel last delivered, so a slower poll cannot overwrite it.
+  const potRealtimeAtRef = useRef<number | null>(null);
 
   // Stable refs for fields that the polling effect reads but should not retrigger
   // its setup. Pairs with the `currentActiveGame?.id` dependency below.
@@ -422,6 +425,30 @@ export default function DisplayUI({
           // currentPrizeText is derived from currentGameState via useMemo,
           // so it inherits this gating automatically.
           setCurrentGameState((current) => (isFreshGameState(current, freshState) ? freshState : current));
+
+          // The pot rides on the poll as well as its Realtime channel, so a
+          // missed pot event cannot leave a stale jackpot up for the rest of
+          // the game. Non-critical like the channel: a failed read is logged
+          // and never fails the poll, so it cannot raise the banner.
+          if (activeGame.type === 'snowball' && activeGame.snowball_pot_id) {
+            const potPollStartedAt = Date.now();
+            const { data: freshPot, error: potError } = await supabase.current
+              .from('snowball_pots')
+              .select('*')
+              .eq('id', activeGame.snowball_pot_id)
+              .single<SnowballPot>();
+            if (cancelled || seq !== pollSeqRef.current) return;
+            if (potError || !freshPot) {
+              logError('display', potError ?? new Error('Polling snowball_pots returned no row'));
+            } else if (shouldApplyPolledPot({
+              polledPotId: freshPot.id,
+              activePotId: currentActiveGameRef.current?.snowball_pot_id,
+              pollStartedAt: potPollStartedAt,
+              lastRealtimeAt: potRealtimeAtRef.current,
+            })) {
+              setCurrentSnowballPot(freshPot);
+            }
+          }
         }
 
         setConnectionPhase('ready');
@@ -469,14 +496,16 @@ export default function DisplayUI({
 
             // Deliberately non-critical: this channel does not report into
             // useConnectionHealth. The pot is re-read whenever the active game
-            // changes and the jackpot figure is not time critical, so a pot
-            // channel failure must never put a "Reconnecting" banner on the TV.
+            // changes and on every poll, and the jackpot figure is not time
+            // critical, so a pot channel failure must never put a
+            // "Reconnecting" banner on the TV.
             potChannel = supabaseClient
             .channel(`pot_updates:${currentActiveGame.snowball_pot_id}`)
             .on<SnowballPot>(
                 'postgres_changes',
                 { event: 'UPDATE', schema: 'public', table: 'snowball_pots', filter: `id=eq.${currentActiveGame.snowball_pot_id}` },
                 (payload) => {
+                    potRealtimeAtRef.current = Date.now();
                     setCurrentSnowballPot(payload.new);
                 }
             )

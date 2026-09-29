@@ -82,6 +82,11 @@ create policy "Admins can update pots" on public.snowball_pots for all using (
   exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
 );
 
+-- Enable Realtime for snowball_pots. /display and /player watch the active
+-- game's pot so a settlement or an admin correction shows without a reload.
+-- Subscribers receive only what the SELECT policy above lets them read.
+alter publication supabase_realtime add table public.snowball_pots;
+
 -- 4. SESSIONS
 create table public.sessions (
   id uuid default gen_random_uuid() primary key,
