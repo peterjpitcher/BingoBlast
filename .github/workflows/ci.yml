@@ -79,10 +79,11 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
-    # Advisory only for now. It is turned into a blocking check in the same
-    # change that clears the current backlog of high-severity advisories, so
-    # that this job never lands already red.
-    continue-on-error: true
+    # Blocking since the backlog was cleared on 29 Sep 2026 (Next.js 16.1.4 to
+    # 16.3.7, which closed a critical unauthenticated RCE in the image
+    # optimiser). A new high or critical advisory in a production dependency
+    # now fails CI, including on pull requests that did not touch dependencies:
+    # that is deliberate, because the fix is urgent whichever change finds it.
     steps:
       - uses: actions/checkout@v4
 

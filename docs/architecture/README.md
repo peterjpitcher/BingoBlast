@@ -23,7 +23,7 @@ project: anchor-bingo
 ## Project Snapshot
 
 - **Project:** `anchor-bingo` (BingoBlast / OJ-CashBingo)
-- **Stack:** Next.js 16.1.4 + React 19.2.3 + TypeScript + Supabase + Tailwind v4
+- **Stack:** Next.js 16.3.7 + React 19.2.3 + TypeScript + Supabase + Tailwind v4
 - **Test runner:** Node.js native (`node --test --import tsx`)
 - **Code:** 12 pages, 1 layout, 1 API route, 5 server-action files (33 actions), 8 tables + 4 atomic RPCs, 13 migrations
 
