@@ -27,6 +27,29 @@
 --   is friendlier than production and every grant assertion in the replay suite
 --   would pass for the wrong reason. That is the exact trap that let the host
 --   RPCs ship anon-callable once already.
+--
+-- TWO WORLDS, BECAUSE SUPABASE CHANGED ITS DEFAULTS
+--   A project created today does not get those defaults. Read from a fresh
+--   `supabase start` (CLI 2.108, image postgres 17.6.1.139) on 2026-09-29,
+--   before any migration ran:
+--
+--     owner          schema  objtype  acl
+--     postgres       public  f        {postgres=X}
+--     postgres       public  r        {postgres=arwdDxtm, anon=Dxtm, authenticated=Dxtm, service_role=Dxtm}
+--     postgres       public  S        {postgres=rwU, anon=w, authenticated=w, service_role=w}
+--     supabase_admin public  (unchanged from the production rows above)
+--
+--   So a table a migration creates without stating grants is unreadable by every
+--   API role, service_role included. That is how game_states_public and
+--   session_reset_log came out on a rebuilt project, and the pub TV failed with
+--   42501 while this suite, bootstrapped only with the production defaults,
+--   still passed.
+--
+--   Each world catches what the other cannot. The production defaults are
+--   generous, so they catch a migration that forgets to REVOKE. The current
+--   defaults are strict, so they catch a migration that forgets to GRANT.
+--   run.sh replays the whole history under both, choosing with
+--   `-v current_defaults=on` or `off`. Omitting it means production.
 
 -- ---------------------------------------------------------------------------
 -- Roles
@@ -86,15 +109,34 @@ grant execute on function auth.uid() to anon, authenticated, service_role;
 grant execute on function auth.role() to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- Default privileges, reproduced from production for both owners
+-- Default privileges for postgres: production's, or the current image's
 -- ---------------------------------------------------------------------------
-alter default privileges for role postgres in schema public
-  grant execute on functions to anon, authenticated, service_role;
-alter default privileges for role postgres in schema public
-  grant all on tables to anon, authenticated, service_role;
-alter default privileges for role postgres in schema public
-  grant all on sequences to anon, authenticated, service_role;
+\if :{?current_defaults}
+\else
+  \set current_defaults off
+\endif
 
+\if :current_defaults
+  -- Current Supabase image. Functions get no API-role grant of their own (PUBLIC
+  -- still has EXECUTE from the built-in global default), tables get only the
+  -- privileges RLS does not govern, and sequences get UPDATE alone.
+  alter default privileges for role postgres in schema public
+    grant truncate, references, trigger, maintain on tables to anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public
+    grant update on sequences to anon, authenticated, service_role;
+\else
+  -- Production, as read on 2026-08-25.
+  alter default privileges for role postgres in schema public
+    grant execute on functions to anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public
+    grant all on tables to anon, authenticated, service_role;
+  alter default privileges for role postgres in schema public
+    grant all on sequences to anon, authenticated, service_role;
+\endif
+
+-- ---------------------------------------------------------------------------
+-- Default privileges for supabase_admin: the same in both worlds
+-- ---------------------------------------------------------------------------
 alter default privileges for role supabase_admin in schema public
   grant execute on functions to anon, authenticated, service_role;
 alter default privileges for role supabase_admin in schema public

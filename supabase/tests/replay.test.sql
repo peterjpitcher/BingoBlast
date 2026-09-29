@@ -31,6 +31,14 @@ returns void language sql as $$
   insert into test_results (name, ok, detail) values (p_name, p_ok, p_detail);
 $$;
 
+-- run.sh runs this file twice: after a replay under production's default
+-- privileges (current_defaults=off) and after one under the current Supabase
+-- image's (current_defaults=on). See supabase-bootstrap.sql for why both.
+\if :{?current_defaults}
+\else
+  \set current_defaults off
+\endif
+
 -- ---------------------------------------------------------------------------
 -- The canary, as in grants.test.sql. If the bootstrap did not reproduce the
 -- production default privileges then every grant assertion below is meaningless
@@ -44,6 +52,28 @@ select t('canary :: default privileges grant anon EXECUTE on a newly created fun
          'if false, supabase-bootstrap.sql is not production-shaped and this suite proves nothing');
 
 drop function public.replay_probe_default_privileges();
+
+-- The second canary tells the two worlds apart. Under production's defaults a
+-- new table is readable by authenticated with nobody granting it; under the
+-- current image's it is not. If this does not match the world run.sh asked for,
+-- the table grant assertions further down are testing the wrong thing.
+create table public.replay_probe_default_table (id int);
+
+select t('canary :: a new table is readable by authenticated only under production defaults (current_defaults=' || :'current_defaults' || ')',
+         has_table_privilege('authenticated', 'public.replay_probe_default_table', 'SELECT')
+           = (:'current_defaults' not in ('on', 'true', '1', 'yes')),
+         'if false, supabase-bootstrap.sql did not build the default privileges this run asked for');
+
+drop table public.replay_probe_default_table;
+
+-- What a role can actually do to a table, as a sorted list. pg_temp keeps it
+-- out of public, where the function counts below would trip over it.
+create or replace function pg_temp.table_privs(p_role text, p_table text) returns text
+language sql stable as $$
+  select coalesce(string_agg(p, ',' order by p), '')
+    from unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
+   where has_table_privilege(p_role, p_table, p)
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Tables and row level security
@@ -181,6 +211,125 @@ select t('grants :: the three trigger functions are NOT executable by authentica
            where n.nspname = 'public'
              and p.proname in ('bump_game_state_version','sync_game_states_public','handle_new_user')
              and has_function_privilege('authenticated', p.oid, 'EXECUTE')));
+
+-- ---------------------------------------------------------------------------
+-- Table grants. A table whose migration does not state its grants gets whatever
+-- the defaults hand out: everything under production's, and nothing an API role
+-- can read or write under the current image's. game_states_public and
+-- session_reset_log relied on that until 20260929093824, and a rebuilt project
+-- served the pub TV 42501. These hold in both worlds or the build is wrong.
+-- ---------------------------------------------------------------------------
+select t('table grants :: anon can SELECT game_states_public and nothing else (pub TV and phone follower)',
+         pg_temp.table_privs('anon', 'public.game_states_public') = 'SELECT',
+         'anon holds: ' || pg_temp.table_privs('anon', 'public.game_states_public'));
+
+select t('table grants :: authenticated can SELECT game_states_public and nothing else',
+         pg_temp.table_privs('authenticated', 'public.game_states_public') = 'SELECT',
+         'authenticated holds: ' || pg_temp.table_privs('authenticated', 'public.game_states_public'));
+
+select t('table grants :: anon holds no privilege at all on session_reset_log',
+         pg_temp.table_privs('anon', 'public.session_reset_log') = '',
+         'anon holds: ' || pg_temp.table_privs('anon', 'public.session_reset_log'));
+
+select t('table grants :: authenticated can SELECT session_reset_log (RLS keeps it to admins) and write nothing',
+         pg_temp.table_privs('authenticated', 'public.session_reset_log') = 'SELECT',
+         'authenticated holds: ' || pg_temp.table_privs('authenticated', 'public.session_reset_log'));
+
+-- The general form of the same bug, so the next new table cannot repeat it: under
+-- the current defaults a table nobody granted on fails this for service_role.
+select t('table grants :: every public table grants service_role SELECT, INSERT, UPDATE and DELETE',
+         (select bool_and(string_to_array(pg_temp.table_privs('service_role', format('public.%I', c.relname)), ',')
+                          @> array['SELECT','INSERT','UPDATE','DELETE'])
+            from pg_class c join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
+         (select coalesce(string_agg(c.relname || '=' || pg_temp.table_privs('service_role', format('public.%I', c.relname)), ' | '), '(all fine)')
+            from pg_class c join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'
+             and not string_to_array(pg_temp.table_privs('service_role', format('public.%I', c.relname)), ',')
+                     @> array['SELECT','INSERT','UPDATE','DELETE']));
+
+-- The catalogue says what is granted; these say what the REST API will actually
+-- do for each role. Zero rows is fine; 42501 on a read is the outage.
+do $$
+declare
+  v_ok boolean;
+  v_detail text;
+begin
+  begin
+    set local role anon;
+    perform count(*) from public.game_states_public;
+    v_ok := true;
+    v_detail := 'anon read game_states_public';
+  exception when insufficient_privilege then
+    v_ok := false;
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('table grants :: acting as anon, reading game_states_public succeeds', v_ok, v_detail);
+
+  begin
+    set local role authenticated;
+    perform count(*) from public.game_states_public;
+    v_ok := true;
+    v_detail := 'authenticated read game_states_public';
+  exception when insufficient_privilege then
+    v_ok := false;
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('table grants :: acting as authenticated, reading game_states_public succeeds', v_ok, v_detail);
+
+  -- RLS would also refuse this with 42501, so the message is what proves the
+  -- grant is the thing saying no.
+  begin
+    set local role anon;
+    insert into public.game_states_public (game_id) values (gen_random_uuid());
+    v_ok := false;
+    v_detail := 'anon inserted into game_states_public';
+  exception when insufficient_privilege then
+    v_ok := sqlerrm like 'permission denied for table%';
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('table grants :: acting as anon, writing game_states_public is refused by the grant', v_ok, v_detail);
+
+  begin
+    set local role anon;
+    perform count(*) from public.session_reset_log;
+    v_ok := false;
+    v_detail := 'anon read session_reset_log';
+  exception when insufficient_privilege then
+    v_ok := sqlerrm like 'permission denied for table%';
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('table grants :: acting as anon, reading session_reset_log is refused by the grant', v_ok, v_detail);
+
+  begin
+    set local role authenticated;
+    perform count(*) from public.session_reset_log;
+    v_ok := true;
+    v_detail := 'authenticated read session_reset_log (RLS returns zero rows without an admin uid)';
+  exception when insufficient_privilege then
+    v_ok := false;
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('table grants :: acting as authenticated, reading session_reset_log succeeds', v_ok, v_detail);
+
+  begin
+    set local role authenticated;
+    insert into public.session_reset_log (session_id) values (gen_random_uuid());
+    v_ok := false;
+    v_detail := 'authenticated inserted into session_reset_log';
+  exception when insufficient_privilege then
+    v_ok := sqlerrm like 'permission denied for table%';
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('table grants :: acting as authenticated, writing session_reset_log is refused by the grant', v_ok, v_detail);
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Triggers

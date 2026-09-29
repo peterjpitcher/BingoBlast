@@ -55,6 +55,14 @@
 # replay.test.sql then asserts the end state object by object and grant by grant
 # against what production actually carries, and remediation-behaviour.test.sql
 # asserts what the functions DO, by acting as a real host against real fixtures.
+#
+# SUITE E (bingo_replay_current_test) is suite D again, bootstrapped with the
+# default privileges a project created TODAY gets instead of the ones production
+# was built with. Supabase tightened them: a table a migration creates without
+# stating grants is now unreadable by anon, authenticated and service_role
+# alike. Suite D alone passed while a rebuilt project served the pub TV 42501 on
+# game_states_public. Suite D catches a migration that forgets to revoke; suite E
+# catches one that forgets to grant.
 set -euo pipefail
 
 CONTAINER=bingo-migration-tests
@@ -283,9 +291,14 @@ psql_strict -d bingo_fresh_test -v phase='fresh end state' -f "$HERE/grants.test
 #
 # It is also the check that makes a NEW migration safe to write: if the replay
 # stops passing, the repo can no longer rebuild itself, whatever `db push` says.
-echo "==> suite D: bootstrapping a production-shaped empty database"
-psql_strict -d postgres -c 'create database bingo_replay_test;'
-psql_strict -d bingo_replay_test -f "$HERE/supabase-bootstrap.sql"
+# $1 = suite label, $2 = database, $3 = current_defaults (off = production's
+# default privileges, on = the current Supabase image's).
+replay_suite() {
+local suite="$1" db="$2" current_defaults="$3"
+
+echo "==> suite $suite: bootstrapping an empty database (current_defaults=$current_defaults)"
+psql_strict -d postgres -c "create database $db;"
+psql_strict -d "$db" -v current_defaults="$current_defaults" -f "$HERE/supabase-bootstrap.sql"
 
 # Each migration is applied, then applied AGAIN immediately, before moving on.
 #
@@ -307,22 +320,30 @@ psql_strict -d bingo_replay_test -f "$HERE/supabase-bootstrap.sql"
 MIGRATION_COUNT=0
 for f in "$MIGRATIONS"/*.sql; do
   MIGRATION_COUNT=$((MIGRATION_COUNT + 1))
-  echo "==> suite D: [$MIGRATION_COUNT] $(basename "$f")"
-  psql_strict --single-transaction -d bingo_replay_test -f "$f" >/dev/null
-  psql_strict --single-transaction -d bingo_replay_test -f "$f" >/dev/null   # twice, deliberately
+  echo "==> suite $suite: [$MIGRATION_COUNT] $(basename "$f")"
+  psql_strict --single-transaction -d "$db" -f "$f" >/dev/null
+  psql_strict --single-transaction -d "$db" -f "$f" >/dev/null   # twice, deliberately
 done
-echo "==> suite D: replayed $MIGRATION_COUNT migrations, each applied twice"
+echo "==> suite $suite: replayed $MIGRATION_COUNT migrations, each applied twice"
 
-echo "==> suite D: asserting the replayed end state"
-psql_strict -d bingo_replay_test -f "$HERE/replay.test.sql" >/dev/null
+echo "==> suite $suite: asserting the replayed end state"
+psql_strict -d "$db" -v current_defaults="$current_defaults" -f "$HERE/replay.test.sql" >/dev/null
 
 # The catalogue is not the behaviour. replay.test.sql proves the objects and
 # grants exist; this proves the functions actually do what the remediation
 # claims, by creating a staff account, a session, a game and a pot and acting as
 # that host. A catalogue assertion cannot tell you that a retried call draws a
 # second ball; only calling it twice can.
-echo "==> suite D: behavioural assertions against the replayed schema"
-psql_strict -d bingo_replay_test -f "$HERE/remediation-behaviour.test.sql" >/dev/null
+echo "==> suite $suite: behavioural assertions against the replayed schema"
+psql_strict -d "$db" -f "$HERE/remediation-behaviour.test.sql" >/dev/null
+}
+
+replay_suite D bingo_replay_test off
+
+# ===========================================================================
+# SUITE E: the same replay under the current Supabase default privileges
+# ===========================================================================
+replay_suite E bingo_replay_current_test on
 
 # --- Results -----------------------------------------------------------------
 echo
@@ -335,6 +356,9 @@ psql -d bingo_fresh_test -c \
 psql -d bingo_replay_test -c \
   "select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
      from test_results order by seq;"
+psql -d bingo_replay_current_test -c \
+  "select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
+     from test_results order by seq;"
 
 FAILED_B=$(psql -d bingo_grant_test -At -c 'select count(*) from test_results where not ok')
 TOTAL_B=$(psql -d bingo_grant_test -At -c 'select count(*) from test_results')
@@ -342,11 +366,13 @@ FAILED_C=$(psql -d bingo_fresh_test -At -c 'select count(*) from test_results wh
 TOTAL_C=$(psql -d bingo_fresh_test -At -c 'select count(*) from test_results')
 FAILED_D=$(psql -d bingo_replay_test -At -c 'select count(*) from test_results where not ok')
 TOTAL_D=$(psql -d bingo_replay_test -At -c 'select count(*) from test_results')
+FAILED_E=$(psql -d bingo_replay_current_test -At -c 'select count(*) from test_results where not ok')
+TOTAL_E=$(psql -d bingo_replay_current_test -At -c 'select count(*) from test_results')
 
-if [ "$FAILED_B" != "0" ] || [ "$FAILED_C" != "0" ] || [ "$FAILED_D" != "0" ]; then
-  echo "FAILED: $((FAILED_B + FAILED_C + FAILED_D)) of $((TOTAL_B + TOTAL_C + TOTAL_D)) assertion(s) did not pass" >&2
+if [ "$FAILED_B" != "0" ] || [ "$FAILED_C" != "0" ] || [ "$FAILED_D" != "0" ] || [ "$FAILED_E" != "0" ]; then
+  echo "FAILED: $((FAILED_B + FAILED_C + FAILED_D + FAILED_E)) of $((TOTAL_B + TOTAL_C + TOTAL_D + TOTAL_E)) assertion(s) did not pass" >&2
   exit 1
 fi
 
 echo
-echo "ALL PASS (suite A, plus $((TOTAL_B + TOTAL_C)) grant assertions, plus $TOTAL_D replay assertions over $MIGRATION_COUNT migrations)"
+echo "ALL PASS (suite A, plus $((TOTAL_B + TOTAL_C)) grant assertions, plus $TOTAL_D + $TOTAL_E replay assertions over $MIGRATION_COUNT migrations under production and current Supabase defaults)"
