@@ -68,7 +68,7 @@
  *   NEW table appears here as a failure the day it is created, while it is still
  *   empty.
  *
- *   The two exceptions state their own grants, since 20260929093824:
+ *   The two exceptions state their own grants, since 20260929101118:
  *   game_states_public is SELECT only, and session_reset_log is not reachable by
  *   anon at all, so it is not listed.
  *
@@ -143,7 +143,7 @@ export const ANON_ALLOWLIST: readonly AnonAllowlistEntry[] = [
     kind: 'table',
     name: 'game_states_public',
     privileges: ['SELECT'],
-    why: 'Deliberately public, and SELECT only since 20260929093824, which states the grant rather than inheriting it: on the current Supabase image an inherited grant gave anon no SELECT and the pub TV failed with 42501. This is the trigger-synced mirror the pub TV at /display and the phone follower at /player read over REST and Realtime, both unauthenticated by design. Its SELECT policy is USING (true). Only the security definer sync trigger writes it. It carries no player-identifying data and no money.',
+    why: 'Deliberately public, and SELECT only since 20260929101118, which states the grant rather than inheriting it: on the current Supabase image an inherited grant gave anon no SELECT and the pub TV failed with 42501. This is the trigger-synced mirror the pub TV at /display and the phone follower at /player read over REST and Realtime, both unauthenticated by design. Its SELECT policy is USING (true). Only the security definer sync trigger writes it. It carries no player-identifying data and no money.',
   },
   {
     kind: 'table',

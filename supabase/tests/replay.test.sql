@@ -216,7 +216,7 @@ select t('grants :: the three trigger functions are NOT executable by authentica
 -- Table grants. A table whose migration does not state its grants gets whatever
 -- the defaults hand out: everything under production's, and nothing an API role
 -- can read or write under the current image's. game_states_public and
--- session_reset_log relied on that until 20260929093824, and a rebuilt project
+-- session_reset_log relied on that until 20260929101118, and a rebuilt project
 -- served the pub TV 42501. These hold in both worlds or the build is wrong.
 -- ---------------------------------------------------------------------------
 select t('table grants :: anon can SELECT game_states_public and nothing else (pub TV and phone follower)',
