@@ -4,7 +4,7 @@ Workspace standards live in `/Users/peterpitcher/Cursor/CLAUDE.md`: read that fi
 
 ## Stack (deviations from the workspace default)
 
-- **Next.js 16.1**, React 19.2. Middleware is the Next 16 `proxy()` export in `src/proxy.ts`, not `middleware.ts`.
+- **Next.js 16.3**, React 19.2. Middleware is the Next 16 `proxy()` export in `src/proxy.ts`, not `middleware.ts`.
 - **Tailwind v4** (`@import "tailwindcss"` plus `@config` pointing at `tailwind.config.ts`, where the `bingo.*` tokens live).
 - **Tests use Node's native runner** (`node --test --import tsx`), not Jest or Vitest: `src/lib/*.test.ts`, pure helpers only. Mock Supabase; never hit a real database.
 - Supabase via `@supabase/ssr`; `zod`, `qrcode.react`, `nosleep.js`. Vercel. Linked Supabase project ref `bcmorqsgeumtmhvctvgu`.

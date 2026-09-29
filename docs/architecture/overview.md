@@ -12,7 +12,7 @@ project: anchor-bingo
 ## Project Profile
 
 - **Package name:** `anchor-bingo`
-- **Framework:** Next.js 16.1.4 (App Router) on React 19.2.3
+- **Framework:** Next.js 16.3.7 (App Router) on React 19.2.3
 - **Language:** TypeScript 5 (strict)
 - **Styling:** Tailwind CSS v4 (`@tailwindcss/postcss`) with `tailwind-merge` and `clsx`
 - **Database:** Supabase (PostgreSQL + Auth + RLS)
