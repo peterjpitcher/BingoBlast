@@ -37,8 +37,10 @@
 #
 # Phase 5 covers the trigger function lockdown_admin_functions_2026_05_27 missed,
 # where the assertion that matters is not the grant but that state_version is
-# still bumped afterwards. Phase 6 records the gap none of this closes: the
-# default privileges are still armed for the next function anyone creates.
+# still bumped afterwards. Phase 6 covers the mechanism behind all of it, the
+# default privileges that arm the next function anyone creates: open as built,
+# still open after 20260905053040 (a per-schema revoke cannot remove the
+# built-in PUBLIC grant), and closed after 20260929103001 revokes it globally.
 #
 # SUITE C (bingo_fresh_test) is the fresh-build end state the repo produces NOW
 # that winner_idempotency_key is part of its history: 20260730064309 installs the
@@ -75,6 +77,8 @@ HOST_MUTATIONS="$MIGRATIONS/20260729231945_atomic_host_mutations.sql"
 WINNER_IDEMPOTENCY="$MIGRATIONS/20260730064309_winner_idempotency_key.sql"
 REVOKE_ANON="$MIGRATIONS/20260730070705_revoke_anon_execute_on_host_rpcs.sql"
 REVOKE_TRIGGER="$MIGRATIONS/20260730072329_revoke_anon_on_bump_game_state_version.sql"
+DEFAULTS_PER_SCHEMA="$MIGRATIONS/20260905053040_default_privileges_stop_anon_inheriting.sql"
+DEFAULTS_GLOBAL="$MIGRATIONS/20260929103001_default_privileges_revoke_public_execute_globally.sql"
 
 export PGPASSWORD=test
 psql() { command psql -h 127.0.0.1 -p "$PORT" -U postgres -q "$@"; }
@@ -260,9 +264,17 @@ psql_strict -d bingo_grant_test -f "$REVOKE_TRIGGER"
 echo "==> phase 5: asserting the revoke, and that the trigger still fires"
 psql_strict -d bingo_grant_test -f "$HERE/trigger-grant.test.sql"
 
-# --- Phase 6: the gap that is still open -------------------------------------
-echo "==> phase 6: recording the default-privilege gap none of this closes"
-psql_strict -d bingo_grant_test -f "$HERE/convention-gap.test.sql"
+# --- Phase 6: the default-privilege gap, and the two migrations that close it -
+echo "==> phase 6: the default-privilege gap as built"
+psql_strict -d bingo_grant_test -v stage=open -f "$HERE/convention-gap.test.sql"
+
+echo "==> phase 6: applying $(basename "$DEFAULTS_PER_SCHEMA") alone"
+psql_strict --single-transaction -d bingo_grant_test -f "$DEFAULTS_PER_SCHEMA"
+psql_strict -d bingo_grant_test -v stage=per_schema_only -f "$HERE/convention-gap.test.sql"
+
+echo "==> phase 6: applying $(basename "$DEFAULTS_GLOBAL")"
+psql_strict --single-transaction -d bingo_grant_test -f "$DEFAULTS_GLOBAL"
+psql_strict -d bingo_grant_test -v stage=closed -f "$HERE/convention-gap.test.sql"
 
 # ===========================================================================
 # SUITE C: the fresh-build end state this repo now produces (bingo_fresh_test)

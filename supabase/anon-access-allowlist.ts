@@ -23,13 +23,17 @@
  *   applied were missing from this repository entirely and had to be recovered
  *   from `supabase_migrations.schema_migrations.statements`.
  *
- *   The cause is still armed. `pg_default_acl` on this project grants anon
- *   EXECUTE on every new function in `public`, and every table privilege on
- *   every new table, so the next `create function` picks anon straight back up
- *   with nobody having written a grant. `supabase/tests/convention-gap.test.sql`
- *   reproduces that in a container. No migration in this repository revokes
- *   those default privileges, so this allowlist is the detection that stands in
- *   for a fix that has not been made.
+ *   The cause was `pg_default_acl`, which handed anon every table privilege on
+ *   every new table and EXECUTE on every new function in `public`, so the next
+ *   `create function` picked anon straight back up with nobody having written a
+ *   grant. 20260905053040 stopped it for tables and sequences. It did not stop
+ *   it for functions: a per-schema default cannot revoke the built-in global
+ *   EXECUTE that PUBLIC gets, and anon is a member of PUBLIC. 20260929103001
+ *   revokes that globally for postgres. `supabase/tests/convention-gap.test.sql`
+ *   walks through all three states in a container. Functions created by
+ *   supabase_admin in `public` still come out anon-callable, and no migration
+ *   can change that, so this allowlist remains the detection for what the
+ *   defaults no longer prevent.
  *
  *   This app moves money: snowball jackpots, prize amounts and tie shares. Anon
  *   reach is not a theoretical concern here.

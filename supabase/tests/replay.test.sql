@@ -40,18 +40,77 @@ $$;
 \endif
 
 -- ---------------------------------------------------------------------------
--- The canary, as in grants.test.sql. If the bootstrap did not reproduce the
+-- The canaries, as in grants.test.sql. If the bootstrap did not reproduce the
 -- production default privileges then every grant assertion below is meaningless
 -- because the container is friendlier than the thing it is modelling.
+--
+-- Until 20260929103001 the first canary was "a function postgres creates is
+-- anon-callable". The replay now closes that, so it is asserted as a result
+-- further down, and the generosity this canary needs is found where no
+-- migration can reach: supabase_admin's default privileges in public, which
+-- grant anon EXECUTE outright in both worlds, on production too.
 -- ---------------------------------------------------------------------------
-create or replace function public.replay_probe_default_privileges() returns int
+set role supabase_admin;
+create function public.replay_probe_admin_function() returns int
+language sql immutable as $$ select 1 $$;
+reset role;
+
+select t('canary :: a function supabase_admin creates in public is still anon-callable',
+         has_function_privilege('anon', 'public.replay_probe_admin_function()', 'EXECUTE'),
+         'if false, supabase-bootstrap.sql is not production-shaped and this suite proves nothing. ACL: '
+           || coalesce((select proacl::text from pg_proc
+                         where oid = 'public.replay_probe_admin_function()'::regprocedure), 'NULL'));
+
+drop function public.replay_probe_admin_function();
+
+-- The second canary tells the two worlds apart for functions, as the table one
+-- below does for tables: production's postgres defaults in public name
+-- authenticated on a new function, the current image's do not. It reads the
+-- ACL rather than has_function_privilege, because without 20260929103001 PUBLIC
+-- would hand authenticated EXECUTE in both worlds and blur the difference.
+create function public.replay_probe_postgres_function() returns int
 language sql immutable as $$ select 1 $$;
 
-select t('canary :: default privileges grant anon EXECUTE on a newly created function',
-         has_function_privilege('anon', 'public.replay_probe_default_privileges()', 'EXECUTE'),
-         'if false, supabase-bootstrap.sql is not production-shaped and this suite proves nothing');
+select t('canary :: a new function names authenticated only under production defaults (current_defaults=' || :'current_defaults' || ')',
+         (select p.proacl is not null
+                 and exists (select 1 from aclexplode(p.proacl) a
+                              where a.grantee = 'authenticated'::regrole::oid)
+            from pg_proc p where p.oid = 'public.replay_probe_postgres_function()'::regprocedure)
+           = (:'current_defaults' not in ('on', 'true', '1', 'yes')),
+         'if false, supabase-bootstrap.sql did not build the default privileges this run asked for. ACL: '
+           || coalesce((select proacl::text from pg_proc
+                         where oid = 'public.replay_probe_postgres_function()'::regprocedure), 'NULL'));
 
-drop function public.replay_probe_default_privileges();
+-- And the assertion the canary used to be the opposite of. In both worlds, a
+-- function postgres creates after the whole history has run must carry no PUBLIC
+-- grant and must not be anon-callable, with nobody having written a revoke.
+-- 20260905053040 alone did not achieve this: a per-schema default cannot revoke
+-- the built-in global PUBLIC EXECUTE. 20260929103001 does, globally.
+select t('default privileges :: a function postgres creates after the replay is NOT anon-callable',
+         not has_function_privilege('anon', 'public.replay_probe_postgres_function()', 'EXECUTE'),
+         'ACL: ' || coalesce((select proacl::text from pg_proc
+                               where oid = 'public.replay_probe_postgres_function()'::regprocedure),
+                             'NULL, the built-in default, which grants PUBLIC'));
+
+select t('default privileges :: a function postgres creates after the replay carries no PUBLIC grant',
+         (select p.proacl is not null
+                 and not exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0)
+            from pg_proc p where p.oid = 'public.replay_probe_postgres_function()'::regprocedure),
+         'ACL: ' || coalesce((select proacl::text from pg_proc
+                               where oid = 'public.replay_probe_postgres_function()'::regprocedure),
+                             'NULL, the built-in default, which grants PUBLIC'));
+
+drop function public.replay_probe_postgres_function();
+
+select t('default privileges :: postgres holds a global default that withholds EXECUTE from PUBLIC',
+         exists (select 1 from pg_default_acl d
+                  where d.defaclrole = 'postgres'::regrole and d.defaclnamespace = 0
+                    and d.defaclobjtype = 'f'
+                    and not exists (select 1 from aclexplode(d.defaclacl) a where a.grantee = 0)),
+         (select coalesce(string_agg(coalesce(nullif(d.defaclnamespace, 0)::regnamespace::text, '(global)')
+                                     || ' ' || d.defaclacl::text, ' | '), '(no function rows for postgres)')
+            from pg_default_acl d
+           where d.defaclrole = 'postgres'::regrole and d.defaclobjtype = 'f'));
 
 -- The second canary tells the two worlds apart. Under production's defaults a
 -- new table is readable by authenticated with nobody granting it; under the
@@ -211,6 +270,61 @@ select t('grants :: the three trigger functions are NOT executable by authentica
            where n.nspname = 'public'
              and p.proname in ('bump_game_state_version','sync_game_states_public','handle_new_user')
              and has_function_privilege('authenticated', p.oid, 'EXECUTE')));
+
+-- The general form, as for tables below: under the current defaults a function
+-- nobody granted to service_role fails this. Eight did until 20260929103018.
+select t('grants :: every public function is executable by service_role',
+         (select count(*) = 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname <> 't'
+             and not has_function_privilege('service_role', p.oid, 'EXECUTE')),
+         (select coalesce(string_agg(p.proname, ',' order by p.proname), '(all fine)') from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname <> 't'
+             and not has_function_privilege('service_role', p.oid, 'EXECUTE')));
+
+-- The whole matrix, function by function, as read from production on
+-- 2026-09-29: sixteen callable by authenticated and service_role, four trigger
+-- functions by service_role only, none by anon. It must come out the same in
+-- both worlds, or a rebuilt project is not the project it rebuilds.
+with expected(fname, authd, svc) as (
+  values ('archive_snowball_pot', true, true),
+         ('assert_is_admin', true, true),
+         ('assert_is_host', true, true),
+         ('bump_game_state_version', false, true),
+         ('call_next_number', true, true),
+         ('delete_game_safe', true, true),
+         ('delete_session_safe', true, true),
+         ('handle_new_user', false, true),
+         ('parse_prize_pence', true, true),
+         ('recompute_prize_shares', true, true),
+         ('record_winner_atomic', true, true),
+         ('reset_session_safe', true, true),
+         ('reset_snowball_pot_safe', true, true),
+         ('set_winner_prize_given', true, true),
+         ('settle_snowball_pot', true, true),
+         ('sync_game_states_public', false, true),
+         ('sync_prize_shares', false, true),
+         ('update_game_safe', true, true),
+         ('update_snowball_pot_safe', true, true),
+         ('void_last_number', true, true)
+), actual as (
+  select p.proname::text as fname,
+         has_function_privilege('anon', p.oid, 'EXECUTE') as anon,
+         has_function_privilege('authenticated', p.oid, 'EXECUTE') as authd,
+         has_function_privilege('service_role', p.oid, 'EXECUTE') as svc
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname <> 't'
+), diff as (
+  select coalesce(e.fname, a.fname) as fname,
+         format('%s: want authenticated=%s service_role=%s anon=false, got authenticated=%s service_role=%s anon=%s',
+                coalesce(e.fname, a.fname), e.authd, e.svc, a.authd, a.svc, a.anon) as detail
+    from expected e full join actual a on a.fname = e.fname
+   where e.fname is null or a.fname is null
+      or a.anon or a.authd is distinct from e.authd or a.svc is distinct from e.svc
+)
+select t('grants :: every function''s EXECUTE for anon, authenticated and service_role matches production',
+         (select count(*) = 0 from diff),
+         (select coalesce(string_agg(detail, ' | ' order by fname), '(all twenty match)') from diff));
 
 -- ---------------------------------------------------------------------------
 -- Table grants. A table whose migration does not state its grants gets whatever
