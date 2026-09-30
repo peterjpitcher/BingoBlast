@@ -553,7 +553,7 @@ Severity is the consequence; likelihood is on a real pub night. **(re-verified)*
 
 Every migration updates `supabase/tests/harness-schema.sql` and `src/types/database.ts` where they copy the schema. Enum values are never used in the migration that adds them. Migrations keep the version they are applied with. Each migration ships with a tested rollback script for **function definitions only**, in `supabase/rollback/`. Rolling back the app or the functions does not reverse data: a reset, a settled pot or cash already paid stays as it is.
 
-**The order is linear:** M1, then M2a, then M2b, then M3. M2b and M3 both redefine `record_winner_atomic`; M3 is written on top of M2b, and `test:db` tests the final combined definition.
+**The order is linear:** M1, then M2a, then M3, then M2b. M1, M2a and M3 are all compatible with the host screen that is live today, so they can be applied before the new screens are deployed. M2b (enforcement) goes last, once every host screen runs the new code. M3 and M2b both redefine `record_winner_atomic`: M2b is written on top of M3, and `test:db` tests the final combined definition. Any function whose parameter list changes (for example `void_last_number`) is dropped and recreated with default parameters, so an old caller's argument set still resolves to exactly one function.
 
 **M1, lifecycle (S1):**
 
@@ -684,7 +684,7 @@ The error sink (`ERROR_SINK_URL`) is not configured in production today, so repo
 - `begin_claim_check`, `set_claim_draft` and `check_claim`: every code, idempotent retries and stale attempts;
 - `guard_claim_fields()`: a direct forge is refused, and the unpause clear still works;
 - the bound undo;
-- `record_winner_atomic` (M2b, then M3 combined): an idempotent retry after an advance, enforcement, a forged manual flag refused, and the genuine exemption;
+- `record_winner_atomic` (M3, then M2b combined): an idempotent retry after an advance, enforcement, a forged manual flag refused, and the genuine exemption;
 - jackpot components: one winner, two eligible, eligible plus ineligible, jackpot only, an odd penny, and a void;
 - the settle guard;
 - the prize-given refusal;
@@ -720,7 +720,7 @@ The error sink (`ERROR_SINK_URL`) is not configured in production today, so repo
 
 ## 12. Delivery and release
 
-**Slices.** Each slice is a branch with a PR, stacked in this order: **S0, S1, S2, S6, S3, S4, S5**.
+**Slices.** S0 ships as its own PR. S1, S2, S6, S3, S4 and S5 ship together as one features PR stacked on it, because they share the same screen files. The table still records what each slice contains.
 
 | Slice | Contents | Migration |
 |---|---|---|
@@ -734,19 +734,18 @@ The error sink (`ERROR_SINK_URL`) is not configured in production today, so repo
 
 **Release sequence** (owner's yes at each migration and deployment; never on a bingo day):
 
-1. Merge and deploy S0.
-2. Apply M1, then merge and deploy S1.
-3. Apply M2a, then merge and deploy S2. Reload every host screen, TV and phone; the build check will prompt. Confirm that no host screen runs old code, then apply M2b.
-4. Apply M3, then merge and deploy S6.
-5. Merge and deploy S3, S4 and S5. **Before S4**, issue the key and add `ANCHOR_API_KEY` to Vercel (production and preview).
-6. Rehearsal (A4): a test session with `/display?rehearsal=1` on the pub TV. Scan every QR from the back of the room, run the claim flow including a tie and a late claim, and leave the TV on `/display` through end of night and next-session discovery. Confirm the snowball pot has not moved.
-7. Switch on `NEXT_PUBLIC_REVIEW_INVITE_ENABLED` once the management feedback page is neutral.
+1. Merge and deploy S0. It has no migration.
+2. Apply M1, M2a and M3. The live screens keep working against all three.
+3. Issue the events key and add `ANCHOR_API_KEY` to Vercel (production and preview). Then merge and deploy the features PR.
+4. Reload every host screen, TV and phone; the build check prompts hosts and reloads the TV and phones by itself. Confirm that no host screen runs old code, then apply M2b.
+5. Rehearsal (A4): a test session with `/display?rehearsal=1` on the pub TV. Scan every QR from the back of the room, run the claim flow including a tie and a late claim, and leave the TV on `/display` through end of night and next-session discovery. Confirm the snowball pot has not moved.
+6. Switch on `NEXT_PUBLIC_REVIEW_INVITE_ENABLED` once the management feedback page is neutral.
 
 **Recovery:**
 
 - Function rollback scripts are in `supabase/rollback/`.
-- A failed deployment is rolled back in Vercel; the migrations stay, because M1 and M2a are additive.
-- If M2b blocks a real save during play, the host uses Manual Snowball Win only where it genuinely applies. Otherwise apply the M2b rollback script, which restores the M2a definition.
+- A failed deployment is rolled back in Vercel; the migrations stay, because M1, M2a and M3 work with the previous screens.
+- If M2b blocks a real save during play, the host uses Manual Snowball Win only where it genuinely applies. Otherwise apply the M2b rollback script, which restores the M3 definition.
 
 ---
 
