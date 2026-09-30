@@ -4,9 +4,10 @@
 // a float is how you end up paying somebody £4.999999, and how a column of
 // numbers stops adding to the total printed underneath it.
 //
-// This is separate from formatPounds in snowball.ts, which formats a pounds
-// NUMBER that came from a Postgres numeric column (the pot). These functions
-// take pence integers, which is what winners.prize_share_pence holds.
+// formatPence and totalPaidOutPence take pence integers, which is what
+// winners.prize_share_pence holds. formatPoundsAmount takes a pounds NUMBER that
+// came from a Postgres numeric column (the pot); formatPounds in snowball.ts is
+// the same thing without the pound sign.
 
 /** "£12.50", "£10", "£0.05". Pence in, a string a landlord can read out. */
 export function formatPence(pence: number | null | undefined): string {
@@ -19,6 +20,20 @@ export function formatPence(pence: number | null | undefined): string {
     ? `£${pounds.toLocaleString('en-GB')}`
     : `£${pounds.toLocaleString('en-GB')}.${String(remainder).padStart(2, '0')}`;
   return negative ? `-${body}` : body;
+}
+
+/**
+ * "£212.50", "£1,250", "£1,250.50", "£0". Pounds in (a Postgres numeric such as
+ * the snowball pot, or a cash jackpot amount), en-GB out: two decimals when
+ * there are pence, none when there are not, and thousands grouped. The pot used
+ * to read "£212.5" on the pub TV (X13).
+ *
+ * Rounds to the nearest penny first, so a float such as 0.1 + 0.2 reads as
+ * £0.30. Anything that is not a finite number reads as £0 rather than £NaN.
+ */
+export function formatPoundsAmount(value: number): string {
+  if (!Number.isFinite(value)) return '£0';
+  return formatPence(Math.round(value * 100));
 }
 
 /**

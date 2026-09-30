@@ -60,5 +60,8 @@ test('a negative reads as its positive value rather than being accepted as negat
 
 test('the prize text is what the pub TV and the winner row both show', () => {
   assert.equal(formatCashJackpotPrize(70), '£70 Cash Jackpot');
-  assert.equal(formatCashJackpotPrize(12.5), '£12.5 Cash Jackpot');
+  assert.equal(formatCashJackpotPrize(12.5), '£12.50 Cash Jackpot');
+  // parse_prize_pence reads the thousands separator, so the grouped form is
+  // still counted as money on the winner row.
+  assert.equal(formatCashJackpotPrize(1250), '£1,250 Cash Jackpot');
 });
