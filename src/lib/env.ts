@@ -16,9 +16,11 @@
 
 /**
  * Whether production builds need the management API key for the events feed.
- * False until the events feed ships (slice S4); a preview never needs it.
+ * True since the events feed shipped (slice S4). Only a Vercel production build
+ * needs it: previews and local builds run without it and the screens show the
+ * no-events loop (the feed reports `missing_config`).
  */
-export const EVENTS_FEED_REQUIRED = false;
+export const EVENTS_FEED_REQUIRED = true;
 
 export interface PublicSupabaseEnv {
   url: string;

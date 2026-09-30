@@ -101,13 +101,22 @@ test('a local http origin is allowed outside production, for local runs only', (
   assert.throws(() => validateBuildEnv(), /NEXT_PUBLIC_SITE_URL/);
 });
 
-test('the events feed key is not required in this slice', () => {
-  assert.equal(EVENTS_FEED_REQUIRED, false);
+test('the events feed is required, so a production build without ANCHOR_API_KEY fails', () => {
+  assert.equal(EVENTS_FEED_REQUIRED, true);
   process.env.VERCEL_ENV = 'production';
+  assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY/);
+  process.env.ANCHOR_API_KEY = 'key';
   assert.doesNotThrow(() => validateBuildEnv());
 });
 
-test('once the events feed is required, a production build needs ANCHOR_API_KEY and a preview does not', () => {
+test('preview and local builds do not need ANCHOR_API_KEY', () => {
+  process.env.VERCEL_ENV = 'preview';
+  assert.doesNotThrow(() => validateBuildEnv());
+  delete process.env.VERCEL_ENV;
+  assert.doesNotThrow(() => validateBuildEnv(), 'a local build has no VERCEL_ENV');
+});
+
+test('a production build needs ANCHOR_API_KEY when the feed is required, and a preview does not', () => {
   process.env.VERCEL_ENV = 'production';
   assert.throws(() => validateBuildEnv({ eventsFeedRequired: true }), /ANCHOR_API_KEY/);
   process.env.ANCHOR_API_KEY = 'key';
