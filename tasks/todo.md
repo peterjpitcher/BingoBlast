@@ -1,0 +1,391 @@
+# Guest display, claims, lifecycle and events: implementation plan
+
+> **For agentic workers:** execute task by task, in order. Each task is done by one subagent and then checked by the orchestrator. Steps use checkboxes for tracking.
+
+**Goal:** Build spec version 2 (slices S0, S1, S2, S6, S3, S4, S5) on the branch `feat/guest-display`, with one or more commits per task. Production migrations and deployment are out of scope; they need the owner's explicit yes.
+
+**Architecture:**
+- Database invariants (lifecycle, claims, money) live in `security definer` RPCs, called with the cookie client, with locks taken in session-then-game-state order.
+- The public screens derive everything from public rows through pure, tested helpers in `src/lib`.
+- Events come from one cached server-side projection of the management API.
+
+**Tech stack:** Next.js 16.3 (the `proxy.ts` convention), React 19.2, Tailwind v4, Supabase (`@supabase/ssr`), zod, `qrcode.react`, and the Node test runner (`node --test --import tsx`).
+
+**Spec:** `tasks/spec-2026-09-30-guest-display-and-events-design.md`. It is the source of truth; read the section named in each task before starting.
+
+## Global constraints
+
+- **Project rules.** Read `CLAUDE.md` in full first. It covers the business and security rules, the gotchas, `ActionResult<T>` and the cookie-client rule.
+- **No em dashes** (U+2014) anywhere: code, comments, copy, commit messages. British English in all UI copy.
+- **Dates:** only through `src/lib/dates.ts`, in Europe/London. Never bare `toLocale*`, `getDay`, `getHours` or `toISOString().slice` for user-facing dates.
+- **Updates must be proved to land.** Every `.update()` needs `.select()`, and zero rows is an error, unless it is replaced by an RPC.
+- **Every new function:**
+  - `security definer`, with `set search_path = public, pg_catalog`
+  - a role guard (`assert_is_host()` or `assert_is_admin()`)
+  - `revoke all on function ... from public, anon;` then `grant execute on function ... to authenticated, service_role;`
+  - added to the function allowlist in `supabase/tests/replay.test.sql`
+- **Migration files:** named `supabase/migrations/2026100100XXXX_<name>.sql`, with increasing timestamps. Never use an enum value in the migration that adds it. Update `supabase/tests/harness-schema.sql` wherever it copies the changed schema. Add a function rollback script under `supabase/rollback/<same name>.rollback.sql`.
+- **Types:** `src/types/database.ts` is hand-written. Update Row, Insert and Update for every new column, and `Functions` for every new RPC.
+- **Tests:** new pure logic gets `src/lib/*.test.ts`. They must pass under `npm test` (London time) and `npm run test:utc` (UTC).
+- **Gate for every task:** `npm run lint`, `npm run typecheck`, `npm test` and `npm run test:utc`. Tasks that touch SQL also run `npm run test:db` (Docker is running; the harness is `supabase/tests/run.sh`). The slice's last task also runs `npm run build`.
+- **Never** hit the production database, deploy, or push. The orchestrator pushes.
+- **Never** put the object from `useConnectionHealth()` in a dependency array. Destructure its functions.
+- **Copy** is exactly as written in the spec, where the spec gives it.
+
+
+## Execution waves (orchestrator)
+
+**Migration order is M1, M2a, M3, M2b** (spec 7). M1, M2a and M3 are compatible with the live host screen; M2b goes last.
+
+- **Wave 1, in parallel:**
+  - **A1 reliability:** S0.1 to S0.7. Owns `src/**` except `src/types/database.ts`, plus `next.config.ts` and `.env.example`.
+  - **A2 database:** S1.1, S2.1, S6.1, then S2.2, in that order. Owns `supabase/**` and `src/types/database.ts`.
+  - **A3 local stack:** a scratchpad Supabase project plus seed data. Owns the scratchpad and `.claude/launch.json` only.
+- **Wave 2, in parallel:**
+  - **B1 host side:** S1.2, S1.4 (host part), S2.3, S2.4 and S6.2. Owns `src/app/host/**`, `src/app/admin/**`, `src/lib/claim-draft-queue*` and `src/lib/money*`.
+  - **B2 public side:** S1.3, S1.4 (display part), S2.5, S3.1 and S3.2. Owns `src/app/{display,player,play}/**`, `src/components/display/**`, and the listed new `src/lib` files plus `house-rules` and `dates`.
+- **Wave 3:** S4.1 and S4.2 (events and review).
+- **Wave 4:** S5.1 (text sizes and readability).
+
+---
+
+## S0 Reliability (no schema)
+
+### Task S0.1: shared realtime connector (X1, X12c)
+- [ ] Create `src/lib/realtime-connector.ts`, a framework-free controller: `createRealtimeConnector({ client, topicPrefix, build, onStatus, onGiveUp?, setTimer, clearTimer })` returns `{ connect(), reconnect(), dispose() }`. It keeps a generation counter; every subscribe callback captures its generation and returns early if that generation is not current. Before `client.removeChannel(old)` it clears the reference and bumps the generation. At most one timer is pending. Backoff runs 1s, 2s, 4s up to 30s, and resets on `SUBSCRIBED`.
+- [ ] Create `src/hooks/use-realtime-channel.ts`: `useRealtimeChannel({ supabase, key, enabled, build, onStatus })` returns `{ reconnect }`, and disposes on unmount or key change.
+- [ ] Tests in `src/lib/realtime-connector.test.ts`, with a fake client:
+  1. `removeChannel` fires CLOSED **synchronously**; there is no re-entry and at most one timer.
+  2. The old channel's CLOSED arrives **after** the new one subscribes; the new channel is not removed and no timer is set.
+  3. `dispose()` cancels the timer and removes the channel.
+  4. `reconnect()` during a pending timer replaces the timer.
+  5. Backoff grows and resets.
+- [ ] Replace the hand-rolled channel code in:
+  - `game-control.tsx` (~533-578)
+  - `display-ui.tsx` (sessions ~225-268, `game_states_public` ~292-339, pot ~484-523)
+  - `player-ui.tsx` (the matching blocks, including the pot at ~360-399)
+
+  Keep the existing `markRealtimeStatus` wiring and the reconnect-on-visible behaviour. Pot subscriptions check the pot id.
+- [ ] Commit `fix(realtime): one guarded connector so channels stop churning after a reconnect`.
+
+### Task S0.2: public poll robustness and coherent snapshots (X12a, X12b, X12g, spec 5.8)
+- [ ] Create `src/lib/poll-runner.ts`: `createPollRunner({ run: (signal) => Promise<T>, deadlineMs = 8000 })` returns `{ start(): { seq, promise }, isCurrent(seq), invalidate() }`.
+  - Every run gets an AbortController aborted at the deadline, and the in-flight flag is released on abort.
+  - `invalidate()` bumps the sequence so older responses are discarded.
+  - Tests cover: the deadline releases the flag, a stale response is discarded, and `invalidate` after a Realtime event discards the in-flight poll.
+- [ ] On the TV and phone polls, use the runner. A Realtime payload calls `invalidate()` before applying.
+- [ ] A game switch fetches the new game's state **before** setting the new game (both screens).
+- [ ] A single failed poll no longer switches a pre-game screen to the full-screen reconnecting state. The full-screen failed state needs the same 10-second unhealthy window as `ConnectionBanner` (reuse `connection-health.ts` thresholds). Apply to both screens.
+- [ ] Commit `fix(public): bounded polls, stale-response guard and switch-safe game changes on TV and phone`.
+
+### Task S0.3: clock offset for the reveal delay (X12d)
+- [ ] Create `src/app/api/time/route.ts`: `GET` returns `{ now: Date.now() }` with `Cache-Control: no-store` and `dynamic = 'force-dynamic'`.
+- [ ] Create `src/lib/clock-offset.ts`:
+  - `computeClockOffset(samples: { t0: number; t1: number; server: number }[]): number` uses the sample with the lowest `t1 - t0` and returns `offset = server - (t0 + t1) / 2`.
+  - `createClockOffsetSampler(fetchNow)` takes 3 samples on load and every 10 minutes, and keeps the last good offset (0 before the first).
+  - Test both.
+- [ ] `reveal-queue.ts`: take `nowMs` from `Date.now() + offset`, and clamp both directions: a ball whose `last_call_at` is in the future relative to corrected now is treated as just called. The reveal pause uses `performance.now()`. Update `reveal-queue.test.ts` with fast and slow clock cases.
+- [ ] Wire the sampler into the TV and phone.
+- [ ] Commit `fix(reveal): correct the public reveal delay for TV clocks that run fast`.
+
+### Task S0.4: build check and self-reload (X12h, spec 5.8)
+- [ ] `next.config.ts`: `env: { NEXT_PUBLIC_BUILD_ID: process.env.VERCEL_GIT_COMMIT_SHA ?? 'dev' }`.
+- [ ] Create `src/app/api/build/route.ts`: `GET` returns `{ build: process.env.VERCEL_GIT_COMMIT_SHA ?? 'dev' }`, with no-store.
+- [ ] Create `src/lib/build-check.ts`: `decideBuildAction({ clientBuild, serverBuild, mode: 'auto' | 'prompt', safe: boolean }): 'none' | 'reload' | 'prompt' | 'wait'`. The `'dev'` build never triggers anything. Tests.
+- [ ] Create `src/hooks/use-build-check.ts`: checks every 5 minutes and on `visibilitychange` to visible.
+  - **TV and phone:** `mode 'auto'`. Safe means not `paused_for_validation` and no `display_win_type`.
+  - **Host:** `mode 'prompt'`. Shows a banner, "A new version is ready" with a **Reload** button, and never reloads itself. The banner is held back while a claim modal is open.
+- [ ] Commit `feat: long-lived screens pick up new releases at a safe moment`.
+
+### Task S0.5: environment validation (X21)
+- [ ] Create `src/lib/env.ts`:
+  - `getPublicSupabaseEnv()` returns `{ url, anonKey }` and throws a clear error if either is missing.
+  - `validateBuildEnv()` checks the Supabase variables; checks `NEXT_PUBLIC_SITE_URL` is an https origin when set; and, when `process.env.VERCEL_ENV === 'production'` and `EVENTS_FEED_REQUIRED` is true (a module constant, **false in S0**, set true in S4), requires `ANCHOR_API_KEY`.
+  - Tests with a stubbed `process.env`.
+- [ ] Call `validateBuildEnv()` from `next.config.ts` so it runs at build.
+- [ ] Use `getPublicSupabaseEnv()` in `src/utils/supabase/{client,server,middleware}.ts`.
+- [ ] Add `LOG_ERRORS`, `ANCHOR_API_KEY`, `ANCHOR_API_BASE_URL` and `NEXT_PUBLIC_REVIEW_INVITE_ENABLED` to `.env.example`, with comments.
+- [ ] Commit `chore: validate environment at build time`.
+
+### Task S0.6: host fixes (X2, X8, X15, X18)
+- [ ] **X2:** capture the expected stage index when the Post Win or skip modal opens (a `useRef` set on open), and use it for every retry until a definite success or refusal. Remove the copy that says retrying is safe if it is no longer accurate.
+- [ ] **X8:** in `src/app/host/[sessionId]/[gameId]/page.tsx`, only PGRST116 (no rows) returns `notFound()`. Any other read error renders a retry screen ("Could not load the game. Retry"), like the public pages. It never redirects to `/host` or `/pending` on a transient error.
+- [ ] **X15:** reset the manual snowball prefill on cancel and whenever Record Winner opens.
+- [ ] **X18:** in `src/app/host/dashboard.tsx`, Start, Resume and Re-open get a busy state ("Starting…") with double-tap protection. Replace `alert()` and `confirm()` with in-app error text and the existing `Modal`.
+- [ ] Commit `fix(host): stage retries keep their expectation, no 404 on a blip, no double start`.
+
+### Task S0.7: public and money fixes (X12e, X12f, X13 TypeScript part, X19, X20)
+- [ ] **X13:** `src/lib/money.ts` gets `formatPoundsAmount(value: number): string`, returning "£212.50", "£1,250", "£1,250.50" and "£0".
+  - `formatPounds` in `snowball.ts` delegates to it.
+  - Update `snowball.test.ts:67` and add cases.
+  - Route the raw values at `snowball-list.tsx:166`, `:172`, `:175` and `session-detail.tsx:701` through it.
+- [ ] **X12e:** "Prize not set" only on the host screen. The TV and phone hide the prize line when it is empty.
+- [ ] **X12f:** truncate the TV top bar names to one line (`truncate` with `min-w-0`).
+- [ ] **X19:** create `src/lib/venue-links.ts` with `export const KITCHEN_OPEN_UNTIL = '9pm'` and a comment naming the source ("owner, 30 September 2026"). The TV reads it.
+- [ ] **X20:** in `src/app/admin/actions.ts:147`, use `getTodayIsoDateInLondon()`.
+- [ ] Run `npm run build`.
+- [ ] Commit `fix: money shows pence properly, tidy public copy, London date for copies`.
+
+---
+
+## S1 Lifecycle (migration M1)
+
+### Task S1.1: migration M1 and database tests
+- [ ] Create `supabase/migrations/20261001000100_night_lifecycle.sql`:
+  - **Session columns:** `sessions.started_at timestamptz`, `completed_at timestamptz`, `state_version bigint not null default 0`.
+  - **Session trigger:** `sessions_lifecycle_stamp` (`before update`):
+    - bumps `state_version`;
+    - on a transition to `completed`, sets `completed_at = coalesce(new.completed_at, now())`;
+    - on a transition away from `completed`, sets `completed_at = null`.
+  - **Backfill:** `update sessions s set started_at = x.min_started from (select g.session_id, min(gs.started_at) min_started from games g join game_states gs on gs.game_id = g.id group by 1) x where s.id = x.session_id and s.started_at is null;` Record the row count in a `raise notice`.
+  - **`start_game(p_game_id uuid, p_number_sequence integer[] default null) returns public.game_states`**, per spec 5.1:
+    - lock the session `for update` first, then `game_states` `for update`;
+    - errors (`raise exception` with a stable message key mapped in TypeScript): `night_ended`, `other_game_in_progress`, `invalid_sequence` (not a permutation of 1 to 90), `not_authorised`;
+    - on a new state row, `controlling_host_id = auth.uid()`;
+    - a takeover sets the controller to `auth.uid()`;
+    - a re-open sets `status = 'in_progress'`, `ended_at = null`, clears the pause, break, win and claim fields, and keeps the stage;
+    - then sets the session to `running`, sets `active_game_id`, and sets `started_at = coalesce(started_at, now())`.
+  - **`finish_game(p_game_id uuid) returns jsonb`**, returning `{ game_state, session_completed }`, per spec 5.1. Idempotent.
+  - **`end_night(p_session_id uuid) returns public.sessions`**, per spec 5.1. Idempotent. Refuses with `game_in_progress`.
+  - **`reset_session_safe`:** redefine with `started_at = null` added. Copy the current body from its latest migration exactly.
+  - Grants per the global constraints.
+- [ ] Rollback script (drop the three functions, restore the previous `reset_session_safe` body).
+- [ ] Harness: add the columns and trigger to `harness-schema.sql` if it models `sessions`, and the functions to the replay allowlist.
+- [ ] SQL tests following the existing suite style in `supabase/tests/`:
+  - start on a completed night is refused;
+  - a second game cannot start while one is in progress;
+  - the first start sets `started_at` and a re-open keeps it;
+  - reset clears `started_at` and `completed_at`;
+  - finishing the last game completes the session and stamps `completed_at`;
+  - a repeated `end_night` keeps the first `completed_at`;
+  - `end_night` refuses while a game is in progress;
+  - anon and pending cannot execute any of the three functions;
+  - the backfill is safe to rerun.
+
+  Add a two-connection race test if the harness allows it: psql in the background holding the session lock with `pg_sleep`, then assert the second call waits and then refuses. Otherwise document why not.
+- [ ] Commit `feat(db): night lifecycle functions with session-first locking`.
+
+### Task S1.2: host and admin actions use the lifecycle RPCs (X9, X10, X11)
+- [ ] `startGame` keeps its checks and the cash-jackpot prize logic. It generates the sequence in TypeScript and calls `start_game` with the **cookie client**. Remove the service-role write client and its silent fallback.
+- [ ] `endGame`, the final-stage paths of `advanceToNextStage` and `skipStage`, `moveToNextGameAfterWin` and `moveToNextGameOnBreak` use `finish_game`. Snowball settlement stays after it. Remove `maybeCompleteSession`.
+- [ ] Add `endNight(sessionId)`, which calls `end_night`.
+- [ ] Map the new error keys to codes in `ActionResult`.
+- [ ] Admin `updateSessionStatus` gets `.select()` with zero rows treated as an error.
+- [ ] Update `src/types/database.ts`.
+- [ ] Update `CLAUDE.md`: the service role is now only for `/api/setup`, plus the lifecycle functions.
+- [ ] Commit `refactor(host): lifecycle writes go through start_game, finish_game and end_night`.
+
+### Task S1.3: night phase, session selectors and phase copy
+- [ ] Create `src/lib/night-phase.ts`, `getNightPhase({ session, activeGameState }): 'night_over' | 'in_game' | 'before_start' | 'between_games'`, with the precedence from spec 5.1, plus an `inGameSubState` helper. Tests cover every row of the precedence table and the edge cases (an empty completed session, completed with unplayed games, "Start Session" with no game).
+- [ ] Create `src/lib/public-selectors.ts` with `PUBLIC_SESSION_COLUMNS` and `PUBLIC_GAME_STATE_COLUMNS`. Replace the four copies of each.
+- [ ] Session snapshots apply only if `state_version >= current` on both screens (a helper `isFreshSession`, tested).
+- [ ] TV and phone copy by phase. `between_games` shows "Next game coming up", with the next game's name and colour when known; the phone says the same.
+- [ ] Commit `feat(public): screens know the phase of the night`.
+
+### Task S1.4: `/display` routing, end of night, wake lock, End the night (5.8, A3)
+- [ ] Create `src/lib/session-resolution.ts`, `resolveDisplaySession(sessions, nowLondonDate, { includeTest })`: `{ kind: 'one', id } | { kind: 'none' } | { kind: 'many', ids }`. A session qualifies if `running`, or `ready` with `start_date <= today` in London. Test sessions only count when `includeTest`. Tests.
+- [ ] `display/page.tsx` uses it:
+  - `?rehearsal=1` includes test sessions.
+  - `none` renders an idle client component that re-checks every 60 seconds and navigates when one appears. The idle content is a placeholder "Bingo nights at The Anchor" until S4.
+  - `many` renders a list that refreshes itself.
+  - A read error renders a retrying state.
+- [ ] `/display/[id]` at `night_over`: stays until 04:00 London time the next morning (`src/lib/dates.ts` gets a helper, `nextLondonFourAm(fromIso)`, tested either side of 25 October), or until a different session is `running`. Then `router.replace('/display')`.
+- [ ] The TV calls `useWakeLock()`.
+- [ ] `src/app/host/dashboard.tsx` gets an **End the night** button, with a `Modal` listing unplayed games, calling `endNight`. The final-game button in the host game screen calls `finish_game` and then `end_night`.
+- [ ] Run `npm run build`.
+- [ ] Commit `feat(display): the TV follows the night and the next session by itself`.
+
+---
+
+## S2 Claims (migrations M2a and M2b)
+
+### Task S2.1: migration M2a (additive claims)
+- [ ] Create `supabase/migrations/20261001000200_claim_attempts.sql`, per spec 5.2:
+  - **Columns** on `game_states`: `claim_attempt_id uuid`, `claim_stage_index integer`, `claim_call_count integer`, `claim_draft_seq integer not null default 0`, `claim_undo_used boolean not null default false`, `claim_numbers jsonb`, and `claim_result text` with a check that it is `valid`, `invalid` or `late`.
+  - **Public mirror:** `claim_numbers` and `claim_result` on `game_states_public`. Redefine `sync_game_states_public()` including them, and restate its search path and revokes.
+  - **`guard_claim_fields()`** (`before update` on `game_states`):
+    - when `new.paused_for_validation = false`: clear every claim field (numbers, result and attempt set to null, sequence 0, undo false, snapshots null);
+    - otherwise, if any claim field differs from old and `current_setting('bingo.claim_write', true) is distinct from 'on'`, raise `claim_fields_protected`.
+
+    Name it so it fires in the right order relative to `bump_game_state_version`; either order is fine as long as both run.
+  - **`begin_claim_check`, `set_claim_draft`, `check_claim`**, exactly as spec 5.2. Each sets `perform set_config('bingo.claim_write', 'on', true)` before writing. The stage counts come from a SQL helper, `required_claim_count(stage text)` (Line 5, Two Lines 10, Full House 15). The current stage name is `games.stage_sequence ->> current_stage_index`.
+  - **`void_last_number(p_game_id uuid, p_attempt_id uuid default null, p_expected_count integer default null)`:** keep the existing body for the unpaused case, and add the bound paused case with `already_undone`.
+  - `record_winner_atomic` is **unchanged**.
+- [ ] Rollback script. Update the harness, the replay allowlist and `src/types/database.ts`.
+- [ ] SQL tests:
+  - every code of every function;
+  - a same-attempt retry is a no-op;
+  - `attempt_mismatch` returns the current attempt;
+  - `p_new_claimant` replaces the attempt;
+  - out-of-order draft sequences are ignored;
+  - duplicates are refused;
+  - a verdict retry is idempotent, and `verdict_already_given` when the numbers differ;
+  - `stale_attempt` after a stage change;
+  - a direct update of `claim_result` is refused;
+  - an unpause clears the claim;
+  - the bound undo happens once;
+  - the public mirror carries both new columns;
+  - the SQL stage counts equal `win-stages.ts`: a test file checks the SQL helper values against a constant copied in the test, with a comment pointing at `win-stages.ts`, plus a Node test that asserts the same constant against `REQUIRED_SELECTION_COUNT_BY_STAGE`.
+- [ ] Commit `feat(db): claim attempts, live drafts and server verdicts`.
+
+### Task S2.2: migration M2b (enforcement)
+- [ ] Create `supabase/migrations/20261001000400_claim_enforcement.sql`. It is applied **last**, after M3. Redefine `record_winner_atomic` from the **M3** body (`20261001000300_jackpot_components.sql`):
+  1. the idempotency lookup stays first;
+  2. for a new winner, require the valid attempt (`claim_attempt_id = p_client_request_id`, `claim_result = 'valid'`, `claim_stage_index = current_stage_index`) and re-check `claim_numbers` against `called_numbers`, including the last ball;
+  3. the manual exemption needs `p_force_snowball_jackpot` and a snowball-type game and Full House and the window open;
+  4. the win text is stage-specific: `LINE WINNER!`, `TWO LINES WINNER!`, `FULL HOUSE WINNER!`, or the existing snowball text;
+  5. money text uses `to_char(amount, 'FM999G999G990D00')` with the trailing `.00` removed when there are no pence (match `formatPoundsAmount`).
+
+  Keep every other behaviour: the tie split, `prize_share_pence`, the snowball window and eligibility, anonymity, and the grants.
+- [ ] The rollback script restores the M3 definition.
+- [ ] SQL tests:
+  - a new winner without a valid attempt is refused;
+  - with one, it is recorded;
+  - an idempotent retry after the stage has advanced returns the existing row;
+  - a forged manual flag on a standard game is refused;
+  - a genuine manual snowball succeeds;
+  - the win text per stage;
+  - £212.50 formatting;
+  - all existing prize and anonymity tests still pass.
+- [ ] Commit `feat(db): record a winner only from a checked claim`.
+
+### Task S2.3: host actions (X4, X5, X16, X17)
+- [ ] New actions in `src/app/host/actions.ts`: `beginClaimCheck(gameId, attemptId, newClaimant)`, `setClaimDraft(gameId, attemptId, numbers, seq)`, `checkClaim(gameId, attemptId, numbers, rejectAsLate)` and `undoLastNumberForClaim(gameId, attemptId, expectedCount)`. All use the cookie client and return `ActionResult` with codes.
+- [ ] `recordWinner` takes the attempt id as `p_client_request_id`.
+- [ ] `resumeGame` refuses with code `stage_already_won` when a non-void winner exists at the current stage.
+- [ ] Delete `validateClaim` and stop calling `announceWin` from the claim path. Delete `announceWin` if it is unused.
+- [ ] Map the new error keys in `HOST_RPC_ERRORS`.
+- [ ] Commit `feat(host): claim actions built on attempts`.
+
+### Task S2.4: host claim UI
+- [ ] Create `src/lib/claim-draft-queue.ts`, `createClaimDraftQueue({ send: (numbers, seq) => Promise<ok|error> })`, returning `{ push(numbers), flush(), state }`.
+  - One request in flight at a time; the latest pending list wins.
+  - The sequence increases monotonically; on error it retries with backoff and reports `retrying`.
+  - Tests.
+- [ ] `game-control.tsx`:
+  - **Check Claim:** mints an attempt with `crypto.randomUUID()`, calls `beginClaimCheck`, and on `attempt_mismatch` adopts the returned attempt.
+  - **Taps:** push to the queue, with the claim grid in tap order.
+  - **"TV not updated, retrying"** while the queue is retrying.
+  - **Check Win:** calls `checkClaim`.
+  - **`missing_last_ball` dialog**, with copy per spec 5.2: Yes calls `undoLastNumberForClaim`, then re-runs `checkClaim`; No calls `checkClaim` with `rejectAsLate = true`.
+  - **`valid`** opens Record Winner using the attempt id.
+  - **"Check another claimant"** replaces "Validate Another Winner" and calls `beginClaimCheck` with `newClaimant = true` and a fresh attempt.
+  - **When `stage_already_won` is possible** (paused with a recorded winner at this stage), the pad shows **Continue to [next stage]**, calling `advanceToNextStage`, instead of Resume calling.
+  - **Recovery:** on mount, or when state arrives while paused with a `claim_attempt_id`, reopen the claim modal with that attempt and `claim_numbers`.
+- [ ] Remove `claimRequestIdRef`: the attempt replaces it. Update the `CLAUDE.md` gotcha about the claim key to describe the attempt.
+- [ ] Update `docs/runbooks/live-night.md` (claims, ties, late claims, continue after a win).
+- [ ] Commit `feat(host): live claim entry with durable attempts`.
+
+### Task S2.5: public claim panel
+- [ ] Create `src/lib/claim-panel.ts`, `getClaimPanelState({ paused, claimNumbers, claimResult, calledNumbers, stageName, requiredCount })`, returning `{ kind: 'waiting' | 'draft' | 'valid' | 'invalid' | 'late', balls: { n, called, isLast }[], headline, detail, invalidNumbers, lastNumber }`. Copy exactly per spec 5.2. Tests for every state.
+- [ ] Create `src/components/display/claim-panel.tsx`, used by the TV (replacing the "Checking Claim" overlay body) and the phone (replacing its claim card). Ticks and crosses are shapes (an SVG or text glyph with an aria-label), not colour only. At most 5 columns; balls at least 120px at 1920x1080 and 80px at 1280x720 on the TV.
+- [ ] The win overlay keeps showing the balls.
+- [ ] Run `npm run build`.
+- [ ] Commit `feat(public): the room sees each claimed number and the verdict`.
+
+---
+
+## S6 Money (migration M3)
+
+### Task S6.1: migration M3
+- [ ] Create `supabase/migrations/20261001000300_jackpot_components.sql`, per spec 7 (M3). It sits between M2a and M2b, and must work with today's live host screen:
+  - `winners.jackpot_pool_pence integer`, `jackpot_share_pence integer`;
+  - `record_winner_atomic` redefined from its current body (`20260825080608_prize_amounts_and_tie_shares.sql`): the ordinary pool is parsed from the ordinary prize text before the jackpot text is appended, and the jackpot pool is set from the pot amount;
+  - the recompute function or trigger shares both components (the jackpot only among non-void eligible jackpot winners at that stage; the odd penny to the earliest by `created_at`, then `id`);
+  - `settle_snowball_pot` requires the game `completed` (code `game_not_completed`);
+  - `set_winner_prize_given` refuses voided winners (`winner_void`);
+  - the historic backfill of the jackpot pool only from settlement history rows that record the amount for that game; otherwise the value is left null.
+- [ ] The rollback script restores the previous bodies.
+- [ ] SQL tests, per spec 11: one winner, two eligible, eligible plus ineligible, jackpot only, an odd penny, a void and its recompute, the settle guard, the void guard, and an idempotent retry still working.
+- [ ] Commit `feat(db): jackpot money tracked as its own component`.
+
+### Task S6.2: money screens and settlement recovery (X6, X14, X22)
+- [ ] Totals add both components: `src/lib/money.ts` gets the helper `winnerTotalPence(w)`, used by `admin/history/page.tsx`, `session-detail.tsx` and the host winners card. Where the jackpot is unknown, show "jackpot amount not recorded".
+- [ ] **X6:** every finishing path returns success plus `snowballPotDidNotSettle`. The host sees the retry banner before navigating. `src/app/host/dashboard.tsx` lists completed snowball games whose settlement is missing (use the same record `settle_snowball_pot` checks for `already_settled`), each with a **Settle** button.
+- [ ] **X14:** the host winners card shows a VOID badge and hides Give Prize for voided winners.
+- [ ] Run `npm run build`.
+- [ ] Commit `fix(money): jackpot totals, voided winners and a settlement retry that survives a reload`.
+
+---
+
+## S3 Rules and follow-along
+
+### Task S3.1: house rules and game identity
+- [ ] `src/lib/house-rules.ts`: the approved rules 1 to 8 (spec 5.3); `buildSnowballRule(pot)` using `formatPoundsAmount`; `HOW_TO_WIN`. Remove the stale comment. Tests for the snowball rule text.
+- [ ] Show the rules on the TV (`before_start` rules slide, break, `between_games`) and in the host briefing.
+- [ ] The phone gets a **Rules** button (it opens a `Modal`) available in every phase. At `before_start` the rules show inline, with the line "This follows the paper game. You cannot enter or claim here."
+- [ ] Game identity on the TV and phone during play: "Game {n} of {total}, {Colour} book", using `getColourName`. The total comes from a count of games in the session, fetched with the game list.
+- [ ] Commit `feat: approved house rules everywhere and the game colour on screen`.
+
+### Task S3.2: `/play`, site origin and the follow-along QR
+- [ ] Create `src/lib/site-origin.ts`, `getSiteOrigin({ env, requestOrigin })`, per spec 5.4 (explicit https override, production uses `VERCEL_PROJECT_PRODUCTION_URL`, preview uses `VERCEL_BRANCH_URL` or `VERCEL_URL`, development uses the request origin). Tests.
+- [ ] Create `src/lib/follow-link.ts`, `buildFollowUrl({ origin, sessionId, isUniqueSession })`, returning `${origin}/play` or `${origin}/play?s=${id}`. Tests.
+- [ ] Create `src/app/play/page.tsx`:
+  - `?s=` must be a uuid of an existing session, then `redirect('/player/<id>')`;
+  - otherwise use `resolveDisplaySession`: `one` redirects; `none` or `many` renders "No bingo running right now" (a placeholder for the events list until S4).
+
+  It is not added to the proxy matcher.
+- [ ] TV:
+  - the corner QR uses `buildFollowUrl`, at level M and at least 180px, with no overlap at 1280x720;
+  - it is hidden at `night_over`;
+  - the `before_start` screen gets the follow-along slide: QR at least 50vh, "Follow the numbers on your phone", "Point your camera at the code", and the address without the scheme.
+
+  Create `src/lib/playlist.ts`, `buildPlaylist(phase, projection | null, now, sessionDate, opts)`, now covering the follow-along and rules slides only (events added in S4), with tests. Create `src/components/display/slide-loop.tsx`, which shows slides for their durations, pauses when hidden, and respects reduced motion.
+- [ ] Run `npm run build`.
+- [ ] Commit `feat: a permanent follow-along link and a big QR before the night`.
+
+---
+
+## S4 Events and review
+
+### Task S4.1: events feed
+- [ ] Create `src/lib/events-feed/`:
+  - `schema.ts`: zod schemas for only the fields used.
+  - `client.ts`: `fetchJson(path, { timeoutMs })` with `X-API-Key`, base `ANCHOR_API_BASE_URL ?? 'https://management.orangejelly.co.uk/api'`. It throws on non-2xx, timeout or parse failure, and never logs bodies.
+  - `projection.ts`: `getEventsProjection()`, per spec 5.5: the general list plus the bingo category query plus parallel details; bounded to 8 seconds; cached with `unstable_cache` (`revalidate: 300`, tag `events-projection`); a throw on failure keeps the last good value; the outer wrapper returns `{ status: 'missing_config' | 'error' }` on a cold failure and reports through `after(() => reportError(...))`.
+  - `select.ts`: pure selection (drop started, dedupe by name, cap at 8, split out bingo nights).
+  - `links.ts`: `eventQr(event, channel)` returns the short link when present, otherwise the id link with `utm_source` and `utm_medium`.
+  - Tests for `select`, `links` and schema tolerance (a bad event is dropped alone).
+- [ ] Create `src/app/api/screen/events/route.ts`: no parameters; returns the projection with `Cache-Control: public, s-maxage=60, stale-while-revalidate=300`.
+- [ ] `next.config.ts`: `images.remotePatterns` for the bucket path only.
+- [ ] Set `EVENTS_FEED_REQUIRED = true` in `env.ts`, so a production build needs the key.
+- [ ] `src/lib/dates.ts`: `formatEventWhen(startsAtIso, nowIso)` ("Tonight", "Tomorrow", a weekday within 6 days, else "Fri 16 Oct") and `formatEventTime(startsAtIso)` ("7pm", "7:30pm"), both in Europe/London. Tests either side of 25 October.
+- [ ] Commit `feat(events): cached projection of upcoming events from the management app`.
+
+### Task S4.2: carousel, phone list and review
+- [ ] `src/lib/venue-links.ts`: `REVIEW_URL = 'https://l.the-anchor.pub/cvf4k7'`, `WHATS_ON_URL = 'https://www.the-anchor.pub/whats-on'`, and `isReviewInviteEnabled()`, which reads `NEXT_PUBLIC_REVIEW_INVITE_ENABLED === 'true'`.
+- [ ] `buildPlaylist` gains the event slides, next bingo, thanks, review (only when enabled) and idle loops, per the spec 5.5 table, with tests. Clients drop started events and the bingo on their own session's date at render time, and choose `qrPre` or `qrPost` by phase.
+- [ ] Create `src/components/display/event-slide.tsx`: `next/image`, square images whole beside the text, a text-only fallback on error, the title clamped to 2 lines, the QR at level M and at least 40vh, and the next image preloaded. Also `review-slide.tsx`, `thanks-slide.tsx` and `next-bingo-slide.tsx`.
+- [ ] The TV at `before_start`, `night_over` and the idle `/display` use the slide loop. It refreshes the projection from `/api/screen/events` every 10 minutes.
+- [ ] Phone: at `before_start` and `night_over`, an events list ("View event" opens in a new tab with `rel="noopener noreferrer"`), plus the review button when enabled. `/play` with no session shows the list too.
+- [ ] Run `npm run build`.
+- [ ] Commit `feat: upcoming events carousel, phone list and a switchable review invitation`.
+
+---
+
+## S5 Readable text
+
+### Task S5.1: size pass and readability fixes
+- [ ] `tailwind.config.ts`: `fontSize` tokens `tv-xs` through `tv-5xl` as `clamp()` values with pixel floors, meeting spec 5.7 (1920x1080: 32px minimum, 44px for key information; 1280x720: 22px and 30px).
+- [ ] Apply the tokens across `display-ui.tsx` and the display components; replace the fixed px sizes.
+- [ ] Phone: nothing below 14px, body 16px, values 20px.
+- [ ] Host: nothing below 14px, money and closing decisions 16px, buttons at least 44px.
+- [ ] `Input` to `text-base`; `Button` `sm` and `md` to `h-11`.
+- [ ] The readability fixes listed in spec 5.7: player cards, TV backing panels, reconnect banner, red host errors, claim grid marks.
+- [ ] In `globals.css`: a `@media (prefers-reduced-motion: reduce)` rule disabling animation and transition, and no `animate-pulse` on text blocks.
+- [ ] Create `scripts/check-render.js`, a function that runs in the page: it walks visible text nodes and reports any computed font size below a floor passed in, overlapping bounding boxes among elements marked `data-check-overlap`, and text containing `undefined`, `NaN` or `Invalid Date`. It is used by the orchestrator through the browser tool.
+- [ ] Run `npm run build`.
+- [ ] Commit `feat: bigger text on the TV, phones and host screen`.
+
+---
+
+## Orchestrator checks (not subagent tasks)
+
+- [ ] After each task: read the diff, and run the gate plus `test:db` where there is SQL.
+- [ ] After S1, S2 and S4: browser run-through on the local Supabase stack (`scratchpad/localstack`) with every migration applied.
+- [ ] At the end: stacked slice branches at the commit boundaries, pushed, with PRs opened (docs, then S0, S1, S2, S6, S3, S4, S5).
+- [ ] Report to the owner.
+
+## Results
+
+(Filled in as tasks complete.)
