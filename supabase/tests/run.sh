@@ -65,6 +65,16 @@
 # alike. Suite D alone passed while a rebuilt project served the pub TV 42501 on
 # game_states_public. Suite D catches a migration that forgets to revoke; suite E
 # catches one that forgets to grant.
+#
+# Suites D and E also run the behaviour of the 2026-10-01 migrations against
+# the end state: lifecycle.test.sql (M1, plus two-connection races on the
+# session lock), claims.test.sql (M2a and M2b) and money.test.sql (M3).
+#
+# SUITE F (bingo_staged_test) is the release path rather than the end state:
+# history loaded before M1, then M1, M2a and M3 with today's host code proved
+# still working against them, then M2b, then every script in
+# supabase/rollback/ run in reverse and checked to restore each function, ACL,
+# comment and trigger exactly.
 set -euo pipefail
 
 CONTAINER=bingo-migration-tests
@@ -348,6 +358,110 @@ psql_strict -d "$db" -v current_defaults="$current_defaults" -f "$HERE/replay.te
 # second ball; only calling it twice can.
 echo "==> suite $suite: behavioural assertions against the replayed schema"
 psql_strict -d "$db" -f "$HERE/remediation-behaviour.test.sql" >/dev/null
+
+# The 2026-10-01 migrations: the night lifecycle (M1), claims (M2a and M2b)
+# and the jackpot money components (M3), each against the combined end state.
+echo "==> suite $suite: night lifecycle (M1)"
+psql_strict -d "$db" -f "$HERE/lifecycle.test.sql" >/dev/null
+
+echo "==> suite $suite: lifecycle races between two live connections"
+lifecycle_races "$db"
+
+echo "==> suite $suite: claims (M2a) and claim enforcement (M2b)"
+psql_strict -d "$db" -f "$HERE/claims.test.sql" >/dev/null
+
+echo "==> suite $suite: jackpot money components (M3)"
+psql_strict -d "$db" -f "$HERE/money.test.sql" >/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Two connections, one session lock. A single connection cannot hold a lock
+# against itself, so these are the only tests that prove start_game and
+# end_night actually serialise on the session row rather than merely checking
+# state. Connection A takes the lock inside an open transaction and sleeps;
+# connection B starts once A is seen asleep and must WAIT (seen in
+# pg_stat_activity as a Lock wait), then, once A commits, see A's result and
+# refuse. Results go into the database's test_results like every other
+# assertion. Needs lifecycle.test.sql to have created the host account.
+# ---------------------------------------------------------------------------
+lifecycle_races() {
+local db="$1"
+local host='c1000000-0000-4000-8000-000000000001'
+local seq='(select array_agg(g order by g) from generate_series(1, 90) g)'
+local log_a log_b
+log_a="$(mktemp "${TMPDIR:-/tmp}/bingo-race-a.XXXXXX")"
+log_b="$(mktemp "${TMPDIR:-/tmp}/bingo-race-b.XXXXXX")"
+
+psql_strict -d "$db" >/dev/null <<SQL
+insert into public.sessions (id, name, status) values
+  ('c4000000-0000-4000-8000-000000000001', 'Race: end then start', 'running'),
+  ('c4000000-0000-4000-8000-000000000002', 'Race: start then end', 'running');
+insert into public.games (id, session_id, game_index, name) values
+  ('c5000000-0000-4000-8000-000000000001', 'c4000000-0000-4000-8000-000000000001', 1, 'Race game 1'),
+  ('c5000000-0000-4000-8000-000000000002', 'c4000000-0000-4000-8000-000000000002', 1, 'Race game 2');
+SQL
+
+# $1 = the call A makes and holds, $2 = the call B makes, $3 = B's function name.
+race_pair() {
+  psql -d "$db" -c "
+    select set_config('request.jwt.claim.sub', '$host', false);
+    begin;
+    select $1;
+    select pg_sleep(4);
+    commit;" >"$log_a" 2>&1 &
+  local a=$!
+  # Start B only once A is asleep inside its transaction, so A certainly holds
+  # the session lock. Polling, not a fixed sleep, so a slow runner cannot swap
+  # the order and turn the test into a different race.
+  local i n
+  for i in $(seq 1 50); do
+    n=$(psql -d "$db" -At -c "
+      select count(*) from pg_stat_activity
+       where datname = current_database() and wait_event = 'PgSleep' and pid <> pg_backend_pid();")
+    [ "$n" = "1" ] && break
+    sleep 0.1
+  done
+  psql -d "$db" -c "
+    select set_config('request.jwt.claim.sub', '$host', false);
+    select $2;" >"$log_b" 2>&1 &
+  local b=$!
+  local waiting=0
+  for i in $(seq 1 30); do
+    waiting=$(psql -d "$db" -At -c "
+      select count(*) from pg_stat_activity
+       where datname = current_database() and wait_event_type = 'Lock'
+         and query like '%$3(%' and pid <> pg_backend_pid();")
+    [ "$waiting" = "1" ] && break
+    sleep 0.1
+  done
+  wait "$a" "$b" || true
+  echo "$waiting"
+}
+
+local waiting ok detail
+waiting=$(race_pair "(public.end_night('c4000000-0000-4000-8000-000000000001')).status" \
+                    "(public.start_game('c5000000-0000-4000-8000-000000000001', $seq)).status" \
+                    "start_game")
+ok=$(psql -d "$db" -At -c "
+  select ${waiting:-0} = 1
+     and (select status = 'completed' from public.sessions where id = 'c4000000-0000-4000-8000-000000000001')
+     and not exists (select 1 from public.game_states where game_id = 'c5000000-0000-4000-8000-000000000001');")
+if grep -q 'night_ended' "$log_b" && ! grep -q ERROR "$log_a" && [ "$ok" = "t" ]; then ok=true; else ok=false; fi
+detail="waiting=$waiting; B said: $(tr '\n' ' ' < "$log_b" | sed "s/'/''/g" | cut -c1-200)"
+psql_strict -d "$db" -c "select t('race :: start_game waits for an end_night holding the session lock, then refuses night_ended', $ok, '$detail');" >/dev/null
+
+waiting=$(race_pair "(public.start_game('c5000000-0000-4000-8000-000000000002', $seq)).status" \
+                    "(public.end_night('c4000000-0000-4000-8000-000000000002')).status" \
+                    "end_night")
+ok=$(psql -d "$db" -At -c "
+  select ${waiting:-0} = 1
+     and (select status = 'running' from public.sessions where id = 'c4000000-0000-4000-8000-000000000002')
+     and (select status = 'in_progress' from public.game_states where game_id = 'c5000000-0000-4000-8000-000000000002');")
+if grep -q 'game_in_progress' "$log_b" && ! grep -q ERROR "$log_a" && [ "$ok" = "t" ]; then ok=true; else ok=false; fi
+detail="waiting=$waiting; B said: $(tr '\n' ' ' < "$log_b" | sed "s/'/''/g" | cut -c1-200)"
+psql_strict -d "$db" -c "select t('race :: end_night waits for a start_game holding the session lock, then refuses game_in_progress', $ok, '$detail');" >/dev/null
+
+rm -f "$log_a" "$log_b"
 }
 
 replay_suite D bingo_replay_test off
@@ -356,6 +470,71 @@ replay_suite D bingo_replay_test off
 # SUITE E: the same replay under the current Supabase default privileges
 # ===========================================================================
 replay_suite E bingo_replay_current_test on
+
+# ===========================================================================
+# SUITE F: the 2026-10-01 release as it will actually happen, and back again
+# (bingo_staged_test)
+# ===========================================================================
+# Suites D and E test the end state. This one tests the path:
+#
+#   1. Replay every migration BEFORE 20261001000100, then load data shaped like
+#      production's history (staged-fixtures.sql): a finished night, a settled
+#      and an unsettled jackpot, an ordinary tie.
+#   2. Snapshot every function, ACL, comment and trigger (rollback.test.sql).
+#   3. Apply M1, M2a and M3, the three released before the new host screen, and
+#      prove their backfills on that history and that today's host code still
+#      works against them (staged-compat.test.sql).
+#   4. Apply M2b and prove today's record call is now refused.
+#   5. Run each rollback in supabase/rollback/ in reverse order, each twice,
+#      and prove the functions come back exactly: to the M3 snapshot after the
+#      M2b rollback, to the pre-M1 snapshot after the rest.
+#
+# Production default privileges only: suite E already covers the other world,
+# and a restored function's ACL is what the rollback must get exactly right.
+ROLLBACK="$HERE/../rollback"
+STAGED_CUTOFF="20261001000100"
+M1="$MIGRATIONS/20261001000100_night_lifecycle.sql"
+M2A="$MIGRATIONS/20261001000200_claim_attempts.sql"
+M3="$MIGRATIONS/20261001000300_jackpot_components.sql"
+M2B="$MIGRATIONS/20261001000400_claim_enforcement.sql"
+
+echo "==> suite F: replaying the migrations before $STAGED_CUTOFF"
+psql_strict -d postgres -c "create database bingo_staged_test;"
+psql_strict -d bingo_staged_test -v current_defaults=off -f "$HERE/supabase-bootstrap.sql" >/dev/null
+for f in "$MIGRATIONS"/*.sql; do
+  if [[ "$(basename "$f")" < "$STAGED_CUTOFF" ]]; then
+    psql_strict --single-transaction -d bingo_staged_test -f "$f" >/dev/null
+  fi
+done
+
+echo "==> suite F: loading history, snapshotting the pre-release functions"
+psql_strict -d bingo_staged_test -f "$HERE/staged-fixtures.sql" >/dev/null
+psql_strict -d bingo_staged_test -v phase=snapshot -v label=baseline -f "$HERE/rollback.test.sql" >/dev/null
+
+echo "==> suite F: applying M1, M2a and M3 on top of that history"
+for f in "$M1" "$M2A" "$M3"; do
+  psql_strict --single-transaction -d bingo_staged_test -f "$f" >/dev/null
+done
+psql_strict -d bingo_staged_test -f "$HERE/staged-compat.test.sql" >/dev/null
+psql_strict -d bingo_staged_test -v phase=snapshot -v label=m3 -f "$HERE/rollback.test.sql" >/dev/null
+
+echo "==> suite F: applying M2b"
+psql_strict --single-transaction -d bingo_staged_test -f "$M2B" >/dev/null
+psql_strict -d bingo_staged_test -v phase=enforced -v label=none -f "$HERE/rollback.test.sql" >/dev/null
+
+echo "==> suite F: rolling back M2b (twice)"
+for _ in 1 2; do
+  psql_strict --single-transaction -d bingo_staged_test -f "$ROLLBACK/20261001000400_claim_enforcement.rollback.sql" >/dev/null
+done
+psql_strict -d bingo_staged_test -v phase=compare -v label=m3 -f "$HERE/rollback.test.sql" >/dev/null
+
+echo "==> suite F: rolling back M3, M2a and M1 (each twice)"
+for r in 20261001000300_jackpot_components 20261001000200_claim_attempts 20261001000100_night_lifecycle; do
+  for _ in 1 2; do
+    psql_strict --single-transaction -d bingo_staged_test -f "$ROLLBACK/$r.rollback.sql" >/dev/null
+  done
+done
+psql_strict -d bingo_staged_test -v phase=compare -v label=baseline -f "$HERE/rollback.test.sql" >/dev/null
 
 # --- Results -----------------------------------------------------------------
 echo
@@ -371,6 +550,9 @@ psql -d bingo_replay_test -c \
 psql -d bingo_replay_current_test -c \
   "select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
      from test_results order by seq;"
+psql -d bingo_staged_test -c \
+  "select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
+     from test_results order by seq;"
 
 FAILED_B=$(psql -d bingo_grant_test -At -c 'select count(*) from test_results where not ok')
 TOTAL_B=$(psql -d bingo_grant_test -At -c 'select count(*) from test_results')
@@ -380,11 +562,13 @@ FAILED_D=$(psql -d bingo_replay_test -At -c 'select count(*) from test_results w
 TOTAL_D=$(psql -d bingo_replay_test -At -c 'select count(*) from test_results')
 FAILED_E=$(psql -d bingo_replay_current_test -At -c 'select count(*) from test_results where not ok')
 TOTAL_E=$(psql -d bingo_replay_current_test -At -c 'select count(*) from test_results')
+FAILED_F=$(psql -d bingo_staged_test -At -c 'select count(*) from test_results where not ok')
+TOTAL_F=$(psql -d bingo_staged_test -At -c 'select count(*) from test_results')
 
-if [ "$FAILED_B" != "0" ] || [ "$FAILED_C" != "0" ] || [ "$FAILED_D" != "0" ] || [ "$FAILED_E" != "0" ]; then
-  echo "FAILED: $((FAILED_B + FAILED_C + FAILED_D + FAILED_E)) of $((TOTAL_B + TOTAL_C + TOTAL_D + TOTAL_E)) assertion(s) did not pass" >&2
+if [ "$FAILED_B" != "0" ] || [ "$FAILED_C" != "0" ] || [ "$FAILED_D" != "0" ] || [ "$FAILED_E" != "0" ] || [ "$FAILED_F" != "0" ]; then
+  echo "FAILED: $((FAILED_B + FAILED_C + FAILED_D + FAILED_E + FAILED_F)) of $((TOTAL_B + TOTAL_C + TOTAL_D + TOTAL_E + TOTAL_F)) assertion(s) did not pass" >&2
   exit 1
 fi
 
 echo
-echo "ALL PASS (suite A, plus $((TOTAL_B + TOTAL_C)) grant assertions, plus $TOTAL_D + $TOTAL_E replay assertions over $MIGRATION_COUNT migrations under production and current Supabase defaults)"
+echo "ALL PASS (suite A, plus $((TOTAL_B + TOTAL_C)) grant assertions, plus $TOTAL_D + $TOTAL_E replay assertions over $MIGRATION_COUNT migrations under production and current Supabase defaults, plus $TOTAL_F staged release and rollback assertions)"

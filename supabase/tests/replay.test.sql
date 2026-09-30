@@ -193,8 +193,8 @@ select t('enums :: win_stage is exactly {Line,Two Lines,Full House}',
 -- ---------------------------------------------------------------------------
 -- Functions: presence, security settings and search_path
 -- ---------------------------------------------------------------------------
-select t('functions :: the twenty expected functions exist and nothing else',
-         (select count(*) = 20 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+select t('functions :: the twenty nine expected functions exist and nothing else',
+         (select count(*) = 29 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname <> 't'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
@@ -241,14 +241,17 @@ select t('grants :: no function in public carries a bare PUBLIC EXECUTE grant',
            where n.nspname = 'public' and p.proname <> 't' and p.proacl is not null
              and array_to_string(p.proacl, ',') like '=X/%'));
 
-select t('grants :: the fourteen caller-facing functions are executable by authenticated',
-         (select count(*) = 14 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+select t('grants :: the twenty one caller-facing functions are executable by authenticated',
+         (select count(*) = 21 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public'
              and p.proname in ('assert_is_admin','assert_is_host','call_next_number',
                                'delete_game_safe','delete_session_safe','record_winner_atomic',
                                'reset_session_safe','set_winner_prize_given','settle_snowball_pot',
                                'update_game_safe','void_last_number','archive_snowball_pot',
-                               'update_snowball_pot_safe','reset_snowball_pot_safe')
+                               'update_snowball_pot_safe','reset_snowball_pot_safe',
+                               'start_game','finish_game','end_night',
+                               'begin_claim_check','set_claim_draft','check_claim',
+                               'required_claim_count')
              and has_function_privilege('authenticated', p.oid, 'EXECUTE')),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
@@ -257,19 +260,34 @@ select t('grants :: the fourteen caller-facing functions are executable by authe
                                'delete_game_safe','delete_session_safe','record_winner_atomic',
                                'reset_session_safe','set_winner_prize_given','settle_snowball_pot',
                                'update_game_safe','void_last_number','archive_snowball_pot',
-                               'update_snowball_pot_safe','reset_snowball_pot_safe')
+                               'update_snowball_pot_safe','reset_snowball_pot_safe',
+                               'start_game','finish_game','end_night',
+                               'begin_claim_check','set_claim_draft','check_claim',
+                               'required_claim_count')
              and not has_function_privilege('authenticated', p.oid, 'EXECUTE')));
 
-select t('grants :: the three trigger functions are NOT executable by authenticated',
+select t('grants :: the trigger functions are NOT executable by authenticated',
          (select count(*) = 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public'
-             and p.proname in ('bump_game_state_version','sync_game_states_public','handle_new_user')
+             and p.proname in ('bump_game_state_version','sync_game_states_public','handle_new_user',
+                               'sync_prize_shares','sessions_lifecycle_stamp','guard_claim_fields')
              and has_function_privilege('authenticated', p.oid, 'EXECUTE')),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public'
-             and p.proname in ('bump_game_state_version','sync_game_states_public','handle_new_user')
+             and p.proname in ('bump_game_state_version','sync_game_states_public','handle_new_user',
+                               'sync_prize_shares','sessions_lifecycle_stamp','guard_claim_fields')
              and has_function_privilege('authenticated', p.oid, 'EXECUTE')));
+
+-- The trigger functions added on 2026-10-01 run as the writer, like
+-- bump_game_state_version: they only edit NEW, so they have no reason to run
+-- with the owner's rights.
+select t('functions :: the new trigger functions are security INVOKER',
+         (select bool_and(not p.prosecdef) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname in ('sessions_lifecycle_stamp','guard_claim_fields')),
+         (select string_agg(p.proname || '=' || p.prosecdef::text, ',') from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname in ('sessions_lifecycle_stamp','guard_claim_fields')));
 
 -- The general form, as for tables below: under the current defaults a function
 -- nobody granted to service_role fails this. Eight did until 20260929103018.
@@ -283,25 +301,37 @@ select t('grants :: every public function is executable by service_role',
              and not has_function_privilege('service_role', p.oid, 'EXECUTE')));
 
 -- The whole matrix, function by function, as read from production on
--- 2026-09-29: sixteen callable by authenticated and service_role, four trigger
--- functions by service_role only, none by anon. It must come out the same in
--- both worlds, or a rebuilt project is not the project it rebuilds.
+-- 2026-09-29 (sixteen callable by authenticated and service_role, four trigger
+-- functions by service_role only, none by anon), plus what the 2026-10-01
+-- migrations add: M1 (20261001000100) three caller-facing lifecycle functions
+-- and one trigger function; M2a (20261001000200) three claim functions, the
+-- stage count helper and the guard trigger function. M3 and M2b add none. It must come out the same in both worlds, or a
+-- rebuilt project is not the project it rebuilds.
 with expected(fname, authd, svc) as (
   values ('archive_snowball_pot', true, true),
          ('assert_is_admin', true, true),
          ('assert_is_host', true, true),
+         ('begin_claim_check', true, true),
          ('bump_game_state_version', false, true),
          ('call_next_number', true, true),
+         ('check_claim', true, true),
          ('delete_game_safe', true, true),
          ('delete_session_safe', true, true),
+         ('end_night', true, true),
+         ('finish_game', true, true),
+         ('guard_claim_fields', false, true),
          ('handle_new_user', false, true),
          ('parse_prize_pence', true, true),
          ('recompute_prize_shares', true, true),
          ('record_winner_atomic', true, true),
+         ('required_claim_count', true, true),
          ('reset_session_safe', true, true),
          ('reset_snowball_pot_safe', true, true),
+         ('sessions_lifecycle_stamp', false, true),
+         ('set_claim_draft', true, true),
          ('set_winner_prize_given', true, true),
          ('settle_snowball_pot', true, true),
+         ('start_game', true, true),
          ('sync_game_states_public', false, true),
          ('sync_prize_shares', false, true),
          ('update_game_safe', true, true),
@@ -324,7 +354,7 @@ with expected(fname, authd, svc) as (
 )
 select t('grants :: every function''s EXECUTE for anon, authenticated and service_role matches production',
          (select count(*) = 0 from diff),
-         (select coalesce(string_agg(detail, ' | ' order by fname), '(all twenty match)') from diff));
+         (select coalesce(string_agg(detail, ' | ' order by fname), '(all match)') from diff));
 
 -- ---------------------------------------------------------------------------
 -- Table grants. A table whose migration does not state its grants gets whatever
@@ -452,6 +482,17 @@ select t('triggers :: on_auth_user_created is installed on auth.users',
          exists (select 1 from pg_trigger where tgrelid = 'auth.users'::regclass
                    and not tgisinternal and tgname = 'on_auth_user_created'),
          'the profile row for a new staff account is created by this trigger');
+
+select t('triggers :: sessions carries the lifecycle stamp (M1)',
+         exists (select 1 from pg_trigger where tgrelid = 'public.sessions'::regclass
+                   and not tgisinternal and tgname = 'sessions_lifecycle_stamp'),
+         'completed_at and state_version are only maintained by this trigger');
+
+select t('columns :: sessions carries started_at, completed_at and state_version (M1)',
+         (select count(*) = 3 from information_schema.columns
+           where table_schema = 'public' and table_name = 'sessions'
+             and column_name in ('started_at', 'completed_at', 'state_version')),
+         'the public screens read all three to know the phase of the night');
 
 select t('triggers :: game_states carries both the version bump and the public sync',
          (select count(*) >= 2 from pg_trigger where tgrelid = 'public.game_states'::regclass
@@ -624,6 +665,38 @@ select t('idempotency :: only the three-argument call_next_number exists',
          (select string_agg(pg_get_function_identity_arguments(p.oid), ' | ') from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname = 'call_next_number'));
+
+select t('claims :: only the three-argument void_last_number exists, so a one-argument call resolves',
+         (select count(*) = 1
+                 and bool_and(pg_get_function_identity_arguments(p.oid)
+                              = 'p_game_id uuid, p_attempt_id uuid, p_expected_count integer')
+            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'void_last_number'),
+         (select string_agg(pg_get_function_identity_arguments(p.oid), ' | ') from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'void_last_number'));
+
+select t('claims :: game_states carries the claim guard trigger (M2a)',
+         exists (select 1 from pg_trigger where tgrelid = 'public.game_states'::regclass
+                   and not tgisinternal and tgname = 'guard_claim_fields'),
+         'without it a host could forge claim_numbers or claim_result with a direct update');
+
+select t('claims :: the public mirror carries claim_numbers and claim_result, and nothing private',
+         (select count(*) = 2 from information_schema.columns
+           where table_schema = 'public' and table_name = 'game_states_public'
+             and column_name like 'claim%')
+         and (select count(*) = 2 from information_schema.columns
+               where table_schema = 'public' and table_name = 'game_states_public'
+                 and column_name in ('claim_numbers', 'claim_result')),
+         (select string_agg(column_name, ',' order by column_name) from information_schema.columns
+           where table_schema = 'public' and table_name = 'game_states_public'
+             and column_name like 'claim%'));
+
+select t('money :: winners carries jackpot_pool_pence and jackpot_share_pence (M3)',
+         (select count(*) = 2 from information_schema.columns
+           where table_schema = 'public' and table_name = 'winners'
+             and column_name in ('jackpot_pool_pence', 'jackpot_share_pence')),
+         'a winner''s total is prize_share_pence + jackpot_share_pence');
 
 select t('idempotency :: only the eight-argument record_winner_atomic exists',
          (select count(*) = 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
