@@ -1,7 +1,7 @@
 # Spec: claims on screen, start and end of night, events carousel and review QR
 
 **Version:** 2, 30 September 2026. Version 1 (same date) was reviewed in `tasks/review-2026-09-30-guest-display-and-events.md`; section 17 maps every finding to its change here.
-**Status:** Owner decisions recorded (section 0). Approved for build on 30 September. Production migrations and deployment still need the owner's explicit yes.
+**Status:** Built. Owner decisions and confirmations recorded (section 0). Release approved by the owner on 1 October 2026.
 **Author:** Claude, for Peter Pitcher (owner)
 **Repo baseline:** `main` at `d12b836`. Production app https://bingo-blast-ten.vercel.app (Vercel project `oj-cashbingo`). Production database Supabase `bcmorqsgeumtmhvctvgu` (eu-west-2, Postgres 17).
 **Other repos involved:**
@@ -25,11 +25,11 @@
 | D5 | Phones show the upcoming events and a "Tell us how we did" button at the start and end of the night. |
 | D6 | The management app's feedback page change is written up separately, so the Google option is offered to every guest (5.6). |
 | D7 | This spec is committed on a docs branch and pushed. |
-| D8 | Build everything now. Production migrations and deployment wait for the owner's explicit yes (section 12). |
+| D8 | Build everything now. Production migrations and deployment wait for the owner's explicit yes (section 12). The owner gave that yes on 1 October 2026: bingo ran on 30 September, so the release can go out. |
 
-**Built on the recommended option, owner to confirm** (each is a small change if the owner decides otherwise):
+**Built overnight on the recommended option, and confirmed by the owner on 1 October 2026:**
 
-| # | Assumption |
+| # | Decision |
 |---|---|
 | A1 | **Late claims are the host's call.** If a claim misses the last number called, the host decides whether it came before that number was announced (undo it and re-check) or after (reject as late). The app does not guess from timings, because the TV can lag. |
 | A2 | **Jackpot shares.** A snowball jackpot is shared only between the tied winners who were eligible for it. The ordinary stage prize is shared between all tied winners, as now. |

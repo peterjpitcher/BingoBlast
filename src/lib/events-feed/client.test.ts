@@ -80,9 +80,18 @@ test('a timeout and a network failure are told apart', async () => {
 });
 
 test('the timeout really aborts a call that hangs', async () => {
+  // A real hung request holds a socket, which keeps the process alive until
+  // the timeout fires. This fake holds nothing, and AbortSignal.timeout() uses
+  // a timer that does not keep the event loop open, so on Node 22 the test
+  // runner saw an empty loop and cancelled the test. The interval stands in
+  // for the socket.
   const hanging = ((_url: string, init?: RequestInit) =>
     new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      const keepAlive = setInterval(() => undefined, 1000);
+      init?.signal?.addEventListener('abort', () => {
+        clearInterval(keepAlive);
+        reject(init.signal?.reason);
+      });
     })) as unknown as typeof fetch;
   await assert.rejects(
     fetchManagementJson('/events', { timeoutMs: 20, config: CONFIG, fetchImpl: hanging }),
