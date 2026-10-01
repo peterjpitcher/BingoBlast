@@ -152,3 +152,15 @@ npx supabase db push   # applies anything missing
 
 The migrations in git are the source of truth for structure. That is what makes
 the harness in `supabase/tests/` worth keeping green.
+
+## 7. Rolling back the guest display release
+
+This applies to the release that added claim attempts, night lifecycle and the events carousel (migrations `20261001000100` to `20261001000400`).
+
+1. **Apply the M2b rollback first:** `supabase/rollback/20261001000400_claim_enforcement.rollback.sql`. Run it in the Supabase SQL editor for the production project, or with `psql`. It restores the previous `record_winner_atomic`, which records a winner without a checked claim attempt. Skipping this step leaves the previous host screen unable to record any winner.
+2. **Then roll back the deployment in Vercel** (promote the previous production deployment).
+3. **Leave M1, M2a and M3 in place.** They work with the previous screens. Their rollback scripts exist in `supabase/rollback/`, but they are only needed to remove the release entirely, and they change no data.
+4. **Reload every host screen, TV and phone.**
+
+Rolling back functions never reverses data. A reset night, a settled snowball pot or a recorded winner stays as it is.
+

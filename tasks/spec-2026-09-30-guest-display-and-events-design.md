@@ -746,8 +746,9 @@ This follows the review's second option (R05): one release outside play, with a 
 **Recovery:**
 
 - Function rollback scripts are in `supabase/rollback/`.
-- A failed deployment is rolled back in Vercel; the migrations stay, because M1, M2a and M3 work with the previous screens.
+- **To roll the screens back to the previous release, first apply `supabase/rollback/20261001000400_claim_enforcement.rollback.sql`, then roll back in Vercel.** M2b refuses any winner recorded without a checked claim, so the previous host screen cannot record winners while M2b is in place (suite F proves both halves). M1, M2a and M3 can stay: they work with the previous screens.
 - If M2b blocks a real save during play, the host uses Manual Snowball Win only where it genuinely applies. Otherwise apply the M2b rollback script, which restores the M3 definition.
+- The steps are in `docs/runbooks/backup-and-recovery.md`, section 7.
 
 ---
 
