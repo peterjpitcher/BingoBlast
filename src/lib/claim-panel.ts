@@ -74,7 +74,7 @@ export function getClaimPanelState(input: ClaimPanelInput): ClaimPanelState | nu
   const stage = input.stageName?.trim() ?? '';
   const checkingHeadline = stage ? `Checking a ${stage} claim` : 'Checking a claim';
   const verdictHeadline = stage ? `${stage} claim` : 'Claim';
-  const lastNumberLine = lastNumber === null ? null : `Last number called: ${lastNumber}`;
+  const lastNumberLine = lastNumber === null ? null : `Last number called · ${lastNumber}`;
 
   const base = { balls, invalidNumbers, lastNumber, lastNumberLine: null };
 

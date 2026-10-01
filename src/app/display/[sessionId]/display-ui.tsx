@@ -4,7 +4,6 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
-import Image from 'next/image';
 import {
   formatPounds,
   getSnowballCallsLabel,
@@ -25,6 +24,7 @@ import {
 } from '@/lib/public-selectors';
 import { getInGameSubState, getNightPhase, pickNextGame } from '@/lib/night-phase';
 import { getClaimPanelState } from '@/lib/claim-panel';
+import { formatWinHeadline } from '@/lib/win-headline';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
 import { buildPlaylist, slideCarriesQr, type EventsProjection, type Slide, type SlideKind } from '@/lib/playlist';
 import { buildFollowUrl } from '@/lib/follow-link';
@@ -40,8 +40,11 @@ import { useBuildCheck } from '@/hooks/use-build-check';
 import { isPublicReloadSafe } from '@/lib/build-check';
 import { useWakeLock } from '@/hooks/wake-lock';
 import { ConnectionBanner } from '@/components/connection-banner';
+import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
+import { cardClass } from '@/components/ui/card';
+import { AnchorLogo, Grain } from '@/components/ui/logo';
 import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
-import { FollowAlongSlide, FollowQrBadge } from '@/components/display/follow-qr';
+import { CORNER_QR_CARD_WIDTH, FollowAlongSlide, FollowQrBadge } from '@/components/display/follow-qr';
 import { RulesSlide } from '@/components/display/rules-slide';
 import { SlideLoop } from '@/components/display/slide-loop';
 import { PromoSlide, SlidePreload } from '@/components/display/promo-slide';
@@ -49,7 +52,7 @@ import { useEventsProjection } from '@/components/display/use-events-projection'
 import { useMinuteClock, useWindowOrigin } from '@/components/display/screen-hooks';
 import { useSessionOverview } from '@/components/display/use-session-overview';
 import { useDisplayLifecycle } from '@/components/display/use-display-lifecycle';
-import { tvText } from '@/components/display/tv-text';
+import { TV_KICKER_CLASS, TV_SIZE, tvText } from '@/components/display/tv-text';
 import { logError } from '@/lib/log-error';
 
 // Define types for props
@@ -148,6 +151,72 @@ const readCalledNumbers = (state: GameState | null): number[] =>
 
 const POLL_INTERVAL_MS = 3000;
 const LOG_SCOPE = 'display';
+
+/**
+ * The TV's layout budget, as CSS variables on the screen's root. Each is
+ * clamp(size at 1280x720, a vh or vw term that lands on the 1920x1080 size,
+ * that size), so the bars hold the design's proportions on both and stop
+ * growing at 1080p, like the text sizes inside them (tv-xs to tv-base).
+ *
+ *                      1920x1080   1280x720
+ *   top bar               112px       76px
+ *   book colour band       22px       15px   (only with a game in play)
+ *   footer                184px      124px   (only while calling, checking or won)
+ *   main area padding      28px       19px   top and bottom; 40px and 27px at the sides
+ *
+ * What is left for the main area: 762px and 505px with the band and the
+ * footer (706px and 468px inside its padding, which is what the ball gets);
+ * 890px and 592px on a break; 912px and 607px before, between and after games.
+ * Change a height here and every sum that uses it follows.
+ */
+const TV_LAYOUT_VARS = {
+  '--tv-top': 'clamp(76px, 10.37vh, 112px)',
+  '--tv-band': 'clamp(15px, 2.04vh, 22px)',
+  '--tv-foot': 'clamp(124px, 17.04vh, 184px)',
+  '--tv-pad-y': 'clamp(18px, 2.6vh, 28px)',
+  '--tv-pad-x': 'clamp(26px, 2.08vw, 40px)',
+  // Between the corner QR's column and the rest of the main area.
+  '--tv-gap': 'clamp(20px, 1.67vw, 32px)',
+  '--tv-qr-col': CORNER_QR_CARD_WIDTH,
+  // The widest the snowball card may be: 355px and 237px.
+  '--tv-snowball': '18.5vw',
+} as React.CSSProperties;
+
+/**
+ * The main ball's diameter: the design's 64vh (690px at 1080p), capped by
+ *   - the height left between the bars: the screen less the top bar, the band,
+ *     the footer and the main area's padding (706px at 1080p, so 64vh binds;
+ *     468px at 720p against 461px, so it binds there too, with 7px to spare);
+ *   - the width that keeps it clear of the snowball card in the top right
+ *     corner. The ball is centred in the column beside the corner QR, so it
+ *     can be that column less twice the card's width (and 10px of air). Never
+ *     the binding term at 16:9 (786px and 469px), only on a narrower screen.
+ */
+const TV_BALL_SIZE =
+  'min(64vh, calc(100vh - var(--tv-top) - var(--tv-band) - var(--tv-foot) - 2 * var(--tv-pad-y)), calc(100vw - 2 * var(--tv-pad-x) - var(--tv-qr-col) - var(--tv-gap) - 2 * (var(--tv-snowball) + 10px)))';
+// The design's shadow, scaled with the ball: a dark edge, a gold glow below and
+// an inner shade (6px, 24px 80px and -40px 90px at 1080p).
+const TV_BALL_SHADOW_CLASS =
+  'shadow-[0_0_0_0.56vh_color-mix(in_srgb,var(--anchor-green-deep)_60%,transparent),0_2.2vh_7.4vh_color-mix(in_srgb,var(--anchor-gold-bright)_25%,transparent),inset_0_-3.7vh_8.3vh_rgb(0_0_0/0.3)]';
+
+// Recent calls: the newest chip is 104px with a 5px gold border, the rest 84px
+// (69px and 56px at 720p, where the numerals are 37px and 31px).
+const TV_CHIP_LATEST_SIZE = 'clamp(69px, 9.63vh, 104px)';
+const TV_CHIP_SIZE = 'clamp(56px, 7.78vh, 84px)';
+
+// The win, by how much has to fit under it. Tier 0 is the design: the 200px
+// headline over one row of balls (a Line) or none. Tier 1 is for two rows of
+// balls or a long headline, tier 2 for three rows (a Full House), so the whole
+// announcement still fits the main area at 1280x720.
+const WIN_HEADLINE_CLASS = [
+  cn(TV_SIZE.win, 'leading-[0.88]'),
+  cn(TV_SIZE.count, 'leading-[0.9]'),
+  tvText('2xl', 'leading-[1.05]'),
+];
+const WIN_SCRIPT_CLASS = [TV_SIZE.scriptXl, TV_SIZE.scriptLg, TV_SIZE.callout];
+const WIN_GAP_CLASS = ['gap-[clamp(16px,3.3vh,36px)]', 'gap-[clamp(13px,2.4vh,26px)]', 'gap-[clamp(10px,1.7vh,18px)]'];
+/** A win headline longer than this ("Full house + snowball £180!") cannot take the biggest size. */
+const WIN_LONG_TEXT_LENGTH = 18;
 
 /**
  * Reads a game and its public state together. Used for every game switch, so
@@ -862,30 +931,37 @@ export default function DisplayUI({
     ? getSnowballWindowStatus(revealedCallCount, currentSnowballPot.current_max_calls)
     : null;
 
-  const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
-  const dimTextColor = 'text-white';
-  // Key information (stage, prize, snowball), one line each: three lines of
-  // tv-base fill the 10rem footer at 1080p, so a long prize ends in "..."
-  // rather than spilling out of the footer.
-  const footerLeftTextClass = tvText('base', 'truncate font-semibold text-white');
+  // The book colour is a band under the top bar and a chip beside the game's
+  // number, never the screen's background: text always sits on the dark green,
+  // whatever the colour (a white or pale yellow book included).
+  const bookColour = currentActiveGame?.background_colour || null;
+  // "Game 2 of 10 · Blue book": key information, so the key-information size,
+  // in the kicker's gold capitals.
+  const gameIdentityClass = tvText('base', 'font-bold uppercase leading-[1.1] tracking-[0.1em] text-anchor-gold-bright');
+  // The footer's stage, prize and snowball: a kicker over the value, one line
+  // each, so a long prize ends in "..." rather than spilling out of the footer.
+  const footerCellClass = 'flex flex-col gap-[clamp(4px,0.55vh,6px)]';
+  const footerRuleClass = 'h-[clamp(74px,10.2vh,110px)] w-px shrink-0 bg-line-gold';
+  const footerMoneyClass = cn(TV_SIZE.barPrize, 'truncate font-display leading-[1.1] text-anchor-gold-bright');
   // The break and between-games screens share one centred column (the end
-  // of the night is a slide loop of its own). Sizes are the text-tv-* tokens
-  // (tailwind.config.ts). Headlines sit on a backing panel, never straight on
-  // the game colour, which can be a pale yellow or peach.
-  const serviceColumnClass = "mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-4 2xl:gap-6 text-center";
-  const serviceCardPadClass = "p-4 2xl:p-5";
-  const serviceHeadlinePanelClass = "rounded-3xl border border-[#1f7c58] bg-[#003f27]/85 backdrop-blur-md";
-  // The backing panel for a slide that is drawn straight on the screen colour
-  // elsewhere (events, the next bingo night): the rules slide's panel.
-  const pauseSlidePanelClass =
-    "mx-auto h-full w-full max-w-[1800px] overflow-hidden rounded-3xl border border-[#1f7c58] bg-[#003f27]/90 px-[2.5vh] py-[2vh]";
-  const serviceEyebrowClass = tvText('xs', 'uppercase tracking-[0.2em] text-white/85 font-semibold');
-  const serviceHeadlineClass = tvText('xl', 'font-black uppercase tracking-[0.07em] text-white mt-1');
-  const serviceSubheadClass = tvText('sm', 'text-white/90 mt-2');
-  const servicePromoTitleClass = tvText('lg', 'font-black uppercase tracking-[0.08em] text-white');
-  const servicePromoBodyClass = tvText('sm', 'text-white mt-2 font-medium');
-  const serviceCardTitleClass = tvText('base', 'font-bold text-white');
-  const serviceCardBodyClass = tvText('sm', 'text-white/90 mt-1');
+  // of the night is a slide loop of its own): kicker, headline, a line of
+  // body and the kitchen card, straight on the dark green.
+  const serviceColumnClass =
+    'mx-auto flex h-full w-full max-w-[1200px] flex-col items-center justify-center gap-[clamp(16px,2.6vh,40px)] text-center';
+  // The line under a win, "£10 · Line · call 22": the stage's prize, the stage
+  // and the revealed count. Recording a winner pauses the game in the same
+  // write, so the count shown is the call the win was made on. A part that is
+  // not known is left out.
+  const winSummary = [
+    currentPrizeText,
+    currentStageName ? formatStageLabel(currentStageName) : null,
+    revealedCallCount > 0 ? `call ${revealedCallCount}` : null,
+  ].filter(Boolean).join(' · ');
+  // Which of the win's three sizes fits (WIN_HEADLINE_CLASS): by the rows of
+  // claimed balls under the headline (five a row) and by the headline's length.
+  const winBallRows = claimPanel ? Math.ceil(claimPanel.balls.length / 5) : 0;
+  const winTextIsLong = (currentGameState?.display_win_text?.length ?? 0) > WIN_LONG_TEXT_LENGTH;
+  const winTier = winBallRows >= 3 || (winBallRows === 2 && winTextIsLong) ? 2 : winBallRows === 2 || winTextIsLong ? 1 : 0;
   const stagePrizePreview = currentActiveGame
     ? currentActiveGame.stage_sequence.map((stage, index) => {
         const prize = currentActiveGame.prizes?.[stage as keyof typeof currentActiveGame.prizes];
@@ -904,24 +980,25 @@ export default function DisplayUI({
   );
 
   const renderKitchenCard = () => (
-    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl backdrop-blur-sm", serviceCardPadClass)}>
-      <h2 className={servicePromoTitleClass}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</h2>
-      <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
+    <div
+      className={cardClass({
+        accent: true,
+        className:
+          'mt-[1.5vh] flex min-w-[min(100%,70vh)] flex-col items-center gap-[0.75vh] px-[clamp(28px,2.5vw,56px)] py-[clamp(18px,3vh,36px)]',
+      })}
+    >
+      <p className={cn(TV_SIZE.callout, 'font-display leading-none')}>Kitchen open until {KITCHEN_OPEN_UNTIL}</p>
+      <p className={tvText('sm', 'font-medium')}>Order food and drinks at the bar.</p>
     </div>
   );
 
   const renderBreakSlide = () => (
     <div className={serviceColumnClass}>
-      <div className={cn(serviceHeadlinePanelClass, serviceCardPadClass)}>
-        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
-        <h1 className={serviceHeadlineClass}>Break Time</h1>
-        <p className={serviceSubheadClass}>Please hold your tickets, we will resume shortly.</p>
-      </div>
+      <p className={TV_KICKER_CLASS}>Anchor Bingo Night</p>
+      <h1 className={cn(TV_SIZE.hero, 'leading-[0.9]')}>Break time</h1>
+      <p className={tvText('base', 'font-medium')}>Hold on to your tickets. We will be back shortly.</p>
       {renderKitchenCard()}
-      <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl backdrop-blur-md", serviceCardPadClass)}>
-        <h3 className={serviceCardTitleClass}>We&apos;ll be back in a moment</h3>
-        <p className={serviceCardBodyClass}>Keep your tickets handy for the next call.</p>
-      </div>
+      <p className={cn(TV_SIZE.callout, 'mt-[0.7vh] font-script text-anchor-gold-bright')}>Eat, Drink, Enjoy</p>
     </div>
   );
 
@@ -929,25 +1006,23 @@ export default function DisplayUI({
   // name and colour once the game list is in.
   const renderNextGameSlide = () => (
     <div className={serviceColumnClass}>
-      <div className={cn(serviceHeadlinePanelClass, serviceCardPadClass)}>
-        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
-        <h1 className={serviceHeadlineClass}>Next game coming up</h1>
-        {nextGame && (
-          <div className="mt-[2vh] space-y-[1vh]">
-            <p className={tvText('base', 'font-bold text-white')}>{nextGame.name}</p>
-            {nextIdentity && (
-              <p className={tvText('base', 'flex items-center justify-center gap-[0.4em] font-bold text-[#f3d59d]')}>
-                <span
-                  aria-hidden
-                  className="inline-block shrink-0 rounded-full border-2 border-white"
-                  style={{ backgroundColor: nextGame.background_colour, width: '0.8em', height: '0.8em' }}
-                />
-                {nextIdentity}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
+      <p className={TV_KICKER_CLASS}>Anchor Bingo Night</p>
+      <h1 className={tvText('3xl')}>Next game coming up</h1>
+      {nextGame && (
+        <div className="flex flex-col items-center gap-[1vh]">
+          <p className={tvText('lg', 'font-display')}>{nextGame.name}</p>
+          {nextIdentity && (
+            <p className={cn(gameIdentityClass, 'flex items-center justify-center gap-[0.5em]')}>
+              <span
+                aria-hidden
+                className="inline-block shrink-0 rounded-full border-2 border-anchor-cream-text"
+                style={{ backgroundColor: nextGame.background_colour, width: '0.8em', height: '0.8em' }}
+              />
+              {nextIdentity}
+            </p>
+          )}
+        </div>
+      )}
       {renderKitchenCard()}
     </div>
   );
@@ -968,16 +1043,12 @@ export default function DisplayUI({
         return renderBreakSlide();
       case 'next_game':
         return renderNextGameSlide();
-      default: {
+      default:
         // Events, next bingo, thanks, review: shared with the idle /display.
-        // On a break and between games the event slides carry the status label too.
-        const promo = <PromoSlide slide={slide} nowMs={slideNowMs} statusLabel={pauseStatusLabel} />;
-        // Those slides are white text, drawn for the green screen before and
-        // after the night. While the night is paused the screen is the game's
-        // book colour, which can be white or a pale yellow, so there they sit
-        // on the same backing panel as the rules.
-        return pauseStatusLabel ? <div className={pauseSlidePanelClass}>{promo}</div> : promo;
-      }
+        // On a break and between games the event slides carry the status label
+        // too. They need no backing panel there any more: the screen stays
+        // dark green and the book colour is only the band under the top bar.
+        return <PromoSlide slide={slide} nowMs={slideNowMs} statusLabel={pauseStatusLabel} />;
     }
   };
 
@@ -993,8 +1064,8 @@ export default function DisplayUI({
   // its first response.
   if (loadPhase === 'loading') {
     return (
-      <div className={tvText('sm', 'flex h-screen items-center justify-center text-white')} style={{ backgroundColor: '#005131' }}>
-        <span className="inline-block h-[0.4em] w-[0.4em] animate-pulse rounded-full bg-current mr-[0.6em]" />
+      <div className={tvText('sm', 'relative flex h-screen items-center justify-center bg-anchor-green-deep font-medium text-anchor-cream-text')}>
+        <Grain />
         Connecting to game…
       </div>
     );
@@ -1007,61 +1078,80 @@ export default function DisplayUI({
       <div
         role="status"
         aria-live="polite"
-        className="flex h-screen flex-col items-center justify-center gap-5 px-10 text-center text-white"
-        style={{ backgroundColor: '#005131' }}
+        className="relative flex h-screen flex-col items-center justify-center gap-[clamp(16px,2.6vh,40px)] bg-anchor-green-deep px-[5vw] text-center text-anchor-cream-text"
       >
-        <p className={tvText('xs', 'uppercase tracking-[0.2em] font-semibold text-white/85')}>
+        <Grain />
+        <p className={TV_KICKER_CLASS}>
           Anchor Bingo Night
         </p>
-        <h1 className={tvText('2xl', 'font-black uppercase tracking-[0.07em]')}>
-          Reconnecting To The Game
+        <h1 className={tvText('2xl')}>
+          Reconnecting to the game
         </h1>
-        <p className={tvText('sm', 'text-white/90')}>
+        <p className={tvText('sm', 'font-medium')}>
           Hold on to your tickets, the screen will catch up in a moment.
         </p>
-        <span className="inline-block h-[1.5vh] w-[1.5vh] min-h-3 min-w-3 animate-pulse rounded-full bg-white" />
       </div>
     );
   }
 
   return (
     <div
-      className={cn(
-          "h-screen max-h-screen w-full flex flex-col transition-colors duration-1000 ease-in-out overflow-hidden relative text-white"
-      )}
-      style={{ backgroundColor: displayBackgroundColor }}
+      className="relative flex h-screen max-h-screen w-full flex-col overflow-hidden bg-anchor-green-deep text-anchor-cream-text"
+      style={TV_LAYOUT_VARS}
     >
+      {/* Film grain over the whole screen, bars and overlays included. */}
+      <Grain className="z-[90]" />
       <ConnectionBanner variant="tv" visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Top Bar */}
-      <div className="h-24 shrink-0 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10" data-check-overlap="top-bar">
-         <div className="flex items-center gap-4 shrink-0">
-             <div className="relative w-64 h-20">
-                 <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
-             </div>
-         </div>
-         {/* min-w-0 lets this column shrink inside the flex row, and truncate
+      <header
+        className="relative z-10 flex h-[var(--tv-top)] shrink-0 items-center gap-[var(--tv-pad-x)] border-b border-line-gold bg-anchor-green-deep/[0.88] px-[var(--tv-pad-x)]"
+        data-check-overlap="top-bar"
+      >
+         <AnchorLogo height={68} priority className="h-[clamp(46px,6.3vh,68px)]" />
+         {/* min-w-0 lets the name shrink inside the flex row, and truncate
              keeps a long session or game name to one line instead of pushing
-             out of the 6rem bar (X12f). During play the second line leads with
-             the game number and book colour (spec 5.3), at the key-information
-             size; with leading-[1.1] on the name the two lines fit the 6rem
-             bar at 1080p (41.6px + 51px). */}
-         <div className="min-w-0 flex-1 pl-6 text-right">
-             <h2 className={tvText('sm', 'truncate font-bold tracking-tight leading-[1.1]')}>{currentSession.name}</h2>
-             {hasRenderableGame && currentActiveGame && (
-               <p className={tvText('base', 'truncate font-medium uppercase tracking-wider', dimTextColor)}>
-                 {[activeIdentity, currentActiveGame.name].filter(Boolean).join(' · ')}
-               </p>
+             out of the bar (X12f). During play the right block leads with the
+             game number and book colour (spec 5.3) at the key-information
+             size, over the game's name, beside a chip in the book colour. With
+             leading-[1.1] the two lines fit the bar: 49px + 36px in 112px at
+             1080p, 33px + 24px in 76px at 720p. The block may take up to 62%
+             of the bar before its lines end in "...". */}
+         <h2 className={cn(TV_SIZE.barTitle, 'min-w-0 flex-1 truncate leading-[1.2]')}>{currentSession.name}</h2>
+         {hasRenderableGame && currentActiveGame && (
+           <div className="flex min-w-0 max-w-[62%] shrink-0 items-center gap-[clamp(16px,1.25vw,24px)]">
+             <div className="flex min-w-0 flex-col items-end gap-[2px]">
+               {activeIdentity && <p className={cn(gameIdentityClass, 'max-w-full truncate')}>{activeIdentity}</p>}
+               <p className={tvText('xs', 'max-w-full truncate font-medium leading-[1.1]')}>{currentActiveGame.name}</p>
+             </div>
+             {bookColour && (
+               <span
+                 aria-hidden
+                 className="h-[clamp(48px,6.67vh,72px)] w-[clamp(48px,6.67vh,72px)] shrink-0 rounded-full border-[length:clamp(3px,0.37vh,4px)] border-anchor-cream-text shadow-[0_0_0_2px_rgb(0_0_0/0.4)]"
+                 style={{ backgroundColor: bookColour }}
+               />
              )}
-         </div>
-      </div>
+           </div>
+         )}
+      </header>
+
+      {/* The book colour: a band under the top bar while a game is in play,
+          the break included. Nothing is ever written on it. */}
+      {hasRenderableGame && currentActiveGame && bookColour && (
+        <div
+          aria-hidden
+          className="h-[var(--tv-band)] shrink-0 transition-colors duration-[400ms] ease-anchor"
+          style={{ backgroundColor: bookColour }}
+          data-check-overlap="band"
+        />
+      )}
 
       {/* Main Content Area */}
-      <div className="flex-1 min-h-0 flex gap-6 relative p-6 overflow-hidden">
+      <div className="relative flex min-h-0 flex-1 gap-[var(--tv-gap)] overflow-hidden px-[var(--tv-pad-x)] py-[var(--tv-pad-y)]">
 
           {/* data-check-overlap marks the TV's main regions for the render
               check (scripts/check-render.js): none of them may overlap. The
               slide column is only marked while slides show, because the
-              snowball badge sits over its corner (clear of the ball) during
+              snowball card sits over its corner (clear of the ball) during
               play. */}
           {showCornerQr && (
             <div className="flex shrink-0 items-end" data-check-overlap="qr">
@@ -1085,57 +1175,52 @@ export default function DisplayUI({
             {showActiveGame && (
               <div className="flex flex-col items-center justify-center h-full w-full">
                 {currentNumberDelayed ? (
-                  <div className="relative animate-in zoom-in duration-300" data-check-overlap="ball">
-                     {/* Massive Main Number.
-                        The 19rem subtracted below is the real vertical chrome:
-                        h-24 top bar (6rem) + h-40 footer (10rem) + the main area's
-                        p-6 top and bottom (3rem) = 19rem. It used to say 18rem,
-                        which is exactly 1rem short, so at 1280x720 the calc asked
-                        for 432px against 416px available and flat-topped the ball
-                        by 8px top and bottom. Masked at 1080p only because the
-                        68vh term binds first there. */}
-                    <div
-                      className="relative bg-[#005131] border-4 border-white rounded-full flex items-center justify-center overflow-hidden"
-                      style={{
-                        ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 19rem))',
-                        width: 'var(--display-ball-size)',
-                        height: 'var(--display-ball-size)',
-                      } as React.CSSProperties}
-                    >
-                        <span
-                          className="block font-bold text-white text-center select-none leading-none"
-                          style={{
-                            fontSize: 'calc(var(--display-ball-size) * 0.73)',
-                            fontVariantNumeric: 'tabular-nums lining-nums',
-                          }}
-                        >
-                            {currentNumberDelayed}
-                        </span>
-                    </div>
+                  <div className="relative" data-check-overlap="ball">
+                     {/* The main ball. TV_BALL_SIZE is the design's 64vh capped
+                        by the real vertical chrome (the top bar, the band, the
+                        footer and the main area's padding, all from
+                        TV_LAYOUT_VARS), so it can never be flat-topped by the
+                        bars. Keyed on the number, so each new call scales in
+                        from 0.92 and fades in over 400ms (animate-ball-in;
+                        nothing moves under prefers-reduced-motion). */}
+                    <BingoBall
+                      key={currentNumberDelayed}
+                      number={currentNumberDelayed}
+                      size={TV_BALL_SIZE}
+                      numberScale={0.68}
+                      borderScale={0.02}
+                      className={cn('animate-ball-in', TV_BALL_SHADOW_CLASS)}
+                    />
                   </div>
                 ) : (
                   <>
                     {/* Stages and prizes are key information, so they are
                         not pulsed: people need to read them. */}
                     {showPreCallStagePreview ? (
-                      <div className="w-full max-w-6xl bg-[#005131]/92 border border-[#a57626] rounded-3xl p-8 text-white animate-in fade-in duration-500" data-check-overlap="stages">
-                        <p className={tvText('xs', 'uppercase tracking-[0.2em] font-semibold text-[#f3d59d] text-center')}>
-                          Game Stages & Prizes
+                      <div
+                        className={cardClass({
+                          accent: true,
+                          className: 'w-full max-w-[1100px] animate-fade-in p-[clamp(18px,3vh,40px)]',
+                        })}
+                        data-check-overlap="stages"
+                      >
+                        <p className={cn(TV_KICKER_CLASS, 'text-center')}>
+                          Game stages & prizes
                         </p>
-                        <div className="mt-5 space-y-3">
+                        <div className="mt-[clamp(12px,1.9vh,24px)] flex flex-col gap-[clamp(8px,1.1vh,14px)]">
                           {stagePrizePreview.map((item) => (
                             <div
                               key={`${item.stageLabel}-${item.index}`}
-                              className="grid grid-cols-[1fr_auto] gap-4 items-center bg-[#003f27]/75 border border-[#1f7c58] rounded-2xl px-5 py-4"
+                              className="flex items-baseline justify-between gap-[2vw] rounded-card border border-line bg-anchor-green-raised px-[clamp(16px,1.5vw,28px)] py-[clamp(10px,1.5vh,18px)]"
                             >
-                              <p className={tvText('base', 'font-bold tracking-wide')}>
+                              <p className={tvText('base', 'shrink-0 font-semibold')}>
                                 Stage {item.index + 1}: {item.stageLabel}
                               </p>
                               {/* An empty prize is a setup gap for the host to
                                   fix, not something to put in front of guests
                                   (X12e): the host screen still flags it. */}
                               {item.prizeLabel && (
-                                <p className={tvText('base', 'font-semibold text-[#f3d59d] text-right')}>
+                                <p className={tvText('lg', 'min-w-0 text-right font-display text-anchor-gold-bright')}>
                                   {item.prizeLabel}
                                 </p>
                               )}
@@ -1144,10 +1229,10 @@ export default function DisplayUI({
                         </div>
                       </div>
                     ) : (
-                      // On a backing panel at full strength: it used to be
-                      // 40 percent white straight on the game colour.
-                      <div className="rounded-3xl border border-[#1f7c58] bg-[#003f27]/85 px-[4vh] py-[2vh]" data-check-overlap="ready">
-                        <h1 className={tvText('3xl', 'font-bold text-white')}>READY...</h1>
+                      // Straight on the dark green: the screen is never the
+                      // game's colour now, so it needs no backing panel.
+                      <div data-check-overlap="ready">
+                        <h1 className={cn(TV_SIZE.hero, 'leading-[0.9]')}>Ready...</h1>
                       </div>
                     )}
                   </>
@@ -1156,124 +1241,158 @@ export default function DisplayUI({
             )}
           </div>
 
-          {/* Snowball countdown badge. Top right so it can never collide with
+          {/* Snowball countdown card. Top right so it can never collide with
               the corner QR, and static so it needs no prefers-reduced-motion
               opt-out. The z-70 claim overlay and the z-80 win overlay cover it
               as they cover everything else. */}
-          {/* max-w-[20vw] keeps the badge clear of the ball at 1280x720 and
-              1920x1080, so a long label such as "Last qualifying call" wraps
-              instead of running across the ball. */}
+          {/* max-w (--tv-snowball, 18.5vw) keeps the card clear of the ball at
+              1280x720 and 1920x1080, so a long label such as "Last qualifying
+              call" wraps instead of running across the ball. The ball's own
+              size allows for a card that wide (TV_BALL_SIZE). */}
           {isSnowballGame && (showActiveGame || showPausedForValidation) && currentSnowballPot && snowballWindowStatus && (
-            <div className="absolute top-4 right-4 z-40 max-w-[20vw] rounded-3xl border border-[#a57626] bg-[#005131]/92 px-6 py-4 text-center backdrop-blur-sm" data-check-overlap="snowball">
+            <div
+              className={cardClass({
+                className:
+                  'absolute right-[var(--tv-pad-x)] top-[var(--tv-pad-y)] z-40 flex min-w-[15vw] max-w-[var(--tv-snowball)] flex-col items-center gap-[0.4vh] px-[clamp(12px,1.25vw,32px)] py-[clamp(12px,1.85vh,20px)] text-center',
+              })}
+              data-check-overlap="snowball"
+            >
               {snowballWindowStatus === 'open' ? (
                 <>
-                  <p
-                    className={tvText('3xl', 'font-black leading-none text-[#f3d59d]')}
-                    style={{ fontVariantNumeric: 'tabular-nums lining-nums' }}
-                  >
+                  <p className={cn(TV_SIZE.count, 'font-display leading-[0.85] text-anchor-gold-bright tabular-nums lining-nums')}>
                     {snowballCallsRemaining}
                   </p>
-                  <p className={tvText('xs', 'mt-1 font-bold uppercase tracking-[0.16em] text-white')}>
-                    Calls Left
+                  <p className={TV_KICKER_CLASS}>
+                    Calls left
                   </p>
                 </>
               ) : (
-                <p className={tvText('base', 'font-black uppercase leading-[1.05] text-[#f3d59d]')}>
+                <p className={tvText('base', 'font-display leading-[1.05] text-anchor-gold-bright')}>
                   {snowballCallsLabel}
                 </p>
               )}
-              <p className={tvText('base', 'mt-2 font-bold text-white')}>
-                £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
+              <p className={tvText('base', 'mt-[0.5vh] font-semibold leading-[1.1] tabular-nums')}>
+                £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))} jackpot
               </p>
             </div>
           )}
 
           {/* The live claim (spec 5.2): each number as the caller reads it,
               ticked or crossed, then the server's verdict. It replaced the old
-              "Checking Claim" card. */}
+              "Checking Claim" card. It covers the main area only: the bars
+              stay. The panel brings its own padding (claim-panel.tsx). */}
           {showPausedForValidation && claimPanel && (
-            <div className="absolute inset-0 z-[70] flex items-center justify-center overflow-hidden bg-[#003f27]/95 backdrop-blur-md p-[1.5vh]">
-                <div className="w-full max-w-[1500px] rounded-3xl border border-[#a57626] bg-[#005131]/90 p-[2vh]" data-check-overlap="claim">
+            <div className="absolute inset-0 z-[70] flex items-center justify-center overflow-hidden bg-anchor-green-deep/[0.94] p-[clamp(12px,2.2vh,24px)] backdrop-blur-md">
+                <div className={cardClass({ className: 'w-full max-w-[1500px]' })} data-check-overlap="claim">
                     <ClaimPanel state={claimPanel} variant="tv" />
                 </div>
             </div>
           )}
 
           {/* WIN OVERLAY. The claimed balls stay on screen under the win, so
-              the room can see what won; the headline steps down a size when
-              they are there, so a Full House still fits at 1280x720. */}
+              the room can see what won; the headline and the script line step
+              down as the balls take more rows (winTier), so a Full House still
+              fits at 1280x720. The headline is the server's text, which is in
+              capitals; formatWinHeadline recases it. The balls sit on the deep
+              green here, so their badges take that border (--claim-surface). */}
           {showWinState && currentGameState && (
-            <div className="absolute inset-0 z-[80] flex flex-col items-center justify-center gap-[3vh] overflow-hidden bg-[#003f27]/95 backdrop-blur-md animate-in fade-in duration-300 p-[2vh] text-center">
-              <h1
-                className={tvText(
-                    claimPanel && claimPanel.balls.length > 0 ? '3xl' : '4xl',
-                    "leading-[0.9] font-black text-white"
+            <div className="absolute inset-0 z-[80] animate-fade-in overflow-hidden bg-anchor-green-deep/[0.95] backdrop-blur-md [--claim-surface:var(--anchor-green-deep)]">
+              <div
+                className={cn(
+                  'flex h-full animate-fade-up flex-col items-center justify-center p-[clamp(12px,2.2vh,24px)] text-center',
+                  WIN_GAP_CLASS[winTier]
                 )}
               >
-                  {currentGameState.display_win_text}
-              </h1>
-              {currentGameState.display_winner_name && (
-                  <div className="w-full max-w-5xl bg-[#005131]/92 px-12 py-8 rounded-3xl border border-[#a57626] backdrop-blur-xl animate-in slide-in-from-bottom duration-500">
-                      <p className={tvText('xs', 'text-[#f3d59d] uppercase tracking-[0.16em] mb-2 font-bold')}>Winner</p>
-                      <h2 className={tvText('2xl', 'font-black text-white break-words')}>{currentGameState.display_winner_name}</h2>
-                  </div>
-              )}
-              {claimPanel && <ClaimBalls balls={claimPanel.balls} variant="tv" />}
+                <p className={cn(WIN_SCRIPT_CLASS[winTier], 'font-script text-anchor-gold-bright')}>Well played</p>
+                <h1 className={WIN_HEADLINE_CLASS[winTier]}>
+                    {formatWinHeadline(currentGameState.display_win_text)}
+                </h1>
+                {currentGameState.display_winner_name && (
+                    <p className={tvText('base', 'break-words font-semibold')}>
+                        <span className={cn(TV_KICKER_CLASS, 'mr-[0.6em]')}>Winner</span>
+                        {currentGameState.display_winner_name}
+                    </p>
+                )}
+                {claimPanel && <ClaimBalls balls={claimPanel.balls} variant="tv" />}
+                {winSummary && <p className={tvText('base', 'font-semibold text-anchor-gold-bright')}>{winSummary}</p>}
+              </div>
             </div>
           )}
       </div>
 
-      {/* Footer Info Bar. h-40 rather than h-32 to clear the enlarged recent
-          calls strip. Its 10rem is one of the three terms in the main ball's
-          calc(100vh - 19rem) above (6rem top bar + 10rem footer + 3rem main
-          padding). Change this height and you must re-do that subtraction. It
+      {/* Footer Info Bar. Its height (--tv-foot: 184px at 1080p, 124px at
+          720p) is one of the terms in the main ball's size (TV_BALL_SIZE),
+          which reads the same variable, so the two cannot drift apart. It
           only shows while a game is being called, checked or won. */}
       {showFooter && (
-        <div className="h-40 shrink-0 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10" data-check-overlap="footer">
-              <div className="flex min-w-0 flex-col justify-center border-r border-white/10 pr-8">
-                  <p className={footerLeftTextClass}>
-                    Playing for: {formatStageLabel(currentStageName ?? undefined)}
-                  </p>
+        <footer
+          className="relative z-10 grid h-[var(--tv-foot)] shrink-0 grid-cols-[fit-content(55%)_minmax(0,1fr)] items-center gap-[clamp(36px,2.9vw,56px)] border-t border-line-gold bg-anchor-green-deep/[0.88] px-[var(--tv-pad-x)]"
+          data-check-overlap="footer"
+        >
+              <div className="flex min-w-0 items-center gap-[clamp(24px,2.5vw,48px)]">
+                  <div className={cn(footerCellClass, 'shrink-0')}>
+                    <p className={TV_KICKER_CLASS}>Playing for</p>
+                    <p className={cn(TV_SIZE.barValue, 'whitespace-nowrap font-semibold leading-[1.1]')}>
+                      {formatStageLabel(currentStageName ?? undefined)}
+                    </p>
+                  </div>
                   {/* Hidden when empty: "Prize not set" is for the host
                       screen only (X12e). */}
                   {currentPrizeText && (
-                    <p className={footerLeftTextClass}>
-                      Prize: {currentPrizeText}
-                    </p>
+                    <>
+                      <div aria-hidden className={footerRuleClass} />
+                      <div className={cn(footerCellClass, 'min-w-0')}>
+                        <p className={TV_KICKER_CLASS}>Prize</p>
+                        <p className={footerMoneyClass}>{currentPrizeText}</p>
+                      </div>
+                    </>
                   )}
                   {isSnowballGame && (
-                    <p className={footerLeftTextClass}>
-                      {currentSnowballPot
-                        ? `Snowball: £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}`
-                        : 'Snowball: countdown unavailable (no linked snowball pot)'}
-                    </p>
+                    <>
+                      <div aria-hidden className={footerRuleClass} />
+                      <div className={cn(footerCellClass, currentSnowballPot ? 'shrink-0' : 'min-w-0')}>
+                        <p className={TV_KICKER_CLASS}>Snowball</p>
+                        {currentSnowballPot ? (
+                          <p className={cn(footerMoneyClass, 'tabular-nums')}>
+                            £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
+                          </p>
+                        ) : (
+                          <p className={tvText('base', 'truncate font-semibold')}>
+                            Countdown unavailable (no linked snowball pot)
+                          </p>
+                        )}
+                      </div>
+                    </>
                   )}
               </div>
 
-              <div className="flex flex-col justify-center pl-8 overflow-hidden">
+              <div className="flex min-w-0 flex-col gap-[clamp(8px,1.1vh,12px)] overflow-hidden">
                   {delayedNumbers.length > 0 && (
                       <>
-                        <div className="flex justify-between items-end gap-4 mb-2">
-                            <span className={tvText('xs', "uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
-                            <span className={tvText('xs', "uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {revealedCallCount}</span>
+                        <div className="flex items-baseline justify-between gap-4">
+                            <span className={TV_KICKER_CLASS}>Recent calls</span>
+                            <span className={tvText('xs', 'font-semibold tabular-nums')}>{revealedCallCount} called</span>
                         </div>
-                        {/* The digits stay in px: they are sized to the
-                            balls, which are fixed rem like the footer. 44px
-                            in the small balls is the key-information floor. */}
-                        <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
+                        {/* The chips are sized by height like the footer they
+                            sit in. The numerals are at least the
+                            key-information size: 46px in the 84px chips at
+                            1080p, 31px in the 56px chips at 720p. */}
+                        <div className="flex items-center gap-[clamp(11px,1.5vh,16px)] overflow-hidden mask-linear-fade">
                             {delayedNumbers.slice().reverse().map((num, idx) => (
-                                <div key={idx} className={cn(
-                                    "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
-                                    idx === 0 ? "w-[5.6rem] h-[5.6rem] text-[50px] border-4 border-white" : "w-[4.2rem] h-[4.2rem] text-[44px] opacity-70"
-                                )}>
-                                    {num}
-                                </div>
+                                <NumberChip
+                                  key={idx}
+                                  number={num}
+                                  latest={idx === 0}
+                                  size={idx === 0 ? TV_CHIP_LATEST_SIZE : TV_CHIP_SIZE}
+                                  numberScale={idx === 0 ? 0.54 : 0.55}
+                                  className={idx === 0 ? 'border-[length:clamp(3px,0.46vh,5px)]' : undefined}
+                                />
                             ))}
                         </div>
                       </>
                   )}
               </div>
-          </div>
+          </footer>
       )}
     </div>
   );

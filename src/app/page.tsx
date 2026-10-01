@@ -1,57 +1,58 @@
-"use client";
-
 import Link from 'next/link';
-import Image from 'next/image';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { ChevronRight, Mic, Settings, Tv } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { BrandBackdrop } from '@/components/brand-backdrop';
+import { CopyrightLine } from '@/components/copyright-line';
+import { cardClass } from '@/components/ui/card';
+import { AnchorLogo } from '@/components/ui/logo';
+
+interface RoleLink {
+  href: string;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+}
+
+const ROLES: RoleLink[] = [
+  { href: '/host', label: 'Host console', hint: "Run tonight's games", icon: Mic },
+  { href: '/display', label: 'Pub TV', hint: 'Open the big screen on this device', icon: Tv },
+  { href: '/admin', label: 'Admin', hint: 'Sessions, pots and winners', icon: Settings },
+];
 
 export default function Home() {
   return (
-    <div className="flex-1 w-full flex flex-col items-center justify-center p-4 bg-gradient-to-b from-[#005131] to-[#003f27] text-white relative overflow-hidden">
-      {/* Ambient Background Effects */}
-      <div className="absolute top-0 left-1/4 w-96 h-96 bg-white/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-[#a57626]/20 rounded-full blur-3xl pointer-events-none" />
+    <div className="relative flex flex-1 flex-col overflow-hidden bg-anchor-green-deep">
+      <BrandBackdrop />
 
-      <div className="z-10 flex flex-col items-center w-full max-w-md gap-8">
-        {/* Hero Logo */}
-        <div className="relative w-80 h-36 md:w-[28rem] md:h-48 animate-in zoom-in duration-700">
-          <Image 
-            src="/the-anchor-pub-logo-white-transparent.png" 
-            alt="The Anchor" 
-            fill
-            className="object-contain"
-            priority
-          />
+      <div className="relative mx-auto flex w-full max-w-md flex-1 flex-col gap-6 px-5 pb-7 pt-[calc(env(safe-area-inset-top)+3rem)]">
+        <div className="flex flex-col items-center gap-3.5 text-center">
+          <AnchorLogo height={92} priority />
+          <span className="font-script text-[34px] text-anchor-gold-bright">Where everyone&apos;s welcome</span>
+          <h1 className="text-[40px] leading-none text-anchor-cream-text">Bingo night</h1>
+          <p className="max-w-[30ch] text-[15px] text-anchor-cream-text/85">
+            Staff tools for running the night. Pick where you are heading.
+          </p>
         </div>
-        
-        <Card className="w-full bg-[#005131]/90 border-[#1f7c58] backdrop-blur-sm shadow-2xl animate-in slide-in-from-bottom duration-700 delay-200">
-          <CardContent className="grid gap-4 p-6">
-            <div className="space-y-2 text-center mb-2">
-              <h2 className="text-emerald-50 font-semibold tracking-wide uppercase text-sm">Select Your Role</h2>
-            </div>
 
-            <Link href="/admin" className="w-full group">
-              <Button variant="outline" className="w-full h-16 text-lg justify-between px-6 border-[#2f8f6a] bg-[#0f6846]/70 hover:bg-[#0f6846] hover:border-[#a57626] hover:text-[#a57626] transition-all duration-300">
-                <span className="font-bold">Admin Dashboard</span>
-                <span className="text-2xl group-hover:scale-110 transition-transform">🛠️</span>
-              </Button>
+        <nav aria-label="Where to go" className="mt-auto flex flex-col gap-2.5">
+          {ROLES.map(({ href, label, hint, icon: Icon }) => (
+            <Link
+              key={href}
+              href={href}
+              className={cardClass({ hover: true, className: 'flex items-center gap-3.5 p-4' })}
+            >
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-card border border-line-gold bg-anchor-gold-bright/[0.12] text-anchor-gold-bright">
+                <Icon aria-hidden="true" size={24} strokeWidth={2} />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="font-display text-[22px] leading-[1.1]">{label}</span>
+                <span className="text-[13px] text-anchor-sage">{hint}</span>
+              </span>
+              <ChevronRight aria-hidden="true" size={20} strokeWidth={2} className="shrink-0 text-anchor-gold-bright" />
             </Link>
-            
-            <Link href="/host" className="w-full group">
-              <Button variant="outline" className="w-full h-16 text-lg justify-between px-6 border-[#2f8f6a] bg-[#0f6846]/70 hover:bg-[#0f6846] hover:border-[#a57626] hover:text-[#a57626] transition-all duration-300">
-                <span className="font-bold">Host Controller</span>
-                <span className="text-2xl group-hover:scale-110 transition-transform">🎤</span>
-              </Button>
-            </Link>
-            
-            <Link href="/display" className="w-full group">
-              <Button variant="outline" className="w-full h-16 text-lg justify-between px-6 border-[#2f8f6a] bg-[#0f6846]/70 hover:bg-[#0f6846] hover:border-[#a57626] hover:text-[#a57626] transition-all duration-300">
-                <span className="font-bold">Guest Display</span>
-                <span className="text-2xl group-hover:scale-110 transition-transform">📺</span>
-              </Button>
-            </Link>
-          </CardContent>
-        </Card>
+          ))}
+          <CopyrightLine className="mt-2.5 text-center text-xs text-anchor-sage" />
+        </nav>
       </div>
     </div>
   );

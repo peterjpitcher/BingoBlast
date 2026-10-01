@@ -4,18 +4,22 @@
 // night_over loop and comes back after every two events, so the booking
 // prompt itself is left to the event and next-bingo slides and their QR codes.
 import React from 'react';
-import { tvText } from './tv-text';
+import { cn } from '@/lib/utils';
+import { TV_KICKER_CLASS, TV_SIZE, tvText } from './tv-text';
 
 export function ThanksSlide() {
   return (
     <section
       aria-label="Thanks for coming"
-      className="mx-auto flex h-full w-full max-w-[1500px] flex-col items-center justify-center gap-[3vh] text-center text-white"
+      className="mx-auto flex h-full w-full max-w-[1500px] flex-col items-center justify-center gap-[clamp(16px,2.6vh,40px)] text-center text-anchor-cream-text"
     >
-      <p className={tvText('xs', 'font-semibold uppercase tracking-[0.2em] text-white/85')}>Anchor Bingo Night</p>
-      {/* Bigger than the slide titles: this is the whole slide. */}
-      <h1 className={tvText('2xl', 'font-black uppercase tracking-[0.06em]')}>Thanks for coming!</h1>
-      <p className={tvText('base', 'font-semibold')}>Please book your table for our next bingo event before you leave.</p>
+      <p className={TV_KICKER_CLASS}>Anchor Bingo Night</p>
+      {/* The biggest headline: this is the whole slide. */}
+      <h1 className={cn(TV_SIZE.hero, 'leading-[0.9]')}>Thanks for coming</h1>
+      <p className={cn(TV_SIZE.scriptLg, 'font-script text-anchor-gold-bright')}>Where everyone&apos;s welcome</p>
+      <p className={tvText('base', 'mt-[1.5vh] max-w-[30ch] font-medium')}>
+        Book your table for the next bingo night at the bar before you leave.
+      </p>
     </section>
   );
 }

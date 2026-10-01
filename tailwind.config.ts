@@ -8,20 +8,66 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // The Anchor palette. The values live in globals.css (:root), the one
+      // source; these only name them as utilities.
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
-        bingo: {
-          primary: "#EC4899", // Pink-500
-          secondary: "#F59E0B", // Amber-500
-          accent: "#6366F1", // Indigo-500
-          dark: "#0F172A", // Slate-900
-          surface: "#1E293B", // Slate-800
-        }
+        anchor: {
+          green: "var(--anchor-green)", // bingo balls
+          "green-dark": "var(--anchor-green-dark)",
+          "green-deep": "var(--anchor-green-deep)", // the page
+          "green-raised": "var(--anchor-green-raised)", // rows and chips on a card
+          "green-card": "var(--anchor-green-card)", // cards, sheets, dialogs
+          "green-light": "var(--anchor-green-light)",
+          sunk: "var(--surface-sunk)",
+          sage: "var(--anchor-sage)", // muted text
+          gold: "var(--anchor-gold)", // fills (the primary button)
+          "gold-dark": "var(--anchor-gold-dark)",
+          "gold-bright": "var(--anchor-gold-bright)", // accents and text on dark
+          charcoal: "var(--anchor-charcoal)", // text on gold
+          cream: "var(--anchor-cream)",
+          "cream-text": "var(--anchor-cream-text)", // body text
+          sand: "var(--anchor-sand)",
+          "grey-500": "var(--anchor-grey-500)",
+          success: "var(--anchor-success)",
+          "success-text": "var(--anchor-success-text)",
+          danger: "var(--anchor-danger)", // fills and borders
+          "danger-text": "var(--anchor-danger-text)", // text on a dark surface
+        },
+        // Gold hairlines: border-line (rows), border-line-strong (inputs,
+        // emphasis), border-line-gold (cards, bars).
+        line: {
+          DEFAULT: "var(--border)",
+          strong: "var(--border-strong)",
+          gold: "var(--border-gold)",
+        },
+        scrim: "var(--scrim)",
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)", "sans-serif"],
-        mono: ["var(--font-geist-mono)", "monospace"],
+        sans: ["var(--font-body)", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        display: ["var(--font-display)", "Times New Roman", "serif"],
+        script: ["var(--font-script)", "Brush Script MT", "cursive"],
+      },
+      // Four shapes only: 3px dark cards and number tiles, 6px inputs, and
+      // rounded-full for buttons, badges, balls and chips.
+      borderRadius: {
+        card: "3px",
+        input: "6px",
+      },
+      boxShadow: {
+        gold: "var(--shadow-gold)",
+        lift: "var(--shadow-lg)",
+        sheet: "0 -20px 60px rgba(0, 0, 0, 0.4)",
+      },
+      transitionTimingFunction: {
+        anchor: "cubic-bezier(0.16, 1, 0.3, 1)",
+      },
+      // Fades and short rises only (150 to 400ms), no bounces and no loops on
+      // content. globals.css switches all of them off for reduced motion.
+      animation: {
+        "fade-up": "anchor-fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "fade-in": "anchor-fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "sheet-up": "anchor-sheet-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "ball-in": "anchor-ball-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both",
       },
       // Pub TV text (spec 5.7). Each is clamp(size at 1280x720, vh term, cap),
       // with the vh term landing on the 1920x1080 size, so the floors hold on

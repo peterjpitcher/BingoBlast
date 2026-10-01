@@ -13,22 +13,26 @@ interface PhoneRulesProps {
 
 export function PhoneRules({ rules }: PhoneRulesProps) {
   return (
-    <div className="space-y-4 text-left">
-      <p className="text-base font-semibold text-white">{PHONE_FOLLOW_ONLY_NOTE}</p>
-      <ol className="space-y-2">
+    <div className="flex flex-col gap-3 text-left">
+      <p className="text-sm font-semibold leading-normal text-anchor-sage">{PHONE_FOLLOW_ONLY_NOTE}</p>
+      <ol className="flex flex-col gap-2">
         {rules.map((rule, index) => (
-          <li key={index} className="flex gap-2 text-base leading-snug text-white">
-            <span className="shrink-0 font-bold text-[#f3d59d]">{index + 1}.</span>
+          <li key={index} className="flex gap-2.5 text-[15px] leading-[1.45] text-anchor-cream-text">
+            <span className="min-w-[18px] shrink-0 font-display text-lg leading-[1.2] text-anchor-gold-bright tabular-nums">
+              {index + 1}
+            </span>
             <span>{rule}</span>
           </li>
         ))}
       </ol>
-      <div>
-        <h3 className="mb-1 text-sm font-bold uppercase tracking-wide text-[#f3d59d]">How to win</h3>
-        <ul className="space-y-1">
+      <div className="border-t border-line pt-3">
+        {/* A heading for screen readers, set as a kicker: the kicker class
+            puts it back in the body face. */}
+        <h3 className="kicker mb-2">How to win</h3>
+        <ul className="flex flex-col gap-1 text-[15px] leading-[1.45] text-anchor-cream-text">
           {HOW_TO_WIN.map((line) => (
-            <li key={line.stage} className="text-base leading-snug text-white">
-              <span className="font-bold">{line.stage}:</span> {line.text}
+            <li key={line.stage}>
+              <strong className="font-bold">{line.stage}:</strong> {line.text}
             </li>
           ))}
         </ul>

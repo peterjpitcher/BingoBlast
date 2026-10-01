@@ -5,14 +5,31 @@ import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { createSession, deleteSession, duplicateSession, updateSession } from './actions';
 import { formatDateInLondon } from '@/lib/dates';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button, buttonClass } from '@/components/ui/button';
+import { Kicker } from '@/components/ui/kicker';
 import { Modal } from '@/components/ui/modal';
-import { Input } from '@/components/ui/input';
+import { Input, fieldClass, fieldLabelClass } from '@/components/ui/input';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 type Session = Database['public']['Tables']['sessions']['Row'];
+
+// The admin table (design handoff, section 6): small sage column heads over a
+// gold hairline, 15px cream cells, a hairline between rows and a faint gold
+// wash on hover.
+const TH = "whitespace-nowrap border-b border-line-gold px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-[0.1em] text-anchor-sage";
+const TD = "px-5 py-4 align-middle text-[15px]";
+const ROW = "border-b border-line transition-colors duration-150 last:border-b-0 hover:bg-anchor-gold-bright/[0.05]";
+const ERROR_PANEL = "rounded-card border border-anchor-danger bg-anchor-danger/[0.12] px-4 py-3 text-sm text-anchor-danger-text";
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: 'Draft',
+  ready: 'Ready',
+  running: 'Running',
+  completed: 'Completed',
+};
 
 interface AdminDashboardProps {
   sessions: Session[];
@@ -107,102 +124,104 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
       }
   }
 
-  const getStatusBadge = (status: string) => {
-    const styles = {
-      draft: "bg-slate-700 text-slate-300",
-      ready: "bg-blue-900/50 text-blue-300 border-blue-800",
-      running: "bg-green-900/50 text-green-300 border-green-800 animate-pulse",
-      completed: "bg-slate-800 text-slate-500",
-    };
-    return cn("px-2.5 py-0.5 rounded-full text-xs font-medium border border-transparent", styles[status as keyof typeof styles] || styles.draft);
-  };
+  // Running is the one live state, so it alone takes the green badge and dot.
+  const getStatusBadge = (status: string) =>
+    status === 'running' ? (
+      <Badge variant="success" dot>Running</Badge>
+    ) : (
+      <Badge variant="outline">{STATUS_LABELS[status] ?? status}</Badge>
+    );
 
   const isDeleteConfirmed = deleteTarget !== null && deleteTyped === deleteTarget.name;
 
   return (
     <>
-      <Card className="bg-slate-900 border-slate-800">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Sessions</CardTitle>
-          <Button onClick={handleShowCreate}>
-            + New Session
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {actionError && !showSessionModal && (
-            <div className="mb-4 rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
-              {actionError}
-            </div>
-          )}
-          {sessions.length === 0 ? (
-            <div className="text-center py-12 text-slate-500">
-              <p>No sessions found. Create one to get started.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400">
-                    <th className="h-12 px-4 font-medium">Name</th>
-                    <th className="h-12 px-4 font-medium">Date</th>
-                    <th className="h-12 px-4 font-medium">Status</th>
-                    <th className="h-12 px-4 font-medium">Type</th>
-                    <th className="h-12 px-4 font-medium text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((session) => (
-                    <tr key={session.id} className="border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
-                      <td className="p-4 font-medium text-white">{session.name}</td>
-                      <td className="p-4 text-slate-300">{formatDateInLondon(session.start_date)}</td>
-                      <td className="p-4">
-                        <span className={getStatusBadge(session.status)}>
-                          {session.status.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="p-4">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+        <div className="flex flex-col gap-1.5">
+          <Kicker>Admin</Kicker>
+          <h1 className="text-[44px] leading-none text-anchor-cream-text">Sessions</h1>
+          <p className="text-base text-anchor-sage">
+            A session is one bingo night. Set it up here, hand it to the host, settle it after.
+          </p>
+        </div>
+        <Button variant="primary" size="md" onClick={handleShowCreate}>
+          New session
+        </Button>
+      </div>
+
+      {actionError && !showSessionModal && (
+        <div className={ERROR_PANEL}>
+          {actionError}
+        </div>
+      )}
+
+      <Card accent className="overflow-hidden">
+        {sessions.length === 0 ? (
+          <p className="px-5 py-8 text-[15px] text-anchor-sage">No sessions found. Create one to get started.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] border-collapse text-left">
+              <thead>
+                <tr>
+                  <th className={TH}>Session</th>
+                  <th className={TH}>Date</th>
+                  <th className={TH}>Status</th>
+                  <th className={cn(TH, "text-right")}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((session) => (
+                  <tr key={session.id} className={ROW}>
+                    <td className={TD}>
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-display text-xl leading-tight">{session.name}</span>
                         {session.is_test_session && (
-                          <span className="px-2 py-0.5 rounded-full bg-cyan-900/30 text-cyan-300 text-xs border border-cyan-800">
-                            TEST
-                          </span>
+                          <Badge variant="outline">Test</Badge>
                         )}
-                      </td>
-                      <td className="p-4 text-right space-x-2">
-                        <Link href={`/admin/sessions/${session.id}`}>
-                          <Button variant="outline" size="sm">
-                            Manage
-                          </Button>
+                      </div>
+                    </td>
+                    <td className={cn(TD, "whitespace-nowrap text-anchor-sage")}>{formatDateInLondon(session.start_date)}</td>
+                    <td className={TD}>
+                      {getStatusBadge(session.status)}
+                    </td>
+                    <td className={cn(TD, "text-right")}>
+                      <div className="inline-flex items-center gap-1.5">
+                        <Link
+                          href={`/admin/sessions/${session.id}`}
+                          className={buttonClass({ variant: 'outline', size: 'sm', className: 'px-[18px]' })}
+                        >
+                          Manage
                         </Link>
-                        <Button variant="ghost" size="sm" onClick={() => handleShowEdit(session)}>
+                        <Button variant="ghost" size="sm" className="px-3.5" onClick={() => handleShowEdit(session)}>
                           Edit
                         </Button>
-                        <Button variant="secondary" size="sm" onClick={() => handleDuplicate(session.id)}>
-                          Copy
+                        <Button variant="ghost" size="sm" className="px-3.5" onClick={() => handleDuplicate(session.id)}>
+                          Duplicate
                         </Button>
-                        <Button variant="danger" size="sm" onClick={() => handleShowDelete(session)}>
+                        <Button variant="ghost" tone="quiet" size="sm" className="px-3.5" onClick={() => handleShowDelete(session)}>
                           Delete
                         </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       <Modal
         isOpen={showSessionModal}
         onClose={handleClose}
-        title={editingSession ? "Edit Session" : "Create New Session"}
+        title={editingSession ? "Edit session" : "New session"}
         footer={
             <>
-                <Button variant="ghost" onClick={handleClose} disabled={isSubmitting}>
+                <Button variant="ghost" size="sm" onClick={handleClose} disabled={isSubmitting}>
                   Cancel
                 </Button>
-                <Button form="sessionForm" type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? 'Saving...' : (editingSession ? 'Save Changes' : 'Create Session')}
+                <Button variant="primary" size="sm" form="sessionForm" type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? 'Saving...' : (editingSession ? 'Save changes' : 'Create session')}
                 </Button>
             </>
         }
@@ -211,16 +230,16 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
           key={editingSession?.id || 'new-session'}
           id="sessionForm"
           onSubmit={handleSessionSubmit}
-          className="space-y-4"
+          className="flex flex-col gap-4"
         >
           {actionError && (
-            <div className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
+            <div className={ERROR_PANEL}>
               {actionError}
             </div>
           )}
 
-          <div className="space-y-2">
-            <label htmlFor="sessionName" className="text-sm font-medium text-slate-300">Session Name</label>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="sessionName" className={fieldLabelClass}>Session name</label>
             <Input
               id="sessionName"
               type="text"
@@ -232,27 +251,27 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
             />
           </div>
 
-          <div className="space-y-2">
-            <label htmlFor="sessionNotes" className="text-sm font-medium text-slate-300">Notes (Optional)</label>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="sessionNotes" className={fieldLabelClass}>Notes (optional)</label>
             <textarea
               id="sessionNotes"
               name="notes"
               defaultValue={editingSession?.notes || ""}
               rows={3}
-              className="flex w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bingo-primary disabled:cursor-not-allowed disabled:opacity-50"
+              className={fieldClass}
             />
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2.5">
             <input
                 type="checkbox"
                 id="isTestSession"
                 name="is_test_session"
                 defaultChecked={editingSession?.is_test_session || false}
-                className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-bingo-primary focus:ring-bingo-primary"
+                className="h-5 w-5 shrink-0 accent-anchor-gold-bright"
             />
-            <label htmlFor="isTestSession" className="text-sm font-medium text-slate-300">
-                This is a Test Session
+            <label htmlFor="isTestSession" className={fieldLabelClass}>
+                This is a test session
             </label>
           </div>
         </form>
@@ -265,11 +284,12 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
         title={deleteTarget ? `Delete session "${deleteTarget.name}"?` : 'Delete session?'}
         footer={
           <>
-            <Button variant="ghost" onClick={handleCloseDelete} disabled={isDeleting}>
+            <Button variant="ghost" size="sm" onClick={handleCloseDelete} disabled={isDeleting}>
               Cancel
             </Button>
             <Button
-              variant="danger"
+              variant="primary"
+              size="sm"
               onClick={handleConfirmDelete}
               disabled={!isDeleteConfirmed || isDeleting}
             >
@@ -279,21 +299,21 @@ export default function AdminDashboard({ sessions }: AdminDashboardProps) {
         }
       >
         {deleteTarget && (
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             {deleteError && (
-              <div className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
+              <div className={ERROR_PANEL}>
                 {deleteError}
               </div>
             )}
-            <p className="text-sm text-white/85">
+            <p>
               This will permanently delete the session and all of its games. This action cannot be undone.
             </p>
-            <p className="text-sm text-white/85">
+            <p className="text-sm text-anchor-sage">
               Sessions with started or completed games, or with recorded winners, cannot be deleted.
             </p>
-            <div className="space-y-2">
-              <label htmlFor="confirmDeleteSession" className="text-sm font-medium text-white/85">
-                Type the session name <span className="font-mono text-white">{deleteTarget.name}</span> to confirm:
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="confirmDeleteSession" className={fieldLabelClass}>
+                Type the session name <span className="text-anchor-gold-bright">{deleteTarget.name}</span> to confirm:
               </label>
               <Input
                 id="confirmDeleteSession"

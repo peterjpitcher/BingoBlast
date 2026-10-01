@@ -11,12 +11,16 @@ import type { ActionFailureCode, ActionResult } from '@/types/actions';
 import { CLAIM_DRAFT_FLUSH_TIMEOUT_MS, createClaimDraftQueue, type ClaimDraftQueue, type ClaimDraftQueueState } from '@/lib/claim-draft-queue';
 import { createPollRunner } from '@/lib/poll-runner';
 import { describeWinnerTotal, winnerTotalPence } from '@/lib/money';
+import { Check, Coffee, Flag, Pause, TriangleAlert, Trophy, Undo2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Kicker } from '@/components/ui/kicker';
 import { Modal } from '@/components/ui/modal';
-import { Input } from '@/components/ui/input';
+import { Sheet } from '@/components/ui/sheet';
+import { Input, fieldClass, fieldLabelClass } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { BingoBall } from '@/components/ui/bingo-ball';
+import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
 import { useWakeLock } from '@/hooks/wake-lock';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
@@ -30,6 +34,7 @@ import { logError } from '@/lib/log-error';
 import { getNumberNickname } from '@/lib/number-nicknames';
 import { newClaimRequestId } from '@/lib/claim-request-id';
 import { PreGameBriefing } from '@/components/host/pre-game-briefing';
+import { HostAlert, PrizeGivenToggle, StatCell, StatusStrip, VerdictPanel } from '@/components/host/live-game-parts';
 
 type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -80,9 +85,11 @@ interface GameControlProps {
     currentUserRole: UserRole;
     isFirstGameOfSession: boolean;
     isLastGameOfSession: boolean;
+    /** The night's name, shown above the winners list. Display only. */
+    sessionName: string;
 }
 
-export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole, isFirstGameOfSession, isLastGameOfSession }: GameControlProps) {
+export default function GameControl({ sessionId, gameId, game, initialGameState, currentUserId, currentUserRole, isFirstGameOfSession, isLastGameOfSession, sessionName }: GameControlProps) {
     const router = useRouter();
     const [currentGameState, setCurrentGameState] = useState<GameState>(initialGameState);
     const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
@@ -582,7 +589,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         };
     }, [supabase, game.type, game.snowball_pot_id]);
 
-    // Shared poll routine — used by the polling interval, the visibility
+    // Shared poll routine: used by the polling interval, the visibility
     // handler, and the realtime reconnect path. Tracks an in-flight flag and a
     // monotonic sequence so a slow response can't clobber newer state.
     const pollGameState = useCallback(async () => {
@@ -742,7 +749,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             ),
     });
 
-    // Polling fallback — re-fetch game state every 3 seconds to recover from
+    // Polling fallback: re-fetch game state every 3 seconds to recover from
     // missed Realtime events. Skips when tab is hidden to save bandwidth.
     useEffect(() => {
         const interval = setInterval(() => {
@@ -1000,8 +1007,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
     /**
      * Every route out of this modal was gated on isSubmittingCashJackpot: Confirm
-     * is disabled by it, Cancel returns early while it is set, the ✕ calls Cancel
-     * and Escape clicks the ✕. So a rejected transition, which used to skip the
+     * is disabled by it, Cancel returns early while it is set, the close cross calls
+     * Cancel and Escape clicks the cross. So a rejected transition, which used to skip the
      * flag reset entirely, trapped the host with no way out but a reload, mid
      * game-transition. Hence the finally. The re-entrancy guard is the other half:
      * without it a double tap fired two game transitions.
@@ -1148,7 +1155,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         } catch (err) {
             logError('host-control', err);
             // Safe to repeat: a check that did start is adopted on the next tap.
-            setActionError("Could not reach the server to start the claim check. Check the connection and tap Check Claim again.");
+            setActionError("Could not reach the server to start the claim check. Check the connection and tap Check claim again.");
             setShowValidationModal(false);
         } finally {
             setIsPausing(false);
@@ -1203,7 +1210,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setActionError(null);
         const attemptId = claimAttemptIdRef.current;
         if (!attemptId) {
-            setActionError("This claim check has ended. Tap Check Claim to start again.");
+            setActionError("This claim check has ended. Tap Check claim to start again.");
             return;
         }
         if (requiredSelectionCount === null) {
@@ -1229,7 +1236,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             // Safe to repeat: the same attempt with the same numbers returns the
             // verdict already given.
             logError('host-control', err);
-            setActionError("Could not reach the server to check that claim. Check the connection and tap Check Win again.");
+            setActionError("Could not reach the server to check that claim. Check the connection and tap Check win again.");
         } finally {
             setIsCheckingWin(false);
         }
@@ -1350,7 +1357,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             // landed, and a second tap could record it twice. The attempt makes
             // that second tap safe, so the message says to take it.
             logError('host-control', err);
-            setActionError("Could not reach the server. Check the connection and tap Confirm Winner again: if the win did save, tapping again will not record it twice.");
+            setActionError("Could not reach the server. Check the connection and tap Confirm winner again: if the win did save, tapping again will not record it twice.");
         } finally {
             setIsRecordingWinner(false);
         }
@@ -1679,138 +1686,174 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isValidateButtonDisabled = !isController || isPausing || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0 || (isPausedForValidation && isCurrentStageWon);
     const isVoidLastNumberDisabled = !isController || isVoiding || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
     const canVoidWinner = currentUserRole === 'admin';
-    const hostSurfaceClass = "bg-[#003f27]/88 border border-[#1f7c58]";
-    // Errors are red, so they never read as one of the amber status banners
-    // (ON BREAK, CHECKING CLAIM) or the amber notices.
-    const modalErrorClass = "p-3 bg-red-950/80 border-2 border-red-500 text-white rounded";
     // Every modal that can produce an actionError now renders it inside itself,
     // because a banner on the page behind a modal is a banner the host never sees.
     // The page banner therefore stands down while one of those is open: two
     // role="alert" regions holding the same text would be announced twice.
+    // Errors are drawn by HostAlert (the danger border and a warning mark), so
+    // they never read as one of the gold status strips or the gold notices.
     const isActionErrorShownInModal = showValidationModal || showWinnerModal || showPostWinModal || showCashJackpotModal || showManualSnowballModal || showSessionWinnersModal || missingLastBall !== null;
 
+    // Presentation only from here: each value is derived from the ones above
+    // and changes nothing the screen does.
+    const gameKicker = `Game ${game.game_index} · ${game.name}`;
+    // The recent-calls strip runs newest first and starts with the ball on screen.
+    const recentCalls = [...(currentNumber ? [currentNumber] : []), ...[...lastNNumbers].reverse()];
+    // The Post Win dialog names the stage it was opened for (X2) and the one after it.
+    const postWinStageName = game.stage_sequence[postWinStage] || fallbackStageName;
+    const postWinNextStageName = postWinIsFinalStage ? null : (game.stage_sequence[postWinStage + 1] ?? null);
+    // The prize as it was recorded (the host can edit it before confirming),
+    // newest winner first. Left out until the winners list has it.
+    const postWinRecordedPrize = currentWinners.find(
+        (w) => w.stage === postWinStageName && w.is_void !== true,
+    )?.prize_description ?? null;
+    // What ending the game now leaves unplayed: this stage unless it has been
+    // won, and every stage after it.
+    const unplayedStages = game.stage_sequence.slice(currentGameState.current_stage_index + (isCurrentStageWon ? 1 : 0));
+    const unplayedStagesList = unplayedStages.length > 1
+        ? `${unplayedStages.slice(0, -1).join(', ')} and ${unplayedStages[unplayedStages.length - 1]}`
+        : (unplayedStages[0] ?? '');
 
     return (
-        <div className="p-4 pb-24 max-w-5xl mx-auto relative text-white">
-            {/* Controller Locked Overlay / Banner */}
-            {!isController && (
-                <div className="absolute inset-x-0 top-0 z-50 p-4">
-                    <div className="bg-[#003f27]/95 border border-[#a57626] text-white p-4 rounded-xl shadow-2xl backdrop-blur-sm flex flex-col items-center gap-3 text-center">
-                        <div>
-                            <h3 className="font-bold text-lg">View Only Mode</h3>
-                            <p className="text-sm text-white/85">Another host is currently controlling this game.</p>
+        <div className="relative">
+            {/* Status strips, full width under the header. */}
+            {isGameCompleted && <StatusStrip icon={Check} tone="quiet">Game completed</StatusStrip>}
+            {currentGameState.on_break && <StatusStrip icon={Coffee}>On break · calling paused</StatusStrip>}
+            {currentGameState.paused_for_validation && <StatusStrip icon={Pause}>Checking a claim</StatusStrip>}
+
+            <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pb-24 pt-4">
+                {/* View only: another host has control of this game. */}
+                {!isController && (
+                    <Card className="flex flex-col gap-3 border-line-strong p-4">
+                        <div className="flex flex-col gap-1">
+                            <Kicker>View only</Kicker>
+                            <p className="text-base leading-[1.45]">Another host is currently controlling this game.</p>
                         </div>
                         {canTakeControl && (
                             <Button
-                                variant="secondary"
-                                className="bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white min-h-[44px]"
+                                variant="primary"
+                                size="lg"
+                                block
+                                className="px-4"
                                 onClick={handleTakeControl}
                                 disabled={isTakingControl}
                             >
-                                {isTakingControl ? 'Taking control…' : 'Take Control'}
+                                {isTakingControl ? 'Taking control…' : 'Take control'}
                             </Button>
                         )}
-                    </div>
-                </div>
-            )}
+                    </Card>
+                )}
 
-            {/* Connection banner. Shows during a reconnect, and auto-refreshes
-                only when the browser believes it is online AND the host is not
-                mid-way through something a reload would throw away. */}
-            <ConnectionBanner
-                visible={health.shouldShowBanner}
-                shouldAutoRefresh={health.shouldAutoRefresh}
-                hasUnsavedWork={hasUnsavedWork}
-            />
+                {/* Connection banner. Shows during a reconnect, and auto-refreshes
+                    only when the browser believes it is online AND the host is not
+                    mid-way through something a reload would throw away. */}
+                <ConnectionBanner
+                    visible={health.shouldShowBanner}
+                    shouldAutoRefresh={health.shouldAutoRefresh}
+                    hasUnsavedWork={hasUnsavedWork}
+                />
 
-            <NewVersionBanner visible={showNewVersionPrompt} onReload={reloadForNewVersion} />
+                <NewVersionBanner visible={showNewVersionPrompt} onReload={reloadForNewVersion} />
 
-            {/* Alerts. Hidden while any modal that renders the same error inside
-                itself is open, because that is where the host can actually see it. */}
-            {actionError && !isActionErrorShownInModal && (
-                <div role="alert" className="mb-4 p-4 bg-red-950/80 border-2 border-red-500 text-white rounded-lg text-center font-semibold">{actionError}</div>
-            )}
-            {isGameCompleted && <div className="mb-4 p-4 bg-[#003f27]/90 border border-[#1f7c58] text-white rounded-lg text-center">Game Completed</div>}
-            {currentGameState.on_break && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">ON BREAK</div>}
-            {currentGameState.paused_for_validation && <div className="mb-4 p-4 bg-[#a57626]/25 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">CHECKING CLAIM...</div>}
+                {/* Alerts. Hidden while any modal that renders the same error inside
+                    itself is open, because that is where the host can actually see it. */}
+                {actionError && !isActionErrorShownInModal && (
+                    <HostAlert className="p-4">{actionError}</HostAlert>
+                )}
 
-            {/* Main Display Card */}
-            <Card className={cn(hostSurfaceClass, "mb-4 overflow-hidden")}>
-                <CardContent className="p-5 flex flex-col items-center text-center">
+                {/* Main card */}
+                <Card accent className="flex flex-col items-center gap-3.5 px-4 pb-4 pt-5 text-center">
                     {currentGameState.numbers_called_count === 0 ? (
-                        // Pre-game briefing — scrolls inside its own container so primary controls stay pinned.
-                        <div className="w-full max-h-[55vh] overflow-y-auto pr-1">
-                            <PreGameBriefing
-                                game={game}
-                                currentSnowballPot={currentSnowballPot}
-                                isFirstGameOfSession={isFirstGameOfSession}
-                            />
-                        </div>
+                        // Pre-game briefing. It runs to its full length and the
+                        // page scrolls; the control pad follows straight after it.
+                        <PreGameBriefing
+                            game={game}
+                            currentSnowballPot={currentSnowballPot}
+                            isFirstGameOfSession={isFirstGameOfSession}
+                        />
                     ) : (
                         <>
                             {currentNickname && (
-                                <h2 className="text-3xl font-bold text-white mb-3 animate-in fade-in slide-in-from-top-4">
+                                <h2 className="mt-0.5 text-[32px] leading-[1.05] text-anchor-cream-text">
                                     {currentNickname}
                                 </h2>
                             )}
-                            <div className="mb-3 relative">
-                                {currentNumber ? (
-                                    <BingoBall
-                                        number={currentNumber}
-                                        variant="active"
-                                        className="w-32 h-32 text-6xl bg-[#005131] border-[#a57626]/70 text-white shadow-[0_0_40px_rgba(165,118,38,0.35)]"
-                                    />
-                                ) : (
-                                    // Edge case: numbers_called_count > 0 but no current number resolvable.
-                                    // Keep a small READY fallback for safety.
-                                    <div className="w-32 h-32 rounded-full bg-[#005131] border-4 border-[#1f7c58] flex items-center justify-center text-white/70 text-sm font-bold">
-                                        READY
-                                    </div>
-                                )}
-                            </div>
+                            {currentNumber ? (
+                                <BingoBall
+                                    number={currentNumber}
+                                    size={176}
+                                    numberScale={0.52}
+                                    className="shadow-[var(--shadow-gold),inset_0_-10px_24px_rgba(0,0,0,0.25)]"
+                                />
+                            ) : (
+                                // Edge case: numbers_called_count > 0 but no current number resolvable.
+                                // Keep a plain "Ready" disc for safety.
+                                <div className="flex h-[176px] w-[176px] shrink-0 items-center justify-center rounded-full border-[6px] border-anchor-cream-text bg-anchor-green text-base font-semibold text-anchor-cream-text">
+                                    Ready
+                                </div>
+                            )}
 
-                            <div className="flex items-center gap-6 text-sm text-white/90 border-t border-[#1f7c58] pt-3 w-full justify-center">
-                                <div>
-                                    <span className="block text-white/80 uppercase text-sm tracking-wider mb-1">Calls</span>
-                                    <span className="text-xl font-mono text-white">{currentGameState.numbers_called_count}</span>
-                                </div>
-                                <div className="h-8 w-px bg-[#1f7c58]"></div>
-                                <div>
-                                    <span className="block text-white/80 uppercase text-sm tracking-wider mb-1">Playing For</span>
-                                    <span className="text-xl font-bold text-white">{currentStageName || 'Finished'}</span>
-                                </div>
-                                <div className="h-8 w-px bg-[#1f7c58]"></div>
-                                <div>
-                                    <span className="block text-white/80 uppercase text-sm tracking-wider mb-1">Prize</span>
+                            <div className="grid w-full grid-cols-[auto_1px_auto_1px_minmax(0,auto)] justify-between gap-x-3.5 border-t border-line-gold pt-3.5">
+                                <StatCell label="Calls">
+                                    <span className="text-2xl font-semibold leading-[1.1] tabular-nums">{currentGameState.numbers_called_count}</span>
+                                </StatCell>
+                                <div aria-hidden="true" className="bg-line-gold" />
+                                <StatCell label="Playing for">
+                                    <span className="whitespace-nowrap text-2xl font-semibold leading-[1.1]">{currentStageName || 'Finished'}</span>
+                                </StatCell>
+                                <div aria-hidden="true" className="bg-line-gold" />
+                                <StatCell label="Prize">
                                     {isStagePrizeMissing ? (
-                                        <span className="text-xl font-bold text-destructive">⚠️ Prize not set</span>
+                                        <span className="inline-flex items-center justify-center gap-1.5 text-base font-semibold leading-tight text-anchor-danger-text">
+                                            <TriangleAlert aria-hidden="true" size={18} className="shrink-0" />
+                                            Prize not set
+                                        </span>
                                     ) : (
-                                        <span className="text-xl font-bold text-white">{plannedStagePrize}</span>
+                                        <span className="break-words font-display text-[26px] leading-[1.1] text-anchor-gold-bright">{plannedStagePrize}</span>
                                     )}
-                                </div>
+                                </StatCell>
                             </div>
                             {isSnowballGame && (
-                                <div className="mt-4 w-full rounded-xl border border-[#a57626]/70 bg-[#005131]/65 px-4 py-3 flex flex-col items-center text-center gap-2 md:flex-row md:items-center md:justify-between md:text-left">
+                                <div className="flex w-full items-center justify-between gap-3 rounded-card border border-line-gold bg-anchor-green-raised px-3.5 py-3 text-left">
                                     {currentSnowballPot && snowballCallsLabel ? (
                                         <>
-                                            <p className="text-white font-semibold">
-                                                Snowball Jackpot: £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
-                                            </p>
-                                            <p className="text-white/90 font-semibold text-center md:text-right">
-                                                {snowballCallsLabel}
-                                                {` • ${currentGameState.numbers_called_count}/${currentSnowballPot.current_max_calls} calls`}
-                                                {typeof snowballCallsRemaining === 'number' ? ` • ${snowballCallsRemaining} left` : ''}
-                                            </p>
+                                            <div className="flex flex-col gap-0.5">
+                                                <Kicker className="text-[11px]">Snowball jackpot</Kicker>
+                                                <span className="font-display text-[28px] leading-none text-anchor-gold-bright">
+                                                    £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
+                                                </span>
+                                            </div>
+                                            {typeof snowballCallsRemaining === 'number' && snowballCallsRemaining > 0 ? (
+                                                <div className="flex flex-col items-end gap-0.5 text-right">
+                                                    <span className="text-[28px] font-bold leading-none tabular-nums">{snowballCallsRemaining}</span>
+                                                    <span className="text-xs font-semibold tabular-nums text-anchor-sage">
+                                                        {snowballCallsRemaining === 1 ? 'call left' : 'calls left'}
+                                                        {` · ${currentGameState.numbers_called_count} of ${currentSnowballPot.current_max_calls}`}
+                                                    </span>
+                                                </div>
+                                            ) : (
+                                                // The last qualifying call, or the window has
+                                                // closed: the label says which, in its own words.
+                                                <div className="flex flex-col items-end gap-0.5 text-right">
+                                                    <span className="text-lg font-bold leading-tight">{snowballCallsLabel}</span>
+                                                    <span className="text-xs font-semibold tabular-nums text-anchor-sage">
+                                                        {`${currentGameState.numbers_called_count} of ${currentSnowballPot.current_max_calls} calls`}
+                                                    </span>
+                                                </div>
+                                            )}
                                         </>
                                     ) : potLoadState === 'failed' ? (
-                                        <p className="text-white font-semibold" role="alert">
-                                            Snowball pot could not be loaded. Still retrying. Do not record a Full
-                                            House on this game until the jackpot figure appears here.
+                                        <p className="flex items-start gap-2 text-[15px] font-semibold leading-snug" role="alert">
+                                            <TriangleAlert aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-anchor-danger-text" />
+                                            <span>
+                                                Snowball pot could not be loaded. Still retrying. Do not record a Full
+                                                House on this game until the jackpot figure appears here.
+                                            </span>
                                         </p>
                                     ) : potLoadState === 'loading' ? (
-                                        <p className="text-white/90 font-semibold">Loading the snowball pot…</p>
+                                        <p className="text-[15px] font-semibold text-anchor-sage">Loading the snowball pot…</p>
                                     ) : (
-                                        <p className="text-white/90 font-semibold">
+                                        <p className="text-[15px] font-semibold text-anchor-sage">
                                             Snowball countdown unavailable: this game is not linked to a snowball pot.
                                         </p>
                                     )}
@@ -1818,29 +1861,29 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             )}
                         </>
                     )}
-                </CardContent>
-            </Card>
+                </Card>
 
-            {potNeedsSettling && (
-                <div className="mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/50 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <p className="font-bold text-white">The game ended but the snowball pot did not update</p>
-                        <p className="text-base text-white/85">
-                            The jackpot is still showing its old figure. Trying again is safe: if it did
-                            move after all, this will say so and change nothing.
-                        </p>
-                        {pendingRedirect && (
-                            <p className="text-base text-white/85 mt-1">
-                                Settle it before you move on if you can. If you carry on without it, ask an
-                                admin to settle it from the host console.
+                {potNeedsSettling && (
+                    <Card accent className="flex flex-col gap-3 p-4">
+                        <div className="flex flex-col gap-1.5">
+                            <Kicker>Needs attention</Kicker>
+                            <h2 className="text-2xl leading-[1.1] text-anchor-cream-text">The game ended but the snowball pot did not update</h2>
+                            <p className="text-sm leading-[1.45] text-anchor-sage">
+                                The jackpot is still showing its old figure. Trying again is safe: if it did
+                                move after all, this will say so and change nothing.
                             </p>
-                        )}
-                    </div>
-                    <div className="flex flex-col gap-2 shrink-0">
+                            {pendingRedirect && (
+                                <p className="text-sm leading-[1.45] text-anchor-sage">
+                                    Settle it before you move on if you can. If you carry on without it, ask an
+                                    admin to settle it from the host console.
+                                </p>
+                            )}
+                        </div>
                         <Button
                             variant="primary"
                             size="lg"
-                            className="min-h-[56px]"
+                            block
+                            className="px-4"
                             onClick={handleRetrySettlement}
                             disabled={isSettlingPot}
                         >
@@ -1849,49 +1892,47 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         {pendingRedirect && (
                             <Button
                                 variant="ghost"
-                                className="min-h-[44px] text-white/85 hover:text-white hover:bg-[#0f6846]"
+                                tone="quiet"
+                                size="sm"
+                                block
                                 onClick={handleCarryOnWithoutSettling}
                                 disabled={isSettlingPot}
                             >
                                 {pendingRedirect === '/host' ? 'Leave without settling' : 'Go to the next game without settling'}
                             </Button>
                         )}
-                    </div>
-                </div>
-            )}
+                    </Card>
+                )}
 
-            {/* The way out of a claim pause.
+                {/* The way out of a claim pause.
 
-                Resume used to live ONLY inside the validation modal. "Close and
-                stay paused" closes that modal and leaves paused_for_validation
-                true, and every control on this pad is disabled while it is: no
-                Next Number, no Break, no Undo, no Resume. The host was stuck with
-                nothing to press, and the Post Win modal's own copy told them to
-                "Resume ... from the main pad", which did not exist. The only way
-                out was to reopen Check Claim and cancel it.
+                    Resume used to live ONLY inside the validation modal. "Close and
+                    stay paused" closes that modal and leaves paused_for_validation
+                    true, and every control on this pad is disabled while it is: no
+                    Next Number, no Break, no Undo, no Resume. The host was stuck with
+                    nothing to press, and the Post Win modal's own copy told them to
+                    "Resume ... from the main pad", which did not exist. The only way
+                    out was to reopen Check Claim and cancel it.
 
-                Once the stage has a winner, Resume is refused (X4): "Close and
-                stay paused" then "Resume calling" used to carry on calling for a
-                prize that had already gone. The way out is then Continue to the
-                next stage, or Check another claimant for a tie. */}
-            {isPausedForValidation && !isGameCompleted && (
-                isCurrentStageWon ? (
-                    <div className={cn(
-                        "mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
-                        !isController && "opacity-50 pointer-events-none"
-                    )}>
-                        <div>
-                            <p className="font-bold text-white">{currentStageName} has been won</p>
-                            <p className="text-base text-white/85">
-                                Move on when the room is ready, or check another claimant if someone else
-                                has the same win.
-                            </p>
-                        </div>
-                        <div className="flex flex-col gap-2 shrink-0 sm:items-end">
+                    Once the stage has a winner, Resume is refused (X4): "Close and
+                    stay paused" then "Resume calling" used to carry on calling for a
+                    prize that had already gone. The way out is then Continue to the
+                    next stage, or Check another claimant for a tie. */}
+                {isPausedForValidation && !isGameCompleted && (
+                    isCurrentStageWon ? (
+                        <Card className={cn("flex flex-col gap-3 border-line-strong p-4", !isController && "pointer-events-none")}>
+                            <div className="flex flex-col gap-1">
+                                <Kicker>Stage won</Kicker>
+                                <p className="text-base leading-[1.45]">
+                                    {currentStageName} has been won. Move on when the room is ready, or check
+                                    another claimant if someone else has the same win.
+                                </p>
+                            </div>
                             <Button
                                 variant="primary"
                                 size="lg"
-                                className="min-h-[56px]"
+                                block
+                                className="px-4"
                                 onClick={() => { void handleContinueAfterStageWon(); }}
                                 disabled={!isController || isAdvancing || isPausing}
                             >
@@ -1900,241 +1941,266 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     : hasNextStage && nextStageName ? `Continue to ${nextStageName}` : 'Finish this game'}
                             </Button>
                             <Button
-                                variant="secondary"
-                                className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
+                                variant="outline"
+                                size="sm"
+                                block
                                 onClick={() => { void handleBeginClaimCheck(true); }}
                                 disabled={!isController || isPausing || isAdvancing}
                             >
                                 {isPausing ? 'Starting…' : 'Check another claimant'}
                             </Button>
-                        </div>
-                    </div>
-                ) : (
-                    <div className={cn(
-                        "mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
-                        !isController && "opacity-50 pointer-events-none"
-                    )}>
-                        <div>
-                            <p className="font-bold text-white">Paused for a claim check</p>
-                            <p className="text-sm text-white/85">Calling is on hold until you resume.</p>
-                        </div>
+                        </Card>
+                    ) : (
+                        <Card className={cn("flex flex-col gap-3 border-line-strong p-4", !isController && "pointer-events-none")}>
+                            <div className="flex flex-col gap-1">
+                                <Kicker>Paused for a claim check</Kicker>
+                                <p className="text-base leading-[1.45]">Calling is on hold until you resume.</p>
+                            </div>
+                            <Button
+                                variant="primary"
+                                size="lg"
+                                block
+                                className="px-4"
+                                onClick={handleResumeGame}
+                                disabled={!isController || isResuming}
+                            >
+                                {isResuming ? 'Resuming…' : 'Resume calling'}
+                            </Button>
+                        </Card>
+                    )
+                )}
+
+                {/* Control pad. A control that cannot be used stays on screen,
+                    dimmed, so the host can see it is there and why it is off. */}
+                <div className="flex flex-col gap-3">
+                    <div className={cn("flex flex-col gap-3", !isController && "pointer-events-none")}>
                         <Button
                             variant="primary"
-                            size="lg"
-                            className="min-h-[56px] shrink-0"
-                            onClick={handleResumeGame}
-                            disabled={!isController || isResuming}
+                            size="xl"
+                            onClick={handleCallNextNumber}
+                            disabled={isNextNumberDisabled}
                         >
-                            {isResuming ? 'Resuming…' : 'Resume calling'}
+                            {isCallingNumber
+                                ? 'Calling…'
+                                : currentGameState.numbers_called_count >= 90
+                                    ? 'All numbers called'
+                                    : currentGameState.numbers_called_count === 0 ? 'Call the first number' : 'Next number'}
                         </Button>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <Button
+                                variant={currentGameState.on_break ? 'primary' : 'outline'}
+                                size="lg"
+                                className="min-h-[60px] px-3"
+                                onClick={handleToggleBreak}
+                                disabled={isBreakToggleDisabled}
+                            >
+                                {isTogglingBreak
+                                    ? (currentGameState.on_break ? 'Resuming…' : 'Starting break…')
+                                    : (currentGameState.on_break ? 'Resume session' : 'Take a break')}
+                            </Button>
+
+                            <Button
+                                variant="outline"
+                                size="lg"
+                                className="min-h-[60px] px-3"
+                                onClick={() => { void handleBeginClaimCheck(false); }}
+                                disabled={isValidateButtonDisabled}
+                            >
+                                {isPausing ? 'Pausing…' : 'Check claim'}
+                            </Button>
+                        </div>
                     </div>
-                )
-            )}
 
-            {/* Control Pad */}
-            <div className={cn("grid grid-cols-2 gap-3 mb-4", !isController && "opacity-50 pointer-events-none")}>
-                <Button
-                    variant="primary"
-                    size="xl"
-                    className={cn("col-span-2 h-20 text-2xl bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] shadow-lg shadow-black/20", isCallingNumber && "opacity-80")}
-                    onClick={handleCallNextNumber}
-                    disabled={isNextNumberDisabled}
-                >
-                    {isCallingNumber ? "CALLING..." : currentGameState.numbers_called_count >= 90 ? "ALL NUMBERS CALLED" : "NEXT NUMBER"}
-                </Button>
-
-                <Button
-                    variant={currentGameState.on_break ? 'secondary' : 'secondary'}
-                    size="lg"
-                    className={cn("h-16 bg-[#0f6846] hover:bg-[#136f4b] border border-[#1f7c58] text-white", currentGameState.on_break ? "bg-[#a57626] hover:bg-[#8f6621] border-[#a57626]" : "")}
-                    onClick={handleToggleBreak}
-                    disabled={isBreakToggleDisabled}
-                >
-                    {isTogglingBreak
-                        ? (currentGameState.on_break ? 'Resuming…' : 'Starting break…')
-                        : (currentGameState.on_break ? 'Resume Session' : 'Take Break')}
-                </Button>
-
-                <Button
-                    variant="secondary"
-                    size="lg"
-                    className="h-16 bg-[#0f6846] border border-[#a57626] text-white hover:bg-[#136f4b]"
-                    onClick={() => { void handleBeginClaimCheck(false); }}
-                    disabled={isValidateButtonDisabled}
-                >
-                    {isPausing ? 'Pausing…' : 'Check Claim'}
-                </Button>
-            </div>
-
-            {/* Secondary Controls */}
-            <div className={cn("flex justify-center gap-4 mb-8", !isController && "opacity-50 pointer-events-none")}>
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-white/80 hover:text-white hover:bg-[#0f6846] min-h-[44px]"
-                    onClick={handleOpenUndoModal}
-                    disabled={isVoidLastNumberDisabled}
-                >
-                    Undo Last Call
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-white/80 hover:text-white hover:bg-[#0f6846] min-h-[44px]"
-                    onClick={() => { setEndGameError(null); setShowEndGameModal(true); }}
-                    disabled={!isController || isGameNotInProgress || isGameCompleted}
-                >
-                    End Game
-                </Button>
-            </div>
-            <div className="flex justify-center mb-8">
-                <Button
-                    variant="secondary"
-                    size="sm"
-                    className="border-[#a57626] text-white hover:bg-[#0f6846] min-h-[44px]"
-                    onClick={() => {
-                        setActionError(null);
-                        setShowSessionWinnersModal(true);
-                        // Pick up anything another device recorded. The list is
-                        // not live, so opening it is the moment to re-read it.
-                        void refreshWinnerLists();
-                    }}
-                >
-                    Winners &amp; Prizes ({sessionWinners.length})
-                </Button>
-            </div>
-
-            {/* Manual Snowball Win.
-
-                Offered only while the jackpot window is genuinely open, and only
-                during Full House. It used to be offered at any stage and at any
-                call count, and it set p_force_snowball_jackpot, which skipped the
-                window check inside record_winner_atomic entirely. So the button
-                paid the full pot after the window had closed, on a stage that was
-                not Full House, with nothing recording that it had been forced.
-
-                The database now refuses to award the jackpot outside the window on
-                this route as well. Hiding the button when it cannot legitimately
-                be used is the other half: a control that silently records an
-                ordinary win instead of the jackpot the host thought they were
-                awarding would be worse than no control. */}
-            {isSnowballGame && (
-                <div className={cn("flex flex-col items-center gap-2 mb-8", !isController && "opacity-50 pointer-events-none")}>
-                    {currentSnowballPot && isSnowballEligibilityStage && isSnowballJackpotWindowOpen ? (
+                    {/* Secondary controls. Winners and prizes stays open to a host
+                        who is only watching, so it sits outside the locked block. */}
+                    <div className="flex flex-wrap justify-center gap-2">
                         <Button
-                            variant="secondary"
+                            variant="ghost"
                             size="sm"
-                            className="bg-[#0f6846] border-[#a57626] text-white hover:bg-[#136f4b] min-h-[44px]"
+                            className="px-3.5"
+                            onClick={handleOpenUndoModal}
+                            disabled={isVoidLastNumberDisabled}
+                        >
+                            <Undo2 aria-hidden="true" size={18} className="shrink-0" />
+                            Undo last call
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="px-3.5"
+                            onClick={() => { setEndGameError(null); setShowEndGameModal(true); }}
+                            disabled={!isController || isGameNotInProgress || isGameCompleted}
+                        >
+                            <Flag aria-hidden="true" size={18} className="shrink-0" />
+                            End game
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="px-3.5 text-anchor-gold-bright"
                             onClick={() => {
                                 setActionError(null);
-                                setPrizeDescription(`£${formatPounds(Number(currentSnowballPot.current_jackpot_amount))} (Manual Snowball Win)`);
-                                // Fresh key per award. This path pays the jackpot, so
-                                // it is the one where a retried tap costs real money.
-                                manualSnowballRequestIdRef.current = newClaimRequestId();
-                                setShowManualSnowballModal(true);
+                                setShowSessionWinnersModal(true);
+                                // Pick up anything another device recorded. The list is
+                                // not live, so opening it is the moment to re-read it.
+                                void refreshWinnerLists();
                             }}
                         >
-                            🏆 Manual Snowball Win
+                            <Trophy aria-hidden="true" size={18} className="shrink-0" />
+                            Winners &amp; prizes ({sessionWinners.length})
                         </Button>
-                    ) : currentSnowballPot && isSnowballEligibilityStage ? (
-                        <p className="text-sm text-white/70 text-center max-w-sm">
-                            The jackpot window has closed, so the jackpot cannot be awarded from this
-                            screen. A Full House still records as a normal win.
-                        </p>
-                    ) : null}
-                </div>
-            )}
-
-            {/* Last Numbers Strip */}
-            <div className="overflow-x-auto pb-4 mb-6">
-                <div className="flex gap-2 justify-center min-w-max px-4">
-                    {lastNNumbers.map((num, i) => (
-                        <BingoBall key={i} number={num} variant="called" className="w-12 h-12 text-lg" />
-                    ))}
-                    {lastNNumbers.length === 0 && <p className="text-white/70 text-sm italic">No history yet</p>}
-                </div>
-            </div>
-
-            {/* Winners List */}
-            {currentWinners.length > 0 && (
-                <Card className={cn(hostSurfaceClass, "mb-8 mx-4 md:mx-0")}>
-                    <div className="p-4 border-b border-[#1f7c58]">
-                        <h3 className="font-bold text-white">Winners</h3>
                     </div>
-                    <div className="divide-y divide-[#1f7c58]">
-                        {currentWinners.map(winner => {
-                            // X14: a voided win is not a prize owed. It used to
-                            // look like any other on this card, with a working
-                            // Give Prize button; set_winner_prize_given now
-                            // refuses it too.
-                            const isVoid = winner.is_void === true;
-                            // X22: the ordinary share plus the jackpot share.
-                            const totalLine = describeWinnerTotal(winnerTotalPence(winner));
-                            return (
-                                <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
-                                    <div className="min-w-0">
-                                        <p className="font-bold text-white">{winner.winner_name}</p>
-                                        <p className={cn("text-base text-white/85", isVoid && "line-through")}>
-                                            {winner.stage} - {winner.prize_description}
-                                        </p>
-                                        {totalLine && (
-                                            <p className="text-base font-semibold text-white">{totalLine}</p>
+
+                    {/* Manual Snowball Win.
+
+                        Offered only while the jackpot window is genuinely open, and only
+                        during Full House. It used to be offered at any stage and at any
+                        call count, and it set p_force_snowball_jackpot, which skipped the
+                        window check inside record_winner_atomic entirely. So the button
+                        paid the full pot after the window had closed, on a stage that was
+                        not Full House, with nothing recording that it had been forced.
+
+                        The database now refuses to award the jackpot outside the window on
+                        this route as well. Hiding the button when it cannot legitimately
+                        be used is the other half: a control that silently records an
+                        ordinary win instead of the jackpot the host thought they were
+                        awarding would be worse than no control. */}
+                    {isSnowballGame && currentSnowballPot && isSnowballEligibilityStage && (
+                        <div className={cn("flex flex-col items-center gap-2", !isController && "pointer-events-none opacity-45")}>
+                            {isSnowballJackpotWindowOpen ? (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        setActionError(null);
+                                        setPrizeDescription(`£${formatPounds(Number(currentSnowballPot.current_jackpot_amount))} (Manual Snowball Win)`);
+                                        // Fresh key per award. This path pays the jackpot, so
+                                        // it is the one where a retried tap costs real money.
+                                        manualSnowballRequestIdRef.current = newClaimRequestId();
+                                        setShowManualSnowballModal(true);
+                                    }}
+                                >
+                                    Manual snowball win
+                                </Button>
+                            ) : (
+                                <p className="max-w-sm text-center text-[13px] leading-snug text-anchor-sage">
+                                    The jackpot window has closed, so the jackpot cannot be awarded from this
+                                    screen. A Full House still records as a normal win.
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Recent calls, newest first: the ball on screen leads, with the
+                    bright border. The right edge fades where the row runs on. */}
+                <div className="flex flex-col gap-2.5">
+                    <div className="flex items-baseline justify-between">
+                        <Kicker>Recent calls</Kicker>
+                        <span className="text-[13px] font-medium text-anchor-sage">Newest first</span>
+                    </div>
+                    {recentCalls.length === 0 ? (
+                        <p className="text-sm text-anchor-sage">No history yet</p>
+                    ) : (
+                        <div className="mask-linear-fade-right flex gap-2 overflow-x-auto pb-1 pr-9">
+                            {recentCalls.map((num, i) => (
+                                <NumberChip
+                                    key={num}
+                                    number={num}
+                                    size={52}
+                                    latest={i === 0}
+                                    className={i === 0 ? 'animate-fade-in' : undefined}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Winners this game */}
+                {currentWinners.length > 0 && (
+                    <Card className="flex flex-col">
+                        <div className="flex items-baseline justify-between gap-3 border-b border-line-gold px-4 py-3.5">
+                            <h3 className="text-[22px] text-anchor-cream-text">Winners this game</h3>
+                            <span className="text-[13px] text-anchor-sage">Anonymous</span>
+                        </div>
+                        <div className="divide-y divide-line">
+                            {currentWinners.map(winner => {
+                                // X14: a voided win is not a prize owed. It used to
+                                // look like any other on this card, with a working
+                                // Give Prize button; set_winner_prize_given now
+                                // refuses it too.
+                                const isVoid = winner.is_void === true;
+                                // X22: the ordinary share plus the jackpot share.
+                                const totalLine = describeWinnerTotal(winnerTotalPence(winner));
+                                return (
+                                    <div key={winner.id} className="flex items-center justify-between gap-3 px-4 py-3.5">
+                                        <div className="flex min-w-0 flex-col gap-0.5">
+                                            <Kicker className="text-[11px]">
+                                                {winner.stage}
+                                                {winner.call_count_at_win !== null ? ` · call ${winner.call_count_at_win}` : ''}
+                                            </Kicker>
+                                            <span className={cn("break-words text-lg font-semibold", isVoid && "line-through")}>
+                                                {winner.prize_description || 'No prize description'}
+                                            </span>
+                                            {totalLine && (
+                                                <span className="text-[13px] text-anchor-sage">{totalLine}</span>
+                                            )}
+                                        </div>
+                                        {isVoid ? (
+                                            <Badge variant="danger" className="shrink-0">Void</Badge>
+                                        ) : (
+                                            <PrizeGivenToggle
+                                                given={winner.prize_given || false}
+                                                label="Give prize"
+                                                onToggle={() => handleTogglePrize(winner.id, winner.prize_given || false)}
+                                                disabled={!canTogglePrize}
+                                            />
                                         )}
                                     </div>
-                                    {isVoid ? (
-                                        <span className="px-2 py-1 rounded-full text-sm font-semibold border border-[#a57626] text-white bg-[#a57626]/20 shrink-0">
-                                            VOID
-                                        </span>
-                                    ) : (
-                                        <Button
-                                            size="sm"
-                                            variant={winner.prize_given ? "outline" : "secondary"}
-                                            className={cn(
-                                                "min-w-[100px] shrink-0",
-                                                winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
-                                            )}
-                                            onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
-                                            disabled={!canTogglePrize}
-                                        >
-                                            {winner.prize_given ? "Given ✅" : "Give Prize"}
-                                        </Button>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                </Card>
-            )}
+                                );
+                            })}
+                        </div>
+                    </Card>
+                )}
+            </div>
 
-            {/* Validation Modal */}
-            <Modal
+            {/* Claim sheet */}
+            <Sheet
                 isOpen={showValidationModal}
                 onClose={() => {
                     if (!currentGameState.paused_for_validation) setShowValidationModal(false);
                 }}
                 showCloseButton={false}
-                title="Validate Ticket"
-                className="max-w-4xl h-[80vh] bg-[#003f27] border border-[#1f7c58]"
-            >
-                <div className="flex flex-col h-full">
-                    <div className="shrink-0 mb-4">
+                title="Check claim"
+                size="tall"
+                bodyClassName="pb-3"
+                header={
+                    // The top of the sheet changes with the claim: the count while
+                    // the host taps, then the verdict. It scrolls within itself on
+                    // a short phone, so the grid and the buttons under it are
+                    // never pushed off the screen.
+                    <div className="flex max-h-[52dvh] flex-col gap-2 overflow-y-auto">
+                        <Kicker>Check claim · {currentStageName || 'this stage'}</Kicker>
+
                         {/* Suppressed while Record Winner is stacked on top of this
-                            modal: that one renders the same error where the host is
+                            sheet: that one renders the same error where the host is
                             looking, and two role="alert" regions holding the same
-                            text would be announced twice. */}
-                        {actionError && !showWinnerModal && missingLastBall === null && <div role="alert" className={cn(modalErrorClass, "mb-3")}>{actionError}</div>}
+                            text would be announced twice. Suppressed too while the
+                            last-number question is open: its panel shows it. */}
+                        {actionError && !showWinnerModal && missingLastBall === null && <HostAlert>{actionError}</HostAlert>}
 
                         {/* Shown under the error, never instead of it: an adopted
                             claim, a full grid. */}
                         {claimNotice && (
-                            <p role="status" className="mb-3 text-center text-sm font-semibold text-[#f3d59d]">{claimNotice}</p>
+                            <p role="status" className="text-sm font-semibold text-anchor-gold-bright">{claimNotice}</p>
                         )}
 
                         {/* The draft queue failed a send and is retrying by itself.
                             The claim here is safe either way: Check Win sends the
                             full list. Only the room's view is behind. */}
                         {draftQueueState === 'retrying' && (
-                            <p role="status" className="mb-3 text-center text-sm font-semibold text-white">
+                            <p role="status" className="text-sm font-semibold text-anchor-cream-text">
                                 TV not updated, retrying
                             </p>
                         )}
@@ -2144,26 +2210,46 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             after a rejected claim, because that is when the host is
                             re-counting the ticket. The last-ball line is a guide
                             only: a claim without it goes to the server, which asks
-                            whether it came before that ball was announced (A1). */}
-                        {claimVerdict !== 'valid' && (
-                            <div aria-live="polite" className="text-center mb-3">
+                            whether it came before that ball was announced (A1). It
+                            stands down while that question is on screen, because the
+                            question says the same thing and needs the room. */}
+                        {claimVerdict !== 'valid' && missingLastBall === null && (
+                            <div aria-live="polite" className="flex flex-col gap-2">
                                 {isStageValidForClaimCheck ? (
-                                    <p className={cn(
-                                        "text-4xl font-bold font-mono tabular-nums",
-                                        isClaimCountMet ? "text-[#f3d59d]" : "text-white",
-                                    )}>
-                                        {selectedNumbers.length}/{requiredSelectionCount}
-                                    </p>
+                                    <>
+                                        <div className="flex items-end justify-between gap-3">
+                                            {claimVerdict === null ? (
+                                                <h2 className="text-[26px] leading-[1.05] text-anchor-cream-text">Tap the numbers as they are read out</h2>
+                                            ) : (
+                                                <p className="text-[15px] font-semibold text-anchor-sage">Numbers tapped</p>
+                                            )}
+                                            <p className="flex shrink-0 items-baseline font-display tabular-nums">
+                                                <span className="text-[56px] leading-[0.9] text-anchor-gold-bright">{selectedNumbers.length}</span>
+                                                <span className={cn("text-[28px] leading-none", isClaimCountMet ? "text-anchor-gold-bright" : "text-anchor-sage")}>
+                                                    /{requiredSelectionCount}
+                                                </span>
+                                            </p>
+                                        </div>
+                                        <p className="flex items-center gap-2 text-sm font-semibold">
+                                            <span
+                                                aria-hidden="true"
+                                                className={cn(
+                                                    "inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-[1.5px]",
+                                                    claimIncludesLastBall
+                                                        ? "border-anchor-success-text bg-anchor-success-text text-anchor-green-deep"
+                                                        : "border-line-strong bg-anchor-green-raised text-anchor-sage",
+                                                )}
+                                            >
+                                                {claimIncludesLastBall ? <Check size={12} strokeWidth={3} /> : <X size={12} strokeWidth={3} />}
+                                            </span>
+                                            <span>
+                                                <span className="sr-only">{claimIncludesLastBall ? 'Included. ' : 'Not included yet. '}</span>
+                                                Must include the last ball, <strong className="text-anchor-gold-bright">{currentNumber ?? 'none'}</strong>
+                                            </span>
+                                        </p>
+                                    </>
                                 ) : (
-                                    <p className="text-lg font-bold text-white">This stage is not valid for claim checking.</p>
-                                )}
-                                {isStageValidForClaimCheck && (
-                                    <p className={cn(
-                                        "text-base font-semibold mt-1",
-                                        claimIncludesLastBall ? "text-[#f3d59d]" : "text-white/85",
-                                    )}>
-                                        {claimIncludesLastBall ? '✓' : '✗'} Includes last ball ({currentNumber ?? 'none'})
-                                    </p>
+                                    <h2 className="text-[26px] leading-[1.05] text-anchor-cream-text">This stage is not valid for claim checking.</h2>
                                 )}
                             </div>
                         )}
@@ -2173,338 +2259,345 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             punter rather than at the screen. Skip closes the stage
                             with its prize unawarded and cannot be undone, while the
                             cheaper Undo Last Call has a confirmation. Skip is now
-                            separated, quieter, and confirmed. */}
+                            separated (it sits in the footer), quieter, and confirmed. */}
                         {claimVerdict === 'valid' ? (
-                            <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg mb-4">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <span className="text-white font-bold text-lg">Valid Claim</span>
-                                    <Button className="min-h-[48px]" onClick={handleOpenRecordWinnerModal}>Record Winner</Button>
-                                </div>
-                                <p className="mt-2 text-sm text-white/85">
-                                    The TV shows every number as called. The win goes up on screen once you record it.
+                            <VerdictPanel tone="success" title="Valid claim">
+                                <p className="text-[15px] leading-[1.45]">
+                                    All {selectedNumbers.length} numbers have been called, including the last ball. Check the
+                                    paper ticket, then record the win. The TV shows it once you do.
                                 </p>
-                                <div className="mt-4 pt-3 border-t border-[#1f7c58]/70">
-                                    <Button
-                                        variant="ghost"
-                                        onClick={openSkipConfirm}
-                                        disabled={isSkipping}
-                                        className="text-white/70 hover:text-white hover:bg-[#0f6846] min-h-[44px] text-sm"
-                                    >
-                                        {isSkipping ? 'Skipping…' : 'Skip this stage with no winner'}
-                                    </Button>
-                                </div>
-                            </div>
+                                <Button variant="primary" size="md" block onClick={handleOpenRecordWinnerModal}>Record winner</Button>
+                            </VerdictPanel>
                         ) : claimVerdict === 'invalid' || claimVerdict === 'late' ? (
-                            <div className="p-4 bg-[#a57626]/20 border border-[#a57626] rounded-lg mb-4">
-                                <span className="text-white font-bold text-lg block mb-1">
-                                    {claimVerdict === 'late' ? 'Too late' : 'Not a winner'}
-                                </span>
-                                <span className="text-white/85 text-sm">
-                                    {claimVerdict === 'late'
-                                        ? `The claim had to include ${currentNumber ?? 'the last number called'}.`
-                                        : `Numbers not called: ${claimNumbersNotCalled.join(', ')}`}
-                                </span>
-                                <div className="mt-3 flex flex-wrap gap-2">
+                            <VerdictPanel tone="danger" title={claimVerdict === 'late' ? 'Too late' : 'Not a valid claim'}>
+                                {claimVerdict === 'late' ? (
+                                    <p className="text-[15px] leading-[1.45]">
+                                        {`The claim had to include ${currentNumber ?? 'the last number called'}.`}
+                                    </p>
+                                ) : (
+                                    <div className="flex flex-col gap-2">
+                                        <p className="text-[15px] leading-[1.45]">Numbers not called:</p>
+                                        <ul className="flex flex-wrap gap-1.5">
+                                            {claimNumbersNotCalled.map((n) => (
+                                                <li
+                                                    key={n}
+                                                    className="flex h-10 min-w-10 items-center justify-center rounded-card border-2 border-white bg-anchor-danger px-1.5 text-lg font-bold tabular-nums text-white"
+                                                >
+                                                    {n}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                                <Button
+                                    variant="outline"
+                                    size="md"
+                                    block
+                                    className="px-4"
+                                    onClick={() => { void handleRejectClaim(); }}
+                                    disabled={isResuming || isPausing}
+                                >
+                                    {isResuming ? 'Resuming…' : isCurrentStageWon ? 'Reject' : 'Carry on calling'}
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    block
+                                    onClick={() => { void handleBeginClaimCheck(true); }}
+                                    disabled={isResuming || isPausing}
+                                >
+                                    {isPausing ? 'Starting…' : 'Check another claimant'}
+                                </Button>
+                            </VerdictPanel>
+                        ) : missingLastBall !== null ? (
+                            // The claim missed the last number called (spec 5.2, A1). The app
+                            // does not guess from timings, because the TV can lag: the host
+                            // decides. Yes takes that one ball back off the board, bound to
+                            // this attempt, then checks the same numbers again. No rejects the
+                            // claim as late. Neither is the default, so both carry the same
+                            // weight. Changing the numbers (here, or by tapping the grid)
+                            // withdraws the question.
+                            <VerdictPanel
+                                tone="danger"
+                                title="The last number is not in this claim"
+                                lead={
+                                    <span
+                                        aria-hidden="true"
+                                        className="inline-flex h-10 min-w-10 shrink-0 items-center justify-center rounded-card bg-anchor-gold-bright px-1.5 text-lg font-bold tabular-nums text-anchor-charcoal"
+                                    >
+                                        {missingLastBall.lastNumber}
+                                    </span>
+                                }
+                            >
+                                {actionError && <HostAlert>{actionError}</HostAlert>}
+                                <p className="text-[15px] font-semibold leading-[1.45]">
+                                    This claim does not include the last number called ({missingLastBall.lastNumber}). Did they call before {missingLastBall.lastNumber} was announced?
+                                </p>
+                                {!missingLastBall.undoAvailable && (
+                                    <p className="text-sm leading-[1.45] text-anchor-sage">
+                                        A number has already been undone once for this claim, so it can only be rejected as late now.
+                                    </p>
+                                )}
+                                {missingLastBall.undoAvailable && (
                                     <Button
                                         variant="outline"
-                                        size="sm"
-                                        onClick={() => { void handleRejectClaim(); }}
-                                        disabled={isResuming || isPausing}
-                                        className="text-white border-[#a57626] hover:bg-[#a57626]/25 min-h-[44px]"
+                                        size="md"
+                                        block
+                                        className="px-4"
+                                        onClick={() => { void handleUndoLastBallAndRecheck(); }}
+                                        disabled={isUndoingForClaim || isCheckingWin}
                                     >
-                                        {isResuming ? 'Resuming…' : isCurrentStageWon ? 'Reject' : 'Reject & Resume'}
+                                        {isUndoingForClaim ? 'Undoing and checking…' : `Yes: undo ${missingLastBall.lastNumber} and check again`}
                                     </Button>
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={() => { void handleBeginClaimCheck(true); }}
-                                        disabled={isResuming || isPausing}
-                                        className="min-h-[44px]"
-                                    >
-                                        {isPausing ? 'Starting…' : 'Check another claimant'}
-                                    </Button>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="space-y-2">
-                                <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below, in the order the caller reads them. The TV shows each one as you tap it.</p>
-                                {isStageValidForClaimCheck ? (
-                                    <p className="text-white text-sm text-center font-semibold">Select exactly {requiredSelectionCount} numbers for {currentStageName || 'this stage'}.</p>
-                                ) : (
-                                    <p className="text-white text-sm text-center font-semibold">Check the game&apos;s stages in the admin screen, then try again.</p>
                                 )}
-                                <p className="text-white/75 text-sm text-center">A winning claim includes the last called number (highlighted).</p>
+                                <Button
+                                    variant="outline"
+                                    size="md"
+                                    block
+                                    className="px-4"
+                                    onClick={() => { void handleRejectAsLate(); }}
+                                    disabled={isUndoingForClaim || isCheckingWin}
+                                >
+                                    {isCheckingWin ? 'Checking…' : 'No: reject as late'}
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    block
+                                    onClick={() => { if (!isUndoingForClaim && !isCheckingWin) setMissingLastBall(null); }}
+                                    disabled={isUndoingForClaim || isCheckingWin}
+                                >
+                                    Change the numbers
+                                </Button>
+                            </VerdictPanel>
+                        ) : !isStageValidForClaimCheck ? (
+                            <p className="text-[15px] font-semibold leading-[1.45]">Check the game&apos;s stages in the admin screen, then try again.</p>
+                        ) : null}
+                    </div>
+                }
+                footer={
+                    <>
+                        {/* Read-back. The host is comparing a paper ticket against a
+                            grid of ninety cells; asking them to verify the tap by
+                            finding it again in the grid is asking them to make the
+                            same mistake twice. In tap order, because that is exactly
+                            what the TV and the phones are showing the room. Numbers
+                            that were tapped but never called are called out
+                            separately, because that is the one case that must not
+                            reach "Check Win" unnoticed. A long claim (Two Lines, Full
+                            House) drops its numbers onto a line of their own. */}
+                        {selectedNumbers.length > 0 && claimVerdict === null && (
+                            <div aria-live="polite" className="flex flex-col gap-1">
+                                <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                                    <Kicker className="text-[11px]">Tapped</Kicker>
+                                    <span className={cn(
+                                        "min-w-0 break-words text-lg font-semibold tabular-nums tracking-[0.04em]",
+                                        selectedNumbers.length > 5 && "order-last basis-full",
+                                    )}>
+                                        {selectedNumbers.join(' · ')}
+                                    </span>
+                                    <span className="ml-auto shrink-0 text-[13px] text-anchor-sage">as the TV shows it</span>
+                                </div>
+                                {claimNumbersNotCalled.length > 0 && (
+                                    <p className="text-sm font-semibold text-anchor-danger-text">
+                                        Not called yet:{' '}
+                                        {[...claimNumbersNotCalled].sort((a, b) => a - b).join(', ')}
+                                    </p>
+                                )}
                             </div>
                         )}
-                    </div>
 
-                    {/* The claim grid.
-
-                        This is the screen where a mis-tap pays the wrong person,
-                        and it was the least forgiving screen in the app. Ten
-                        columns inside a max-w-lg modal put the targets at roughly
-                        27px on a phone, well under the 44px minimum, with a 4px
-                        gap between them. Called and uncalled numbers differed only
-                        by text opacity (white/55 against white) plus a 60 percent
-                        alpha hairline, which is not a difference you can rely on
-                        in a dim pub at arm's length.
-
-                        Six columns on a phone gives roughly 48px targets. The
-                        called state is now a different background, not a different
-                        text opacity, and every button carries aria-pressed and a
-                        spoken label so the state is not conveyed by colour alone.
-                        A called number also carries a tick in its corner, so the
-                        difference is a shape on screen as well (spec 5.7), and the
-                        numbers are 20px on a phone and 24px from sm up.
-
-                        Locked once the server has given its verdict: the verdict
-                        belongs to exactly these numbers. A different claim is
-                        Check another claimant. */}
-                    <div className="flex-1 overflow-y-auto bg-[#003f27]/80 rounded-lg p-2 border border-[#1f7c58]">
-                        <div className="grid grid-cols-6 sm:grid-cols-10 gap-1.5 sm:gap-2">
-                            {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
-                                const isSelected = selectedNumbers.includes(num);
-                                const isCalled = calledNumberSet.has(num);
-                                const isLastCalled = num === currentNumber;
-
-                                // Uncalled: dark and flat. Anything tapped that is
-                                // not called is the fault the host needs to see, so
-                                // it is the loudest state on the grid.
-                                let buttonStyle = "bg-[#00301d] text-white/70 border border-[#1f7c58]/60 hover:bg-[#0f6846]";
-
-                                if (isSelected) {
-                                    if (isCalled) {
-                                        buttonStyle = "bg-[#f3d59d] text-[#00301d] font-bold shadow-lg shadow-black/30 z-10 border-2 border-white";
-                                    } else {
-                                        buttonStyle = "bg-red-600 text-white font-bold shadow-lg shadow-black/30 z-10 border-2 border-white";
-                                    }
-                                } else if (isLastCalled) {
-                                    buttonStyle = "bg-[#a57626] text-white font-bold border-2 border-white ring-2 ring-[#f3d59d] ring-offset-0";
-                                } else if (isCalled) {
-                                    buttonStyle = "bg-[#0f6846] text-white font-bold border border-[#a57626]";
-                                }
-
-                                const stateLabel = isSelected
-                                    ? (isCalled ? 'selected, called' : 'selected, NOT called')
-                                    : isLastCalled
-                                        ? 'last ball called'
-                                        : isCalled ? 'called' : 'not called';
-
-                                return (
-                                    <button
-                                        key={num}
-                                        type="button"
-                                        onClick={() => handleToggleNumber(num)}
-                                        aria-pressed={isSelected}
-                                        aria-label={`${num}, ${stateLabel}`}
-                                        className={cn(
-                                            "relative aspect-square min-h-[44px] sm:min-h-0 flex items-center justify-center text-xl sm:text-2xl rounded transition-colors",
-                                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
-                                            buttonStyle
-                                        )}
-                                        disabled={!isController || claimVerdict !== null || claimAttemptId === null}
-                                    >
-                                        {num}
-                                        {isCalled && (
-                                            <svg
-                                                viewBox="0 0 24 24"
-                                                aria-hidden="true"
-                                                className="pointer-events-none absolute right-[6%] top-[6%] h-[30%] w-[30%]"
-                                            >
-                                                <path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-                                            </svg>
-                                        )}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    {/* Read-back. The host is comparing a paper ticket against a
-                        grid of ninety cells; asking them to verify the tap by
-                        finding it again in the grid is asking them to make the
-                        same mistake twice. In tap order, because that is exactly
-                        what the TV and the phones are showing the room. Numbers
-                        that were tapped but never called are called out
-                        separately, because that is the one case that must not
-                        reach "Check Win" unnoticed. */}
-                    {selectedNumbers.length > 0 && claimVerdict === null && (
-                        <div className="shrink-0 mt-3 rounded-lg border border-[#1f7c58] bg-[#00301d] p-3" aria-live="polite">
-                            <p className="text-sm uppercase tracking-wider text-white/70 mb-1">You have tapped, as the TV shows it</p>
-                            <p className="font-mono text-lg text-white tabular-nums break-words">
-                                {selectedNumbers.join('  ')}
-                            </p>
-                            {claimNumbersNotCalled.length > 0 && (
-                                <p className="mt-2 text-sm font-semibold text-red-300">
-                                    Not called yet:{' '}
-                                    {[...claimNumbersNotCalled].sort((a, b) => a - b).join(', ')}
-                                </p>
+                        <div className="flex items-center justify-between gap-2">
+                            {isCurrentStageWon ? (
+                                // Resume is refused once the stage has a winner (X4).
+                                // Close leaves the game paused; the pad offers
+                                // Continue and Check another claimant.
+                                <Button variant="ghost" size="sm" className="px-3.5" onClick={handleCloseClaimAndStayPaused} disabled={isCheckingWin || isUndoingForClaim}>
+                                    Close
+                                </Button>
+                            ) : (
+                                <Button variant="ghost" size="sm" className="px-3.5" onClick={handleResumeGame} disabled={isResuming}>
+                                    {isResuming ? 'Resuming…' : currentGameState.paused_for_validation ? 'Cancel & resume' : 'Cancel'}
+                                </Button>
                             )}
+                            <div className="flex shrink-0 gap-2">
+                                {claimVerdict === 'valid' ? (
+                                    <Button
+                                        variant="ghost"
+                                        tone="quiet"
+                                        size="sm"
+                                        className="px-3.5"
+                                        onClick={openSkipConfirm}
+                                        disabled={isSkipping}
+                                    >
+                                        {isSkipping ? 'Skipping…' : 'Skip stage, no winner'}
+                                    </Button>
+                                ) : (
+                                    <>
+                                        <Button variant="ghost" size="sm" className="px-3.5" onClick={handleClearSelection} disabled={selectedNumbers.length === 0 || claimVerdict !== null}>Clear</Button>
+                                        <Button
+                                            variant="primary"
+                                            size="sm"
+                                            className="px-5"
+                                            onClick={handleCheckWin}
+                                            disabled={!isStageValidForClaimCheck || isCheckingWin || isUndoingForClaim || isPausing || !isClaimCountMet || claimVerdict !== null || claimAttemptId === null}
+                                        >
+                                            {isCheckingWin ? 'Checking…' : 'Check win'}
+                                        </Button>
+                                    </>
+                                )}
+                            </div>
                         </div>
-                    )}
-
-                    <div className="shrink-0 pt-4 mt-4 border-t border-[#1f7c58] flex justify-between gap-3">
-                        {isCurrentStageWon ? (
-                            // Resume is refused once the stage has a winner (X4).
-                            // Close leaves the game paused; the pad offers
-                            // Continue and Check another claimant.
-                            <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseClaimAndStayPaused} disabled={isCheckingWin || isUndoingForClaim}>
-                                Close
-                            </Button>
-                        ) : (
-                            <Button variant="secondary" className="min-h-[44px]" onClick={handleResumeGame} disabled={isResuming}>
-                                {isResuming ? 'Resuming…' : currentGameState.paused_for_validation ? 'Cancel & Resume' : 'Cancel'}
-                            </Button>
-                        )}
-                        <div className="flex gap-2">
-                            <Button variant="ghost" className="min-h-[44px]" onClick={handleClearSelection} disabled={selectedNumbers.length === 0 || claimVerdict !== null}>Clear</Button>
-                            <Button
-                                variant="primary"
-                                className="min-h-[44px]"
-                                onClick={handleCheckWin}
-                                disabled={!isStageValidForClaimCheck || isCheckingWin || isUndoingForClaim || isPausing || !isClaimCountMet || claimVerdict !== null || claimAttemptId === null}
-                            >
-                                {isCheckingWin ? 'Checking…' : 'Check Win'}
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            </Modal>
-
-            {/* The claim missed the last number called (spec 5.2, A1). The app
-                does not guess from timings, because the TV can lag: the host
-                decides. Yes takes that one ball back off the board, bound to
-                this attempt, then checks the same numbers again. No rejects the
-                claim as late. */}
-            <Modal
-                isOpen={missingLastBall !== null}
-                onClose={() => { if (!isUndoingForClaim && !isCheckingWin) setMissingLastBall(null); }}
-                title="The last number is not in this claim"
-                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+                    </>
+                }
             >
-                <div className="space-y-4">
-                    {actionError && (
-                        <div role="alert" className={modalErrorClass}>{actionError}</div>
-                    )}
-                    <p className="text-white text-lg font-semibold">
-                        This claim does not include the last number called ({missingLastBall?.lastNumber}). Did they call before {missingLastBall?.lastNumber} was announced?
-                    </p>
-                    {missingLastBall && !missingLastBall.undoAvailable && (
-                        <p className="text-sm text-white/85">
-                            A number has already been undone once for this claim, so it can only be rejected as late now.
-                        </p>
-                    )}
-                    <div className="flex flex-col gap-3 pt-2">
-                        {missingLastBall?.undoAvailable && (
-                            <Button
-                                variant="primary"
-                                className="min-h-[48px] w-full"
-                                onClick={() => { void handleUndoLastBallAndRecheck(); }}
-                                disabled={isUndoingForClaim || isCheckingWin}
-                            >
-                                {isUndoingForClaim ? 'Undoing and checking…' : `Yes: undo ${missingLastBall.lastNumber} and check again`}
-                            </Button>
-                        )}
-                        <Button
-                            variant="secondary"
-                            className="min-h-[48px] w-full"
-                            onClick={() => { void handleRejectAsLate(); }}
-                            disabled={isUndoingForClaim || isCheckingWin}
-                        >
-                            {isCheckingWin ? 'Checking…' : 'No: reject as late'}
-                        </Button>
-                    </div>
-                </div>
-            </Modal>
+                {/* The claim grid.
 
-            {/* Session Winners Modal */}
-            <Modal
+                    This is the screen where a mis-tap pays the wrong person,
+                    and it was the least forgiving screen in the app. Ten
+                    columns inside a max-w-lg modal put the targets at roughly
+                    27px on a phone, well under the 44px minimum, with a 4px
+                    gap between them. Called and uncalled numbers differed only
+                    by text opacity (white/55 against white) plus a 60 percent
+                    alpha hairline, which is not a difference you can rely on
+                    in a dim pub at arm's length.
+
+                    Six columns on a phone gives roughly 48px targets. The
+                    called state is now a different background, not a different
+                    text opacity, and every button carries aria-pressed and a
+                    spoken label so the state is not conveyed by colour alone.
+                    A called number also carries a tick in its corner, so the
+                    difference is a shape on screen as well (spec 5.7), and the
+                    numbers are 20px.
+
+                    Locked once the server has given its verdict: the verdict
+                    belongs to exactly these numbers. A different claim is
+                    Check another claimant. */}
+                <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-10">
+                    {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
+                        const isSelected = selectedNumbers.includes(num);
+                        const isCalled = calledNumberSet.has(num);
+                        const isLastCalled = num === currentNumber;
+
+                        // Uncalled: sunk and quiet. Anything tapped that is
+                        // not called is the fault the host needs to see, so
+                        // it is the loudest state on the grid.
+                        let buttonStyle = "border border-anchor-gold-bright/[0.12] bg-anchor-green-deep text-anchor-sage";
+
+                        if (isSelected) {
+                            if (isCalled) {
+                                buttonStyle = "border-2 border-anchor-cream-text bg-anchor-cream-text font-bold text-anchor-green-deep";
+                            } else {
+                                buttonStyle = "border-2 border-white bg-anchor-danger font-bold text-white";
+                            }
+                        } else if (isLastCalled) {
+                            buttonStyle = "border-2 border-anchor-gold-bright bg-anchor-gold-bright font-bold text-anchor-charcoal";
+                        } else if (isCalled) {
+                            buttonStyle = "border border-anchor-gold-bright bg-anchor-green-raised font-semibold text-anchor-cream-text";
+                        }
+
+                        const stateLabel = isSelected
+                            ? (isCalled ? 'selected, called' : 'selected, NOT called')
+                            : isLastCalled
+                                ? 'last ball called'
+                                : isCalled ? 'called' : 'not called';
+
+                        return (
+                            <button
+                                key={num}
+                                type="button"
+                                onClick={() => handleToggleNumber(num)}
+                                aria-pressed={isSelected}
+                                aria-label={`${num}, ${stateLabel}`}
+                                className={cn(
+                                    "relative flex aspect-square min-h-12 cursor-pointer items-center justify-center rounded-card p-0 font-sans text-xl tabular-nums transition-colors duration-150 ease-anchor disabled:cursor-default",
+                                    buttonStyle
+                                )}
+                                disabled={!isController || claimVerdict !== null || claimAttemptId === null}
+                            >
+                                {num}
+                                {isCalled && (
+                                    <Check
+                                        aria-hidden="true"
+                                        strokeWidth={3.5}
+                                        className="pointer-events-none absolute right-1 top-1 h-3 w-3"
+                                    />
+                                )}
+                            </button>
+                        );
+                    })}
+                </div>
+            </Sheet>
+
+            {/* Winners and prizes, across every game of the session. */}
+            <Sheet
                 isOpen={showSessionWinnersModal}
                 onClose={() => setShowSessionWinnersModal(false)}
-                title="Session Winners & Prizes"
-                className="max-w-4xl bg-[#003f27] border border-[#1f7c58]"
+                kicker={sessionName}
+                title="Winners & prizes"
+                description="Mark each prize as given when it is handed over. Voiding clears a blocked undo."
             >
-                <div className="space-y-4">
-                    {/* Mark Given raises actionError, and this modal covers the page
-                        banner, so a failed toggle would otherwise be invisible. */}
-                    {actionError && (
-                        <div role="alert" className={modalErrorClass}>{actionError}</div>
-                    )}
-                    <p className="text-sm text-white/85">
-                        Review winners across all games in this session and mark prizes as given when handed out.
-                        Voiding a winner is how you clear an undo that is blocked by a win on the last ball.
+                {/* Mark Given raises actionError, and this sheet covers the page
+                    banner, so a failed toggle would otherwise be invisible. */}
+                {actionError && (
+                    <HostAlert className="mt-3">{actionError}</HostAlert>
+                )}
+                {!canVoidWinner && (
+                    <p className="pt-3 text-sm leading-[1.45] text-anchor-sage">
+                        Only an admin can void a winner. Ask an admin to void it, then undo.
                     </p>
-                    {!canVoidWinner && (
-                        <p className="text-sm text-white/75">
-                            Only an admin can void a winner. Ask an admin to void it, then undo.
-                        </p>
-                    )}
-                    {sessionWinners.length === 0 ? (
-                        <div className="rounded-lg border border-[#1f7c58] bg-[#003f27]/80 p-6 text-sm text-white/70">
-                            No winners recorded yet.
-                        </div>
-                    ) : (
-                        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-[#1f7c58] divide-y divide-[#1f7c58]">
-                            {sessionWinners.map((winner) => (
-                                <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
-                                    <div className="min-w-0">
-                                        <p className="font-bold text-white truncate">{winner.winner_name}</p>
-                                        <p className="text-sm text-white/85">
-                                            {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'} • {winner.stage}
-                                        </p>
-                                        <p className={cn("text-base text-white/70 truncate", winner.is_void && "line-through")}>
-                                            {winner.prize_description || 'No prize description'}
-                                        </p>
-                                        {(() => {
-                                            const totalLine = describeWinnerTotal(winnerTotalPence(winner));
-                                            return totalLine ? <p className="text-base font-semibold text-white">{totalLine}</p> : null;
-                                        })()}
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                        {winner.is_void && (
-                                            <span className="px-2 py-1 rounded-full text-sm font-semibold border border-[#a57626] text-white bg-[#a57626]/20">
-                                                VOID
-                                            </span>
-                                        )}
-                                        {/* X14: no prize to hand over on a voided win. */}
-                                        {!winner.is_void && (
-                                            <Button
-                                                size="sm"
-                                                variant={winner.prize_given ? "outline" : "secondary"}
-                                                className={cn(
-                                                    "min-w-[120px] min-h-[44px]",
-                                                    winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
-                                                )}
-                                                onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
-                                                disabled={!canTogglePrize}
-                                            >
-                                                {winner.prize_given ? "Given ✅" : "Mark Given"}
-                                            </Button>
-                                        )}
-                                        {!winner.is_void && (
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
-                                                className="min-h-[44px] text-white border-[#a57626] hover:bg-[#a57626]/20"
-                                                onClick={() => handleOpenVoidWinner(winner)}
-                                                disabled={!canVoidWinner}
-                                                title={canVoidWinner ? undefined : 'Only an admin can void a winner. Ask an admin to void it, then undo.'}
-                                            >
-                                                Void
-                                            </Button>
-                                        )}
-                                    </div>
+                )}
+                {sessionWinners.length === 0 ? (
+                    <p className="py-6 text-[15px] text-anchor-sage">No winners recorded yet.</p>
+                ) : (
+                    sessionWinners.map((winner) => {
+                        const totalLine = describeWinnerTotal(winnerTotalPence(winner));
+                        return (
+                            <div key={winner.id} className="flex items-center justify-between gap-3 border-b border-line py-3.5">
+                                <div className="flex min-w-0 flex-col gap-[3px]">
+                                    <Kicker className="text-[11px]">
+                                        {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'} · {winner.stage}
+                                    </Kicker>
+                                    <span className={cn("break-words text-lg font-semibold", winner.is_void && "line-through")}>
+                                        {winner.prize_description || 'No prize description'}
+                                    </span>
+                                    <span className="text-[13px] text-anchor-sage">
+                                        {totalLine ? `${totalLine} · ` : ''}{winner.winner_name}
+                                    </span>
                                 </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-                <div className="mt-6 flex justify-end">
-                    <Button variant="secondary" className="min-h-[44px]" onClick={() => setShowSessionWinnersModal(false)}>
-                        Close
-                    </Button>
-                </div>
-            </Modal>
+                                <div className="flex shrink-0 flex-col items-end gap-1.5">
+                                    {winner.is_void && (
+                                        <Badge variant="danger">Void</Badge>
+                                    )}
+                                    {/* X14: no prize to hand over on a voided win. */}
+                                    {!winner.is_void && (
+                                        <PrizeGivenToggle
+                                            given={winner.prize_given || false}
+                                            label="Mark given"
+                                            className="px-[18px]"
+                                            onToggle={() => handleTogglePrize(winner.id, winner.prize_given || false)}
+                                            disabled={!canTogglePrize}
+                                        />
+                                    )}
+                                    {!winner.is_void && (
+                                        <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            tone="quiet"
+                                            className="px-3 text-[13px]"
+                                            onClick={() => handleOpenVoidWinner(winner)}
+                                            disabled={!canVoidWinner}
+                                            title={canVoidWinner ? undefined : 'Only an admin can void a winner. Ask an admin to void it, then undo.'}
+                                        >
+                                            Void
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })
+                )}
+            </Sheet>
 
             {/* Void Winner Confirm (T4.7). Reason is mandatory, and this is the only
                 route out of an undo blocked by a winner on the last ball. */}
@@ -2512,21 +2605,34 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 isOpen={voidWinnerTarget !== null}
                 onClose={handleCloseVoidWinner}
                 title="Void this winner"
-                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+                className="max-w-md"
+                footer={
+                    <>
+                        <Button variant="ghost" size="sm" onClick={handleCloseVoidWinner} disabled={isVoidingWinner}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={handleConfirmVoidWinner}
+                            disabled={isVoidingWinner || voidWinnerReason.trim().length === 0}
+                        >
+                            {isVoidingWinner ? 'Voiding…' : 'Void winner'}
+                        </Button>
+                    </>
+                }
             >
-                <div className="space-y-4">
+                <div className="flex flex-col gap-4">
                     {voidWinnerError && (
-                        <div role="alert" className={modalErrorClass}>
-                            {voidWinnerError}
-                        </div>
+                        <HostAlert>{voidWinnerError}</HostAlert>
                     )}
-                    <p className="text-base text-white/90">
+                    <p>
                         {voidWinnerTarget
                             ? `Voiding the ${voidWinnerTarget.stage} win${voidWinnerTarget.game ? ` from Game ${voidWinnerTarget.game.game_index}` : ''}. The win stays on record, marked void, and stops counting towards the snowball pot.`
                             : ''}
                     </p>
-                    <div>
-                        <label htmlFor="voidWinnerReason" className="text-base text-white/85 block mb-1">
+                    <div className="flex flex-col gap-1.5">
+                        <label htmlFor="voidWinnerReason" className={fieldLabelClass}>
                             Reason (required)
                         </label>
                         <textarea
@@ -2535,117 +2641,127 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             onChange={(e) => setVoidWinnerReason(e.target.value)}
                             rows={3}
                             placeholder="e.g. Claim called on the wrong ball"
-                            className="w-full rounded-md border border-[#1f7c58] bg-[#005131] px-3 py-2 text-base text-white placeholder:text-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
+                            className={fieldClass}
                         />
                     </div>
                 </div>
-                <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseVoidWinner} disabled={isVoidingWinner}>
-                        Cancel
-                    </Button>
-                    <Button
-                        variant="primary"
-                        className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
-                        onClick={handleConfirmVoidWinner}
-                        disabled={isVoidingWinner || voidWinnerReason.trim().length === 0}
-                    >
-                        {isVoidingWinner ? 'Voiding…' : 'Void winner'}
-                    </Button>
-                </div>
             </Modal>
 
-            {/* Undo Confirm (T4.3). Names the ball and says plainly that it goes back
-                in the bag, because "undo" reads as "skip" to a host mid-game. */}
+            {/* Skip Confirm. Says plainly that the prize goes unawarded and that a
+                game only moves forwards, because this cannot be taken back. */}
             <Modal
                 isOpen={showSkipConfirm}
                 onClose={() => { if (!isSkipping) { setShowSkipConfirm(false); setSkipError(null); } }}
+                kicker={gameKicker}
                 title={`Skip ${skipStageName || 'this stage'} with no winner?`}
-                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+                className="max-w-md"
+                footer={
+                    <>
+                        <Button variant="ghost" size="sm" type="button" onClick={() => setShowSkipConfirm(false)} disabled={isSkipping}>
+                            Keep the stage open
+                        </Button>
+                        <Button variant="primary" size="sm" type="button" onClick={handleSkipStage} disabled={isSkipping}>
+                            {isSkipping ? 'Skipping…' : 'Skip the stage'}
+                        </Button>
+                    </>
+                }
             >
-                <div className="space-y-4">
-                    <p className="text-white/90">
+                <div className="flex flex-col gap-4">
+                    <p>
                         The stage closes and its prize is not awarded to anyone. This cannot be undone:
                         a game can only move forwards through its stages.
                     </p>
                     {skipStagePrize && (
-                        <p className="text-base text-[#f3d59d]">
+                        <p className="text-anchor-gold-bright">
                             Unawarded: {skipStagePrize}
                         </p>
                     )}
                     {skipIsFinalStage && (
-                        <p className="text-base text-white/85">
+                        <p className="text-anchor-sage">
                             This is the last stage, so skipping it ends the game.
                         </p>
                     )}
                     {skipError && (
-                        <div role="alert" className={modalErrorClass}>
-                            {skipError}
-                        </div>
+                        <HostAlert>{skipError}</HostAlert>
                     )}
-                    <div className="flex justify-end gap-3 pt-2">
-                        <Button variant="ghost" type="button" onClick={() => setShowSkipConfirm(false)} disabled={isSkipping}>
-                            Keep the stage open
-                        </Button>
-                        <Button variant="danger" type="button" onClick={handleSkipStage} disabled={isSkipping}>
-                            {isSkipping ? 'Skipping…' : 'Skip the stage'}
-                        </Button>
-                    </div>
                 </div>
             </Modal>
 
+            {/* End Game Confirm. */}
             <Modal
                 isOpen={showEndGameModal}
                 onClose={() => { if (!isEndingGame) { setShowEndGameModal(false); setEndGameError(null); } }}
+                kicker={gameKicker}
                 title="End this game now?"
+                className="max-w-md"
+                footer={
+                    <>
+                        <Button variant="ghost" size="sm" type="button" onClick={() => setShowEndGameModal(false)} disabled={isEndingGame}>
+                            Keep playing
+                        </Button>
+                        <Button variant="primary" size="sm" type="button" onClick={handleConfirmEndGame} disabled={isEndingGame}>
+                            {isEndingGame ? 'Ending…' : 'End game'}
+                        </Button>
+                    </>
+                }
             >
-                <div className="space-y-4">
-                    <p className="text-white/90">
-                        The game is closed with no further winner recorded. Any stage still to play is
-                        left unplayed.
+                <div className="flex flex-col gap-4">
+                    <p>
+                        The game closes with no further winner recorded.
+                        {unplayedStages.length > 0
+                            ? ` ${unplayedStagesList} ${unplayedStages.length === 1 ? 'stays unplayed and its prize is not awarded.' : 'stay unplayed and their prizes are not awarded.'}`
+                            : ''}
                     </p>
                     {isSnowballGame && (
-                        <p className="text-base text-[#f3d59d]">
+                        <p className="text-anchor-gold-bright">
                             This is the snowball game, so ending it settles the pot: it rolls over if
                             nobody won the jackpot, and resets if somebody did. Leaving the game open
                             instead means the pot does not move at all.
                         </p>
                     )}
                     {isLastGameOfSession && (
-                        <p className="text-base text-white/85">
+                        <p className="text-anchor-sage">
                             This is the last game of the session, so the session is marked completed too.
                         </p>
                     )}
                     {endGameError && (
-                        <div role="alert" className={modalErrorClass}>
-                            {endGameError}
-                        </div>
+                        <HostAlert>{endGameError}</HostAlert>
                     )}
-                    <div className="flex justify-end gap-3 pt-2">
-                        <Button variant="ghost" type="button" onClick={() => setShowEndGameModal(false)} disabled={isEndingGame}>
-                            Keep playing
-                        </Button>
-                        <Button variant="danger" type="button" onClick={handleConfirmEndGame} disabled={isEndingGame}>
-                            {isEndingGame ? 'Ending…' : 'End game'}
-                        </Button>
-                    </div>
                 </div>
             </Modal>
 
+            {/* Undo Confirm (T4.3). Names the ball and says plainly that it goes back
+                in the bag, because "undo" reads as "skip" to a host mid-game. */}
             <Modal
                 isOpen={showUndoModal}
                 onClose={handleCloseUndoModal}
+                kicker={gameKicker}
                 title="Undo last call"
-                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+                className="max-w-md"
+                footer={
+                    <>
+                        <Button variant="ghost" size="sm" onClick={handleCloseUndoModal} disabled={isVoiding}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={handleConfirmVoidLastNumber}
+                            disabled={isVoiding || currentNumber === null}
+                        >
+                            {isVoiding ? 'Undoing…' : `Undo ball ${currentNumber ?? ''}`}
+                        </Button>
+                    </>
+                }
             >
-                <div className="space-y-4">
+                <div className="flex flex-col gap-4">
                     {undoError && (
-                        <div role="alert" className={cn(modalErrorClass, "space-y-3")}>
+                        <HostAlert>
                             <p>{undoError.message}</p>
                             {undoError.code === 'winner_on_ball' && (
                                 <Button
-                                    variant="secondary"
+                                    variant="outline"
                                     size="sm"
-                                    className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
                                     onClick={() => {
                                         setShowUndoModal(false);
                                         setUndoError(null);
@@ -2656,56 +2772,61 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                         void refreshWinnerLists();
                                     }}
                                 >
-                                    Open Winners and Prizes
+                                    Open winners and prizes
                                 </Button>
                             )}
-                        </div>
+                        </HostAlert>
                     )}
-                    <p className="text-white font-semibold">
+                    <p className="font-semibold">
                         This will take ball {currentNumber ?? '?'} off the board.
                     </p>
-                    <p className="text-white/90 text-base">
+                    <p>
                         The next call will draw ball {currentNumber ?? '?'} again. It goes back in the bag, it is not skipped.
                     </p>
                 </div>
-                <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseUndoModal} disabled={isVoiding}>
-                        Cancel
-                    </Button>
-                    <Button
-                        variant="primary"
-                        className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
-                        onClick={handleConfirmVoidLastNumber}
-                        disabled={isVoiding || currentNumber === null}
-                    >
-                        {isVoiding ? 'Undoing…' : `Undo ball ${currentNumber ?? ''}`}
-                    </Button>
-                </div>
             </Modal>
 
-            {/* Record Winner Modal — winners are anonymous on public surfaces, so no name input. */}
-            <Modal isOpen={showWinnerModal} onClose={handleCloseRecordWinnerModal} title={`Winner: ${currentStageName || 'Stage'}`} className="bg-[#003f27] border border-[#1f7c58]">
-                <div className="space-y-4">
+            {/* Record Winner Modal. Winners are anonymous on public surfaces, so no name input. */}
+            <Modal
+                isOpen={showWinnerModal}
+                onClose={handleCloseRecordWinnerModal}
+                kicker={gameKicker}
+                title={`Winner: ${currentStageName || 'Stage'}`}
+                footer={
+                    <>
+                        <Button variant="ghost" size="sm" onClick={handleCloseRecordWinnerModal} disabled={isRecordingWinner}>Cancel</Button>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handleRecordWinner()}
+                            disabled={isRecordingWinner || (isSnowballChoiceRequired && snowballEligibleChoice === null)}
+                        >
+                            {isRecordingWinner ? 'Recording…' : 'Confirm winner'}
+                        </Button>
+                    </>
+                }
+            >
+                <div className="flex flex-col gap-4">
                     {/* This modal sits on top, so a failed Confirm Winner used to
                         look like nothing happened at all: the error rendered only on
                         the page and in the two modals behind. The host then tapped
                         again, which is how a duplicate win got recorded. */}
                     {actionError && (
-                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                        <HostAlert>{actionError}</HostAlert>
                     )}
-                    <p className="text-base text-white/85">
+                    <p className="text-anchor-sage">
                         Winners are recorded anonymously. Confirm the prize details below to log the win.
                     </p>
-                    <div>
-                        <label className="text-base text-white/85 block mb-1">Prize Description</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className={fieldLabelClass}>Prize description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}
-                            placeholder="e.g. £10 Cash"
+                            placeholder="e.g. £10 cash"
                             autoFocus
                         />
                         {isSnowballEligibilityStage && currentSnowballPot && (
-                            <p className="text-base text-white/75 mt-2">
+                            <p className="text-sm leading-[1.45] text-anchor-sage">
                                 {isSnowballJackpotWindowOpen
                                     ? `Jackpot is live (${snowballCallsLabel}). Mark the winner as snowball eligible to award both prizes.`
                                     : `Jackpot is closed (${snowballCallsLabel}). This will record the normal game prize only.`}
@@ -2713,29 +2834,28 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         )}
                     </div>
                     {isSnowballEligibilityStage && currentSnowballPot && (
-                        <div className="rounded-lg border border-[#a57626]/70 bg-[#005131]/60 px-3 py-3">
+                        <div className="flex flex-col gap-2.5 rounded-card border border-line-gold bg-anchor-green-raised p-3.5">
                             {isSnowballJackpotWindowOpen ? (
                                 <>
-                                    <p className="text-base font-semibold text-[#f3d59d] mb-2">
-                                        Jackpot window is OPEN. Choose eligibility carefully: this decides whether the jackpot is paid out.
+                                    <Kicker className="text-[11px]">Snowball jackpot</Kicker>
+                                    <p className="font-semibold text-anchor-gold-bright">
+                                        Jackpot window is open. Choose eligibility carefully: this decides whether the jackpot is paid out.
                                     </p>
-                                    <p className="text-base text-white/90 mb-2">
+                                    <p>
                                         Has the winner attended the last 3 games?
                                     </p>
                                     {/* Two explicit choices, no default (T4.6). The old
                                         checkbox auto-ticked itself, so a host could pay a
-                                        jackpot without ever making the decision. */}
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        jackpot without ever making the decision. Both
+                                        start as outlines; the one chosen fills gold. */}
+                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                         <Button
                                             type="button"
                                             variant={snowballEligibleChoice === true ? 'primary' : 'outline'}
                                             aria-pressed={snowballEligibleChoice === true}
-                                            className={cn(
-                                                "min-h-[44px] w-full",
-                                                snowballEligibleChoice === true
-                                                    ? "bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626] text-white"
-                                                    : "text-white border-[#a57626] hover:bg-[#a57626]/20",
-                                            )}
+                                            size="md"
+                                            block
+                                            className="px-4"
                                             onClick={() => setSnowballEligibleChoice(true)}
                                         >
                                             Eligible for jackpot
@@ -2744,137 +2864,132 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                             type="button"
                                             variant={snowballEligibleChoice === false ? 'primary' : 'outline'}
                                             aria-pressed={snowballEligibleChoice === false}
-                                            className={cn(
-                                                "min-h-[44px] w-full",
-                                                snowballEligibleChoice === false
-                                                    ? "bg-[#005131] hover:bg-[#0f6846] border border-[#a57626] text-white"
-                                                    : "text-white border-[#a57626] hover:bg-[#a57626]/20",
-                                            )}
+                                            size="md"
+                                            block
+                                            className="px-4"
                                             onClick={() => setSnowballEligibleChoice(false)}
                                         >
                                             Not eligible
                                         </Button>
                                     </div>
-                                    <p className="text-base text-white/75 mt-2">
+                                    <p className="text-sm leading-[1.45] text-anchor-sage">
                                         {snowballEligibleChoice === null
                                             ? 'Choose eligibility before recording.'
                                             : snowballEligibleChoice
-                                                ? `Will award stage prize plus Snowball Jackpot £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}.`
+                                                ? `Will award stage prize plus snowball jackpot £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}.`
                                                 : 'Will award stage prize only.'}
                                     </p>
                                 </>
                             ) : (
-                                <p className="text-base text-white/75">
+                                <p className="text-anchor-sage">
                                     Snowball jackpot cannot be awarded after the call limit. This will record the stage prize only.
                                 </p>
                             )}
                         </div>
                     )}
-                    <div className="flex items-center gap-2 pt-2">
+                    <div className="flex min-h-11 items-center gap-3">
                         <input
                             type="checkbox"
                             id="prizeGiven"
                             checked={prizeGiven}
                             onChange={(e) => setPrizeGiven(e.target.checked)}
-                            className="w-5 h-5 rounded border-[#1f7c58] bg-[#005131] text-[#a57626] focus:ring-[#a57626] accent-[#a57626] cursor-pointer"
+                            className="h-6 w-6 shrink-0 cursor-pointer accent-anchor-gold"
                         />
-                        <label htmlFor="prizeGiven" className="text-base text-white/90 select-none cursor-pointer">Prize Given Immediately?</label>
+                        <label htmlFor="prizeGiven" className="flex-1 cursor-pointer select-none py-2.5 font-semibold">Prize given immediately?</label>
                     </div>
-                </div>
-                <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseRecordWinnerModal} disabled={isRecordingWinner}>Cancel</Button>
-                    <Button
-                        variant="primary"
-                        className="min-h-[44px]"
-                        onClick={() => handleRecordWinner()}
-                        disabled={isRecordingWinner || (isSnowballChoiceRequired && snowballEligibleChoice === null)}
-                    >
-                        {isRecordingWinner ? 'Recording…' : 'Confirm Winner'}
-                    </Button>
                 </div>
             </Modal>
 
             {/* Post Win Modal. Implements the state table in spec 4.3.
-                onClose is a real close (it used to be a no-op, which killed the ✕ and
-                Escape and trapped the host whenever a button failed), and errors
-                render inside the modal rather than on the page behind it. */}
+                onClose is a real close (it used to be a no-op, which killed the close
+                cross and Escape and trapped the host whenever a button failed), and
+                errors render inside the modal rather than on the page behind it. */}
             <Modal
                 isOpen={showPostWinModal}
                 onClose={handleClosePostWinAndStayPaused}
-                title="Winner Recorded!"
-                className="bg-[#003f27] border border-[#1f7c58]"
-            >
-                <div className="space-y-6 text-center py-4">
-                    {actionError && (
-                        <div role="alert" className={cn(modalErrorClass, "text-left")}>
-                            {actionError}
-                        </div>
-                    )}
-                    <div className="w-16 h-16 bg-[#a57626]/20 text-white rounded-full flex items-center justify-center mx-auto text-3xl border border-[#a57626]">
-                        🎉
+                accent
+                title="Winner recorded"
+                icon={
+                    <div aria-hidden="true" className="grid h-16 w-16 place-items-center rounded-full bg-anchor-gold text-white shadow-gold">
+                        <Check size={30} strokeWidth={3} />
                     </div>
-                    <p className="text-white/90">The winner has been announced. What&apos;s next?</p>
+                }
+            >
+                <div className="flex flex-col items-center gap-[18px] text-center">
+                    {actionError && (
+                        <HostAlert className="w-full">{actionError}</HostAlert>
+                    )}
+                    <p className="-mt-1.5 text-anchor-sage">
+                        {postWinStageName}{postWinRecordedPrize ? ` · ${postWinRecordedPrize}` : ''} · announced on the TV
+                    </p>
 
-                    <div className="flex flex-col gap-3">
+                    <div className="flex w-full flex-col gap-2.5">
                         <Button
                             variant="primary"
                             size="lg"
-                            className="w-full min-h-[44px] bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
+                            block
+                            className="px-4"
                             onClick={handleMoveToNextGame}
                             disabled={isPostWinBusy}
                         >
                             {isPostWinBusy && (isAdvancing || isMovingGame)
                                 ? 'Working…'
                                 : postWinIsEndOfSession
-                                    ? 'End Game & Finish Session'
-                                    : postWinIsFinalStage ? 'Move to Next Game' : 'Continue Playing'}
+                                    ? 'End game and finish session'
+                                    : postWinIsFinalStage
+                                        ? 'Move to next game'
+                                        : postWinNextStageName ? `Continue to ${postWinNextStageName}` : 'Continue playing'}
                         </Button>
                         {postWinIsEndOfSession && !isPostWinBusy && (
-                            <p className="text-base text-white/75 -mt-1">
+                            <p className="text-sm leading-[1.45] text-anchor-sage">
                                 This is the last game. Pressing this ends it and closes the session.
                             </p>
                         )}
 
-                        <div className="grid grid-cols-1 gap-3">
-                            {/* A second person with the same win is a new claim
-                                attempt, so a tie is a separate winner with its own
-                                key (spec 5.2). It replaced "Validate Another
-                                Winner". */}
+                        {/* A second person with the same win is a new claim
+                            attempt, so a tie is a separate winner with its own
+                            key (spec 5.2). It replaced "Validate Another
+                            Winner". */}
+                        <Button
+                            variant="outline"
+                            size="md"
+                            block
+                            className="px-4"
+                            onClick={() => { void handleCheckAnotherClaimant(); }}
+                            disabled={isPostWinBusy}
+                        >
+                            Check another claimant
+                        </Button>
+
+                        {/* Hidden at the end of the session: there is no next
+                            game to break into, so this would just end the
+                            game under a misleading label. */}
+                        {!postWinIsEndOfSession && (
                             <Button
-                                variant="secondary"
-                                className="min-h-[44px]"
-                                onClick={() => { void handleCheckAnotherClaimant(); }}
+                                variant="outline"
+                                size="md"
+                                block
+                                className="px-4"
+                                onClick={handleTakeBreakAfterGame}
                                 disabled={isPostWinBusy}
                             >
-                                Check another claimant
+                                {postWinIsFinalStage ? 'Take a break' : 'Continue and take a break'}
                             </Button>
+                        )}
 
-                            {/* Hidden at the end of the session: there is no next
-                                game to break into, so this would just end the
-                                game under a misleading label. */}
-                            {!postWinIsEndOfSession && (
-                                <Button
-                                    variant="secondary"
-                                    className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
-                                    onClick={handleTakeBreakAfterGame}
-                                    disabled={isPostWinBusy}
-                                >
-                                    {postWinIsFinalStage ? 'Take a Break' : 'Continue & Take Break'}
-                                </Button>
-                            )}
-
-                            <Button
-                                variant="ghost"
-                                className="min-h-[44px] text-white/85 hover:text-white hover:bg-[#0f6846]"
-                                onClick={handleClosePostWinAndStayPaused}
-                                disabled={isPostWinBusy}
-                            >
-                                Close and stay paused
-                            </Button>
-                            <p className="text-sm text-white/75">
-                                Closes this box and leaves the game paused with the win on screen. Continue or check another claimant from the main pad when you are ready.
-                            </p>
-                        </div>
+                        <Button
+                            variant="ghost"
+                            tone="quiet"
+                            size="sm"
+                            block
+                            onClick={handleClosePostWinAndStayPaused}
+                            disabled={isPostWinBusy}
+                        >
+                            Close and stay paused
+                        </Button>
+                        <p className="text-[13px] leading-snug text-anchor-sage">
+                            Closes this box and leaves the game paused with the win on screen. Continue or check another claimant from the main pad when you are ready.
+                        </p>
                     </div>
                 </div>
             </Modal>
@@ -2882,18 +2997,43 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             <Modal
                 isOpen={showCashJackpotModal}
                 onClose={handleCancelCashJackpotModal}
-                title="Set Cash Jackpot"
-                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+                kicker="Next game"
+                title="Set cash jackpot"
+                className="max-w-md"
+                footer={
+                    <>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleCancelCashJackpotModal}
+                            disabled={isSubmittingCashJackpot}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={handleConfirmCashJackpotAndContinue}
+                            // Disabled on an empty field rather than only refused after
+                            // the tap: the refusal used to set an error the host could
+                            // not see from inside this modal, so the tap did nothing at
+                            // all as far as they could tell.
+                            disabled={isSubmittingCashJackpot || cashJackpotAmount.trim().length === 0}
+                        >
+                            {isSubmittingCashJackpot ? 'Starting…' : 'Set amount and start'}
+                        </Button>
+                    </>
+                }
             >
-                <div className="space-y-4">
+                <div className="flex flex-col gap-4">
                     {actionError && (
-                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                        <HostAlert>{actionError}</HostAlert>
                     )}
-                    <p className="text-base text-white/90">
+                    <p>
                         Enter tonight&apos;s cash jackpot amount for <span className="font-bold">{cashJackpotGameName}</span> before this game starts.
                     </p>
-                    <div>
-                        <label className="text-base text-white/85 block mb-1">Cash Jackpot Amount</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className={fieldLabelClass}>Cash jackpot amount</label>
                         <Input
                             type="number"
                             inputMode="decimal"
@@ -2906,102 +3046,87 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         />
                     </div>
                 </div>
-                <div className="mt-6 flex justify-end gap-3">
-                    <Button
-                        variant="secondary"
-                        className="min-h-[44px]"
-                        onClick={handleCancelCashJackpotModal}
-                        disabled={isSubmittingCashJackpot}
-                    >
-                        Cancel
-                    </Button>
-                    <Button
-                        variant="primary"
-                        className="min-h-[44px] bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
-                        onClick={handleConfirmCashJackpotAndContinue}
-                        // Disabled on an empty field rather than only refused after
-                        // the tap: the refusal used to set an error the host could
-                        // not see from inside this modal, so the tap did nothing at
-                        // all as far as they could tell.
-                        disabled={isSubmittingCashJackpot || cashJackpotAmount.trim().length === 0}
-                    >
-                        {isSubmittingCashJackpot ? "Starting..." : "Set Amount & Start"}
-                    </Button>
-                </div>
             </Modal>
 
-            {/* Manual Snowball Win Modal — winners are anonymous on public surfaces, so no name input. */}
-            <Modal isOpen={showManualSnowballModal} onClose={handleCloseManualSnowballModal} title="Manual Snowball Award" className="bg-[#003f27] border border-[#1f7c58]">
-                <div className="space-y-4">
+            {/* Manual Snowball Win Modal. Winners are anonymous on public surfaces, so no name input. */}
+            <Modal
+                isOpen={showManualSnowballModal}
+                onClose={handleCloseManualSnowballModal}
+                kicker={gameKicker}
+                title="Manual snowball award"
+                footer={
+                    <>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleCloseManualSnowballModal}
+                            disabled={isRecordingSnowballWinner}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            disabled={isRecordingSnowballWinner}
+                            onClick={async () => {
+                                if (isRecordingSnowballWinner) return; // Double-tap guard
+                                setActionError(null);
+                                setIsRecordingSnowballWinner(true);
+                                try {
+                                    // Force record as snowball jackpot. Winner is always
+                                    // anonymous on the public surfaces; the action sets
+                                    // winner_name='Anonymous' server-side.
+                                    const result = await recordWinner(
+                                        sessionId,
+                                        gameId,
+                                        'Full House', // Assume Snowball is always FH
+                                        prizeDescription,
+                                        true, // Prize given immediately for manual close-out.
+                                        true, // Force snowball jackpot override for manual award path.
+                                        true,
+                                        ensureClaimRequestId(manualSnowballRequestIdRef)
+                                    );
+
+                                    if (applyMutation(result, "Failed to record snowball win.")) {
+                                        setShowManualSnowballModal(false);
+                                        // This award is a recorded win too, so the claim
+                                        // it belongs to is spent.
+                                        clearSpentClaim();
+                                        openPostWinModal();
+                                        void refreshWinnerLists();
+                                    }
+                                } catch (err) {
+                                    logError('host-control', err);
+                                    setActionError("Could not reach the server. Check the connection and tap Confirm snowball win again: if it did save, tapping again will not award the jackpot twice.");
+                                } finally {
+                                    setIsRecordingSnowballWinner(false);
+                                }
+                            }}
+                        >
+                            {isRecordingSnowballWinner ? 'Recording…' : 'Confirm snowball win'}
+                        </Button>
+                    </>
+                }
+            >
+                <div className="flex flex-col gap-4">
                     {actionError && (
-                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                        <HostAlert>{actionError}</HostAlert>
                     )}
-                    <div className="p-3 bg-[#a57626]/20 border border-[#a57626] rounded text-white text-base">
-                        This will record a Snowball Jackpot win, display the celebration, and <strong>reset the pot</strong>.
+                    <p className="rounded-card border border-line-gold bg-anchor-green-raised p-3">
+                        This will record a snowball jackpot win, display the celebration, and <strong>reset the pot</strong>.
                         Use this if the automatic trigger was missed or for special circumstances.
-                    </div>
-                    <p className="text-base text-white/85">
+                    </p>
+                    <p className="text-anchor-sage">
                         Winners are recorded anonymously. Confirm the prize details below to log the snowball win.
                     </p>
-                    <div>
-                        <label className="text-base text-white/85 block mb-1">Prize Description</label>
+                    <div className="flex flex-col gap-1.5">
+                        <label className={fieldLabelClass}>Prize description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}
                             autoFocus
                         />
                     </div>
-                </div>
-                <div className="mt-6 flex justify-end gap-3">
-                    <Button
-                        variant="secondary"
-                        className="min-h-[44px]"
-                        onClick={handleCloseManualSnowballModal}
-                        disabled={isRecordingSnowballWinner}
-                    >
-                        Cancel
-                    </Button>
-                    <Button
-                        variant="primary"
-                        className="min-h-[44px]"
-                        disabled={isRecordingSnowballWinner}
-                        onClick={async () => {
-                            if (isRecordingSnowballWinner) return; // Double-tap guard
-                            setActionError(null);
-                            setIsRecordingSnowballWinner(true);
-                            try {
-                                // Force record as snowball jackpot. Winner is always
-                                // anonymous on the public surfaces; the action sets
-                                // winner_name='Anonymous' server-side.
-                                const result = await recordWinner(
-                                    sessionId,
-                                    gameId,
-                                    'Full House', // Assume Snowball is always FH
-                                    prizeDescription,
-                                    true, // Prize given immediately for manual close-out.
-                                    true, // Force snowball jackpot override for manual award path.
-                                    true,
-                                    ensureClaimRequestId(manualSnowballRequestIdRef)
-                                );
-
-                                if (applyMutation(result, "Failed to record snowball win.")) {
-                                    setShowManualSnowballModal(false);
-                                    // This award is a recorded win too, so the claim
-                                    // it belongs to is spent.
-                                    clearSpentClaim();
-                                    openPostWinModal();
-                                    void refreshWinnerLists();
-                                }
-                            } catch (err) {
-                                logError('host-control', err);
-                                setActionError("Could not reach the server. Check the connection and tap Confirm Snowball Win again: if it did save, tapping again will not award the jackpot twice.");
-                            } finally {
-                                setIsRecordingSnowballWinner(false);
-                            }
-                        }}
-                    >
-                        {isRecordingSnowballWinner ? 'Recording…' : 'Confirm Snowball Win'}
-                    </Button>
                 </div>
             </Modal>
 

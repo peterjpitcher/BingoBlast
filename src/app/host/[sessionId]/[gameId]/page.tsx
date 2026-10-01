@@ -1,14 +1,14 @@
 import React from 'react';
 import { createClient } from '@/utils/supabase/server';
 import { redirect, notFound } from 'next/navigation';
-import { signout } from '@/app/login/actions';
 import GameControl from './game-control';
 import { Database } from '@/types/database';
-import Link from 'next/link';
-import { Button } from '@/components/ui/button';
+import { buttonClass } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { HostHeader, HostHeaderGameStatus } from '@/components/host/host-header';
+import { getColourName } from '@/lib/colour-name';
 import { isUuid } from '@/lib/utils';
 import { reportError } from '@/lib/report-error';
-import Image from 'next/image';
 
 interface PageProps {
   params: Promise<{ sessionId: string; gameId: string }>;
@@ -28,16 +28,13 @@ const NO_ROWS_RETURNED = 'PGRST116';
  */
 function LoadErrorScreen({ retryHref }: { retryHref: string }) {
   return (
-    <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white flex items-center justify-center p-6">
-      <div role="alert" className="w-full max-w-sm rounded-xl border border-[#1f7c58] bg-[#005131]/90 p-6 text-center space-y-4">
-        <p className="text-lg font-bold">Could not load the game.</p>
-        <a
-          href={retryHref}
-          className="inline-flex min-h-[48px] items-center justify-center rounded-lg border border-[#a57626] bg-[#0f6846] px-8 text-lg font-semibold text-white hover:bg-[#136f4b] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
-        >
+    <div className="flex min-h-screen-safe items-center justify-center bg-anchor-green-deep p-6 text-anchor-cream-text">
+      <Card role="alert" className="flex w-full max-w-sm flex-col items-center gap-4 p-6 text-center">
+        <p className="text-lg font-semibold">Could not load the game.</p>
+        <a href={retryHref} className={buttonClass({ variant: 'outline', size: 'md' })}>
           Retry
         </a>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -151,29 +148,21 @@ export default async function GameControlPage({ params }: PageProps) {
   const isLastGameOfSession =
     indexes.length > 0 && game.game_index === indexes[indexes.length - 1].game_index;
 
+  // The header's status line: "Game 2 · Blue book". The colour word is there
+  // as well as the dot, and is left out rather than shown as "Unknown colour".
+  const colourName = getColourName(game.background_colour ?? '');
+  const gameStatusLine = [
+    `Game ${game.game_index}`,
+    colourName === 'Unknown colour' ? null : `${colourName} book`,
+  ].filter(Boolean).join(' · ');
+
   return (
-    <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white">
-       <header className="p-3 bg-[#005131]/95 border-b border-[#1f7c58] flex justify-between items-center sticky top-0 z-20 shadow-md">
-        <div className="flex items-center gap-3">
-            <Link href="/host">
-              <Button variant="secondary" size="sm" className="min-w-11 px-2 border-[#1f7c58] bg-[#0f6846] hover:bg-[#136f4b]">
-                &larr;
-              </Button>
-            </Link>
-            <div className="relative w-28 h-9">
-              <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
-            </div>
-            <div className="leading-tight hidden sm:block">
-              <h1 className="text-sm font-bold text-white">{session.name}</h1>
-              <p className="text-sm text-white/80">{game.name}</p>
-            </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <form action={signout}>
-            <Button variant="ghost" size="sm" className="text-white hover:bg-[#0f6846]">Sign Out</Button>
-          </form>
-        </div>
-      </header>
+    <div className="min-h-screen-safe bg-anchor-green-deep text-anchor-cream-text">
+      <HostHeader title={session.name} backHref="/host">
+        <HostHeaderGameStatus bookColour={game.background_colour ?? 'transparent'}>
+          {gameStatusLine}
+        </HostHeaderGameStatus>
+      </HostHeader>
 
       <GameControl
         sessionId={sessionId}
@@ -184,6 +173,7 @@ export default async function GameControlPage({ params }: PageProps) {
         currentUserRole={profile?.role || 'host'}
         isFirstGameOfSession={isFirstGameOfSession}
         isLastGameOfSession={isLastGameOfSession}
+        sessionName={session.name}
       />
     </div>
   );

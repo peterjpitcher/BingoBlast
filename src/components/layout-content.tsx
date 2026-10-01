@@ -1,34 +1,18 @@
-"use client";
-
-import { Header } from "@/components/header";
-import { cn } from "@/lib/utils";
-import { usePathname } from 'next/navigation';
-
+/**
+ * The page shell. Every surface is dark and brings its own header and footer
+ * (the admin layout, the host header, the TV's bars), so this is only the
+ * full-height column they sit in.
+ */
 export function LayoutContent({
   children,
 }: {
   children: React.ReactNode;
-}) {
-  const pathname = usePathname();
-  const pathSegments = pathname.split('/').filter(Boolean);
-  const isHostGamePage = pathSegments[0] === 'host' && pathSegments.length === 3;
-  const isDisplayGamePage = pathSegments[0] === 'display' && pathSegments.length === 2;
-  const isPlayerGamePage = pathSegments[0] === 'player' && pathSegments.length === 2;
-  const isGamePage = isHostGamePage || isDisplayGamePage || isPlayerGamePage;
-  const showHeader = pathname === '/' || pathname.startsWith('/admin');
-  const currentYear = new Date().getFullYear();
-
+}): React.ReactElement {
   return (
-    <div className={cn("flex flex-col min-h-screen", !isGamePage && "anchor-theme")}>
-      {showHeader && <Header />}
-      <main className="flex-1 flex flex-col">
+    <div className="flex min-h-screen-safe flex-col">
+      <main className="flex flex-1 flex-col">
         {children}
       </main>
-      {!pathname.startsWith('/display') && !pathname.startsWith('/player') && !isHostGamePage && (
-        <footer className="w-full py-4 text-center text-sm text-emerald-100/75 bg-[#003c25] border-t border-[#1f7c58]">
-          © {currentYear} Orange Jelly Limited. All rights reserved.
-        </footer>
-      )}
     </div>
   );
 }

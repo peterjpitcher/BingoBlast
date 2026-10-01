@@ -80,12 +80,12 @@ test('the phone note is the spec wording', () => {
   assert.equal(PHONE_FOLLOW_ONLY_NOTE, 'This follows the paper game. You cannot enter or claim here.');
 });
 
-test('the game identity reads "Game 3 of 10, Blue book"', () => {
-  assert.equal(formatGameIdentity({ number: 3, total: 10, colourHex: '#2563eb' }), 'Game 3 of 10, Blue book');
+test('the game identity reads "Game 3 of 10 · Blue book"', () => {
+  assert.equal(formatGameIdentity({ number: 3, total: 10, colourHex: '#2563eb' }), 'Game 3 of 10 · Blue book');
 });
 
 test('the game identity leaves out what it does not know', () => {
-  assert.equal(formatGameIdentity({ number: 3, total: null, colourHex: '#2563eb' }), 'Game 3, Blue book');
+  assert.equal(formatGameIdentity({ number: 3, total: null, colourHex: '#2563eb' }), 'Game 3 · Blue book');
   assert.equal(formatGameIdentity({ number: 3, total: 10, colourHex: 'not a colour' }), 'Game 3 of 10');
   assert.equal(formatGameIdentity({ number: null, total: 10, colourHex: '#dc2626' }), 'Red book');
   assert.equal(formatGameIdentity({ number: 11, total: 10, colourHex: null }), 'Game 11');

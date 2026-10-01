@@ -78,12 +78,13 @@ export function ConnectionBanner({ visible, shouldAutoRefresh, hasUnsavedWork = 
     window.location.reload();
   };
 
-  // Dark text on solid amber (about 8:1), where white on 90 percent amber was
-  // about 2:1. The Refresh target is at least 44px tall.
+  // Gold on the deep green, with a gold hairline: the brand's own alert, and
+  // about 7:1. The Refresh target is at least 44px tall. The top offset clears
+  // a phone's status bar.
   const barClass =
-    'fixed top-2 left-1/2 -translate-x-1/2 z-50 flex max-w-[calc(100vw-1rem)] items-center gap-3 rounded-full bg-amber-500 px-4 py-1 font-semibold text-bingo-dark shadow';
+    'fixed top-[calc(env(safe-area-inset-top)+0.5rem)] left-1/2 -translate-x-1/2 z-50 flex max-w-[calc(100vw-1rem)] items-center gap-3 rounded-full border border-anchor-gold-bright bg-anchor-green-deep px-4 py-1 font-semibold text-anchor-gold-bright shadow-sheet';
   const buttonClass =
-    'ml-2 min-h-11 shrink-0 rounded-full bg-white/40 px-4 font-bold text-bingo-dark hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bingo-dark';
+    'ml-2 min-h-11 shrink-0 rounded-full border-2 border-anchor-gold-bright px-4 font-semibold text-anchor-gold-bright transition-colors duration-150 hover:bg-anchor-gold-bright hover:text-anchor-green-deep';
 
   return (
     <div

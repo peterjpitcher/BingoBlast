@@ -12,7 +12,6 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client';
@@ -29,11 +28,14 @@ import { logError } from '@/lib/log-error';
 import { buildPlaylist, type EventsProjection, type Slide } from '@/lib/playlist';
 import { useBuildCheck } from '@/hooks/use-build-check';
 import { useWakeLock } from '@/hooks/wake-lock';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { AnchorLogo, Grain } from '@/components/ui/logo';
 import { PromoSlide, SlidePreload } from './promo-slide';
 import { useMinuteClock } from './screen-hooks';
 import { SlideLoop } from './slide-loop';
-import { tvText } from './tv-text';
+import { TV_KICKER_CLASS, TV_SIZE, tvText } from './tv-text';
 import { useEventsProjection } from './use-events-projection';
 
 export interface LobbySession extends ResolvableSession {
@@ -124,46 +126,41 @@ export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobby
 
   if (state.kind === 'many') {
     return (
-      <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 bg-slate-950 text-white">
-        <h1 className={tvText('xl', 'mb-8 font-black text-transparent bg-clip-text bg-gradient-to-r from-bingo-primary to-bingo-secondary')}>
-          Anchor Bingo
-        </h1>
-        <Card className="w-full max-w-4xl bg-slate-900 border-slate-800">
-          <CardHeader>
-            {/* The size sits on the inner span so CardTitle's own heading size
-                cannot compete with it. */}
-            <CardTitle className="text-center text-slate-400 uppercase tracking-widest">
-              <span className={tvText('xs')}>Select Active Game</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {state.sessions.map((session) => (
-                <Link key={session.id} href={displayPathFor(session.id, { rehearsal })} className="block">
-                  <div className="flex items-center justify-between gap-4 p-4 rounded-lg bg-slate-800 border border-slate-700 hover:border-bingo-primary hover:bg-slate-800/80 transition-all cursor-pointer group">
-                    <div>
-                      <h5 className={tvText('sm', 'font-bold group-hover:text-bingo-primary transition-colors')}>
-                        {session.name}
-                        {session.is_test_session && <span className={tvText('xs', 'ml-2 font-semibold text-yellow-400')}>(test)</span>}
-                      </h5>
-                      <p className={tvText('xs', 'text-slate-400')}>{formatDateInLondon(session.start_date)}</p>
-                    </div>
-                    <span
-                      className={tvText(
-                        'xs',
-                        'shrink-0 px-[0.6em] py-[0.15em] rounded-full font-bold border',
-                        session.status === 'running'
-                          ? 'bg-green-900/30 text-green-400 border-green-800'
-                          : 'bg-yellow-900/30 text-yellow-400 border-yellow-800'
+      <div className="relative flex min-h-screen-safe flex-col items-center justify-center gap-[clamp(18px,3vh,40px)] bg-anchor-green-deep px-[5vw] py-[4vh] text-anchor-cream-text">
+        <Grain />
+        <AnchorLogo height={120} priority className="h-[clamp(64px,9vh,120px)]" />
+        <div className="text-center">
+          <p className={TV_KICKER_CLASS}>Anchor Bingo</p>
+          <h1 className={tvText('xl')}>Select active game</h1>
+        </div>
+        <Card accent className="w-full max-w-[1200px] p-[clamp(14px,2.2vh,28px)]">
+          <ul className="flex flex-col gap-[clamp(8px,1.2vh,16px)]">
+            {state.sessions.map((session) => (
+              <li key={session.id}>
+                <Link
+                  href={displayPathFor(session.id, { rehearsal })}
+                  className="flex items-center justify-between gap-[2vw] rounded-card border border-line bg-anchor-green-raised px-[clamp(16px,1.7vw,32px)] py-[clamp(10px,1.6vh,20px)] transition-colors duration-150 ease-anchor hover:border-anchor-gold-bright"
+                >
+                  <div className="min-w-0">
+                    <h2 className={tvText('lg', 'leading-[1.15]')}>
+                      {session.name}
+                      {session.is_test_session && (
+                        <Badge className={tvText('xs', 'ml-[0.5em] px-[0.6em] py-[0.15em] align-middle')}>Test</Badge>
                       )}
-                    >
-                      {session.status.toUpperCase()}
-                    </span>
+                    </h2>
+                    <p className={tvText('xs', 'text-anchor-sage')}>{formatDateInLondon(session.start_date)}</p>
                   </div>
+                  <Badge
+                    variant={session.status === 'running' ? 'success' : 'outline'}
+                    dot={session.status === 'running'}
+                    className={tvText('xs', 'shrink-0 px-[0.6em] py-[0.15em]')}
+                  >
+                    {session.status}
+                  </Badge>
                 </Link>
-              ))}
-            </div>
-          </CardContent>
+              </li>
+            ))}
+          </ul>
         </Card>
       </div>
     );
@@ -172,32 +169,40 @@ export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobby
   if (state.kind === 'error') {
     return (
       <div
-        className="flex h-screen flex-col items-center justify-center gap-[4vh] px-[6vw] text-center text-white"
-        style={{ backgroundColor: '#005131' }}
+        className="relative flex h-screen flex-col items-center justify-center gap-[clamp(16px,2.6vh,40px)] bg-anchor-green-deep px-[6vw] text-center text-anchor-cream-text"
         role="status"
         aria-live="polite"
       >
-        <div className="relative h-[16vh] w-[60vh] max-w-full">
-          <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain" priority />
-        </div>
-        <h1 className={tvText('lg', 'font-black uppercase tracking-[0.06em]')}>Reconnecting</h1>
-        <p className={tvText('xs', 'text-white/90')}>Trying again in a moment.</p>
+        <Grain />
+        <AnchorLogo height={120} priority className="h-[clamp(80px,11.1vh,120px)]" />
+        <h1 className={tvText('2xl')}>Reconnecting</h1>
+        <p className={tvText('sm', 'font-medium')}>Trying again in a moment.</p>
       </div>
     );
   }
 
-  // No session to join: the idle loop under the logo. The loop area is what
-  // is left of the screen, so the slides size against it as on the session TV.
+  // No session to join: the idle loop under the logo, with the brand line at
+  // the foot of the screen. The loop area is what is left between them, so the
+  // slides size against it as on the session TV: about 790px at 1080p and
+  // 525px at 720p (the bottom padding is the brand line's height plus its
+  // 28px offset and a little air).
   return (
-    <div className="flex h-screen flex-col overflow-hidden text-white" style={{ backgroundColor: '#005131' }}>
-      <div className="flex shrink-0 justify-center pt-[3vh]">
-        <div className="relative h-[12vh] w-[45vh] max-w-full">
-          <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain" priority />
-        </div>
+    <div className="relative flex h-screen flex-col overflow-hidden bg-anchor-green-deep text-anchor-cream-text">
+      <Grain />
+      <div className="flex shrink-0 justify-center pt-[clamp(24px,3.7vh,40px)]">
+        <AnchorLogo height={120} priority className="h-[clamp(80px,11.1vh,120px)]" />
       </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center px-[4vw] pb-[4vh] pt-[2vh]">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-[5vw] pb-[clamp(72px,10vh,108px)] pt-[clamp(14px,2.2vh,24px)]">
         <SlideLoop className="h-full w-full" slides={idlePlaylist} renderSlide={renderIdleSlide} />
       </div>
+      <p
+        className={cn(
+          TV_SIZE.callout,
+          'absolute inset-x-0 bottom-[clamp(18px,2.6vh,28px)] text-center font-script text-anchor-gold-bright'
+        )}
+      >
+        Where everyone&apos;s welcome
+      </p>
     </div>
   );
 }

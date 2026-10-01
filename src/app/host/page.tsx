@@ -6,8 +6,9 @@ import HostDashboard from './dashboard';
 import { listUnsettledSnowballGames } from './actions';
 import { Database } from '@/types/database';
 import { Button } from '@/components/ui/button';
-import Image from 'next/image';
-import Link from 'next/link';
+import { Card } from '@/components/ui/card';
+import { Kicker } from '@/components/ui/kicker';
+import { HostHeader } from '@/components/host/host-header';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {
@@ -56,12 +57,15 @@ export default async function HostPage() {
   if (sessionsError) {
     console.error("Error fetching sessions for host:", sessionsError.message);
     return (
-        <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 text-center bg-[#003f27] text-white">
-            <h1 className="text-2xl font-bold text-white mb-4">Error Loading Sessions</h1>
-            <p className="text-white/85 mb-6">Could not retrieve sessions. Please try again later.</p>
-             <form action={signout}>
-                <Button variant="secondary">Sign Out</Button>
-             </form>
+        <div className="flex min-h-screen-safe flex-col items-center justify-center bg-anchor-green-deep p-4 text-anchor-cream-text">
+            <Card className="flex w-full max-w-md flex-col items-center gap-3.5 px-5 py-6 text-center">
+                <Kicker>Host console</Kicker>
+                <h1 className="text-[28px] leading-[1.05] text-anchor-cream-text">Error loading sessions</h1>
+                <p className="text-[15px] leading-normal text-anchor-sage">Could not retrieve sessions. Please try again later.</p>
+                <form action={signout} className="mt-1.5 w-full">
+                    <Button type="submit" variant="outline" block>Sign out</Button>
+                </form>
+            </Card>
         </div>
     );
   }
@@ -74,23 +78,13 @@ export default async function HostPage() {
   const unsettled = await listUnsettledSnowballGames();
 
   return (
-    <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white pb-20">
-       <header className="p-4 flex justify-between items-center border-b border-[#1f7c58] bg-[#005131]/95 backdrop-blur-sm sticky top-0 z-10">
-          <div className="flex items-center gap-3">
-            <Link href="/" className="relative w-32 h-10 block opacity-100 hover:opacity-70 transition-opacity">
-              <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
-            </Link>
-            <h1 className="font-bold text-lg text-white">Host Console</h1>
-          </div>
-          <div className="flex items-center gap-4">
-             <Link href="/" className="text-sm text-white/70 hover:text-white">← Home</Link>
-             <span className="text-sm text-white/80 hidden sm:inline-block">{user.email}</span>
-             <form action={signout}>
-                <Button variant="ghost" size="sm" className="text-white hover:bg-[#0f6846]">Sign Out</Button>
-             </form>
-          </div>
-       </header>
-      <main className="p-4">
+    <div className="min-h-screen-safe bg-anchor-green-deep pb-[60px] text-anchor-cream-text">
+      <HostHeader title="Host console">
+        <span className="truncate text-xs text-anchor-sage">{user.email}</span>
+      </HostHeader>
+      {/* The design is a phone: one 16px-gutter column. On a tablet or laptop
+          the column keeps its proportions and sits centred. */}
+      <main className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4">
         <HostDashboard
           sessions={sessions}
           unsettledSnowballGames={unsettled.success ? (unsettled.data ?? []) : []}
