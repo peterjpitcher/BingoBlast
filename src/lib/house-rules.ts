@@ -98,7 +98,7 @@ export interface GameIdentityInput {
 }
 
 /**
- * "Game 3 of 10, Blue book", from the game's colour through getColourName (the
+ * "Game 3 of 10 · Blue book", from the game's colour through getColourName (the
  * colour word matters to colour-blind players and hosts). Parts that are not
  * known are left out rather than shown as "Unknown colour" or "of 0".
  */
@@ -109,7 +109,7 @@ export function formatGameIdentity({ number, total, colourHex }: GameIdentityInp
   const colour = colourName === 'Unknown colour' ? null : `${colourName} book`;
 
   const game = hasNumber ? (hasTotal ? `Game ${number} of ${total}` : `Game ${number}`) : null;
-  return [game, colour].filter(Boolean).join(', ');
+  return [game, colour].filter(Boolean).join(' · ');
 }
 
 /**

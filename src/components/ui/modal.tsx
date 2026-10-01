@@ -16,18 +16,26 @@ interface ModalProps {
   showCloseButton?: boolean;
   /** The gold rule along the top edge, for a dialog that announces something. */
   accent?: boolean;
+  /**
+   * A mark above the title (the gold tick disc on "Winner recorded"). With an
+   * icon the heading is centred and the close cross sits in the corner.
+   */
+  icon?: React.ReactNode;
   className?: string;
 }
 
 /** The round 44px close button shared by dialogs and sheets. */
-export function DialogCloseButton({ onClose }: { onClose: () => void }): React.ReactElement {
+export function DialogCloseButton({ onClose, className }: { onClose: () => void; className?: string }): React.ReactElement {
   return (
     <button
       type="button"
       data-modal-close
       aria-label="Close"
       onClick={onClose}
-      className="-mr-2 -mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-anchor-cream-text transition-colors duration-150 hover:bg-white/[0.06]"
+      className={cn(
+        "-mr-2 -mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-anchor-cream-text transition-colors duration-150 hover:bg-white/[0.06]",
+        className,
+      )}
     >
       <X aria-hidden="true" size={20} strokeWidth={2} />
     </button>
@@ -48,6 +56,7 @@ export function Modal({
   footer,
   className,
   accent = false,
+  icon,
   showCloseButton = true,
 }: ModalProps): React.ReactElement | null {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -70,13 +79,26 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
       >
-        <div className="flex shrink-0 items-start justify-between gap-3 px-5 pb-3 pt-6">
-          <div className="flex min-w-0 flex-col gap-1.5">
-            {kicker ? <Kicker>{kicker}</Kicker> : null}
-            <h2 id={titleId} className="text-[28px] leading-[1.05] text-anchor-cream-text">{title}</h2>
+        {icon ? (
+          <div className="flex shrink-0 flex-col items-center gap-[18px] px-5 pb-3 pt-7 text-center">
+            {icon}
+            <div className="flex flex-col gap-1.5">
+              {kicker ? <Kicker>{kicker}</Kicker> : null}
+              <h2 id={titleId} className="text-[30px] leading-none text-anchor-cream-text">{title}</h2>
+            </div>
+            {showCloseButton ? (
+              <DialogCloseButton onClose={onClose} className="absolute right-1 top-1 m-0 text-anchor-sage" />
+            ) : null}
           </div>
-          {showCloseButton ? <DialogCloseButton onClose={onClose} /> : null}
-        </div>
+        ) : (
+          <div className="flex shrink-0 items-start justify-between gap-3 px-5 pb-3 pt-6">
+            <div className="flex min-w-0 flex-col gap-1.5">
+              {kicker ? <Kicker>{kicker}</Kicker> : null}
+              <h2 id={titleId} className="text-[28px] leading-[1.05] text-anchor-cream-text">{title}</h2>
+            </div>
+            {showCloseButton ? <DialogCloseButton onClose={onClose} /> : null}
+          </div>
+        )}
 
         <div className="overflow-y-auto px-5 pb-5 text-[15px] leading-normal">
           {children}

@@ -30,7 +30,7 @@ export function HostHeader({ title, children, backHref, backLabel = "Back to hos
           <ChevronLeft aria-hidden="true" size={22} strokeWidth={2} />
         </Link>
       ) : null}
-      <AnchorLogo height={36} priority />
+      <AnchorLogo height={backHref ? 34 : 36} priority />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5 pl-1">
         <h1 className="truncate font-sans text-[15px] font-semibold leading-tight tracking-normal text-anchor-cream-text">{title}</h1>
         {children}
@@ -50,13 +50,15 @@ export function HostHeader({ title, children, backHref, backLabel = "Back to hos
  */
 export function HostHeaderGameStatus({ bookColour, children }: { bookColour: string; children: React.ReactNode }): React.ReactElement {
   return (
-    <span className="flex items-center gap-1.5 whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.14em] text-anchor-gold-bright">
+    // The colour word is how a colour-blind host knows which book is in play,
+    // so on a narrow phone the line wraps rather than being cut short.
+    <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase leading-snug tracking-[0.14em] text-anchor-gold-bright">
       <span
         aria-hidden="true"
         className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-anchor-cream-text"
         style={{ backgroundColor: bookColour }}
       />
-      <span className="truncate">{children}</span>
+      <span>{children}</span>
     </span>
   );
 }

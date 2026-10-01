@@ -102,15 +102,18 @@
 
 /* Section label: the only ALL-CAPS text in the app, and only through CSS, so
    the source stays sentence case. Prefer the <Kicker> component; the class is
-   for places a component cannot go. */
-.kicker {
-  font-family: var(--font-body), system-ui, sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--anchor-gold-bright);
+   for places a component cannot go. In the components layer, so a utility on
+   the same element (text-[11px] in a tight card, a TV size) still wins. */
+@layer components {
+  .kicker {
+    font-family: var(--font-body), system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--anchor-gold-bright);
+  }
 }
 
 /* Film grain, for the full-screen dark surfaces (TV, landing, admin). Not on
