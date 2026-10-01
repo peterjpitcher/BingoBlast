@@ -27,9 +27,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       danger: "bg-red-600 text-white hover:bg-red-700",
     };
 
+    // sm and md are 44px tall, the minimum touch target (spec 5.7).
     const sizes = {
-      sm: "h-10 px-3 text-sm",
-      md: "h-10 px-4 py-2",
+      sm: "h-11 px-3 text-sm",
+      md: "h-11 px-4 py-2",
       lg: "h-12 px-8 text-lg",
       xl: "h-16 px-8 text-xl w-full", // Great for Host main buttons
     };

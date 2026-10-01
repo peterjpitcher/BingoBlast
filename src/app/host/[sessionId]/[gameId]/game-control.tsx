@@ -1670,7 +1670,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isVoidLastNumberDisabled = !isController || isVoiding || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
     const canVoidWinner = currentUserRole === 'admin';
     const hostSurfaceClass = "bg-[#003f27]/88 border border-[#1f7c58]";
-    const modalErrorClass = "p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded";
+    // Errors are red, so they never read as one of the amber status banners
+    // (ON BREAK, CHECKING CLAIM) or the amber notices.
+    const modalErrorClass = "p-3 bg-red-950/80 border-2 border-red-500 text-white rounded";
     // Every modal that can produce an actionError now renders it inside itself,
     // because a banner on the page behind a modal is a banner the host never sees.
     // The page banner therefore stands down while one of those is open: two
@@ -1691,7 +1693,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         {canTakeControl && (
                             <Button
                                 variant="secondary"
-                                className="bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white animate-pulse min-h-[44px]"
+                                className="bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white min-h-[44px]"
                                 onClick={handleTakeControl}
                                 disabled={isTakingControl}
                             >
@@ -1716,10 +1718,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             {/* Alerts. Hidden while any modal that renders the same error inside
                 itself is open, because that is where the host can actually see it. */}
             {actionError && !isActionErrorShownInModal && (
-                <div role="alert" className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center">{actionError}</div>
+                <div role="alert" className="mb-4 p-4 bg-red-950/80 border-2 border-red-500 text-white rounded-lg text-center font-semibold">{actionError}</div>
             )}
             {isGameCompleted && <div className="mb-4 p-4 bg-[#003f27]/90 border border-[#1f7c58] text-white rounded-lg text-center">Game Completed</div>}
-            {currentGameState.on_break && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold animate-pulse">ON BREAK</div>}
+            {currentGameState.on_break && <div className="mb-4 p-4 bg-[#a57626]/20 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">ON BREAK</div>}
             {currentGameState.paused_for_validation && <div className="mb-4 p-4 bg-[#a57626]/25 border border-[#a57626] text-white rounded-lg text-center text-lg font-bold">CHECKING CLAIM...</div>}
 
             {/* Main Display Card */}
@@ -1759,17 +1761,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
                             <div className="flex items-center gap-6 text-sm text-white/90 border-t border-[#1f7c58] pt-3 w-full justify-center">
                                 <div>
-                                    <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Calls</span>
+                                    <span className="block text-white/80 uppercase text-sm tracking-wider mb-1">Calls</span>
                                     <span className="text-xl font-mono text-white">{currentGameState.numbers_called_count}</span>
                                 </div>
                                 <div className="h-8 w-px bg-[#1f7c58]"></div>
                                 <div>
-                                    <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Playing For</span>
+                                    <span className="block text-white/80 uppercase text-sm tracking-wider mb-1">Playing For</span>
                                     <span className="text-xl font-bold text-white">{currentStageName || 'Finished'}</span>
                                 </div>
                                 <div className="h-8 w-px bg-[#1f7c58]"></div>
                                 <div>
-                                    <span className="block text-white/80 uppercase text-xs tracking-wider mb-1">Prize</span>
+                                    <span className="block text-white/80 uppercase text-sm tracking-wider mb-1">Prize</span>
                                     {isStagePrizeMissing ? (
                                         <span className="text-xl font-bold text-destructive">⚠️ Prize not set</span>
                                     ) : (
@@ -1813,12 +1815,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 <div className="mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/50 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <p className="font-bold text-white">The game ended but the snowball pot did not update</p>
-                        <p className="text-sm text-white/85">
+                        <p className="text-base text-white/85">
                             The jackpot is still showing its old figure. Trying again is safe: if it did
                             move after all, this will say so and change nothing.
                         </p>
                         {pendingRedirect && (
-                            <p className="text-sm text-white/85 mt-1">
+                            <p className="text-base text-white/85 mt-1">
                                 Settle it before you move on if you can. If you carry on without it, ask an
                                 admin to settle it from the host console.
                             </p>
@@ -1870,7 +1872,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     )}>
                         <div>
                             <p className="font-bold text-white">{currentStageName} has been won</p>
-                            <p className="text-sm text-white/85">
+                            <p className="text-base text-white/85">
                                 Move on when the room is ready, or check another claimant if someone else
                                 has the same win.
                             </p>
@@ -2062,15 +2064,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
                                     <div className="min-w-0">
                                         <p className="font-bold text-white">{winner.winner_name}</p>
-                                        <p className={cn("text-sm text-white/85", isVoid && "line-through")}>
+                                        <p className={cn("text-base text-white/85", isVoid && "line-through")}>
                                             {winner.stage} - {winner.prize_description}
                                         </p>
                                         {totalLine && (
-                                            <p className="text-sm font-semibold text-white">{totalLine}</p>
+                                            <p className="text-base font-semibold text-white">{totalLine}</p>
                                         )}
                                     </div>
                                     {isVoid ? (
-                                        <span className="px-2 py-1 rounded-full text-xs font-semibold border border-[#a57626] text-white bg-[#a57626]/20 shrink-0">
+                                        <span className="px-2 py-1 rounded-full text-sm font-semibold border border-[#a57626] text-white bg-[#a57626]/20 shrink-0">
                                             VOID
                                         </span>
                                     ) : (
@@ -2221,7 +2223,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 ) : (
                                     <p className="text-white text-sm text-center font-semibold">Check the game&apos;s stages in the admin screen, then try again.</p>
                                 )}
-                                <p className="text-white/75 text-xs text-center">A winning claim includes the last called number (highlighted).</p>
+                                <p className="text-white/75 text-sm text-center">A winning claim includes the last called number (highlighted).</p>
                             </div>
                         )}
                     </div>
@@ -2241,6 +2243,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         called state is now a different background, not a different
                         text opacity, and every button carries aria-pressed and a
                         spoken label so the state is not conveyed by colour alone.
+                        A called number also carries a tick in its corner, so the
+                        difference is a shape on screen as well (spec 5.7), and the
+                        numbers are 20px on a phone and 24px from sm up.
 
                         Locked once the server has given its verdict: the verdict
                         belongs to exactly these numbers. A different claim is
@@ -2283,13 +2288,22 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                         aria-pressed={isSelected}
                                         aria-label={`${num}, ${stateLabel}`}
                                         className={cn(
-                                            "aspect-square min-h-[44px] sm:min-h-0 flex items-center justify-center text-base sm:text-base rounded transition-colors",
+                                            "relative aspect-square min-h-[44px] sm:min-h-0 flex items-center justify-center text-xl sm:text-2xl rounded transition-colors",
                                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
                                             buttonStyle
                                         )}
                                         disabled={!isController || claimVerdict !== null || claimAttemptId === null}
                                     >
                                         {num}
+                                        {isCalled && (
+                                            <svg
+                                                viewBox="0 0 24 24"
+                                                aria-hidden="true"
+                                                className="pointer-events-none absolute right-[6%] top-[6%] h-[30%] w-[30%]"
+                                            >
+                                                <path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                        )}
                                     </button>
                                 );
                             })}
@@ -2306,7 +2320,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         reach "Check Win" unnoticed. */}
                     {selectedNumbers.length > 0 && claimVerdict === null && (
                         <div className="shrink-0 mt-3 rounded-lg border border-[#1f7c58] bg-[#00301d] p-3" aria-live="polite">
-                            <p className="text-xs uppercase tracking-wider text-white/70 mb-1">You have tapped, as the TV shows it</p>
+                            <p className="text-sm uppercase tracking-wider text-white/70 mb-1">You have tapped, as the TV shows it</p>
                             <p className="font-mono text-lg text-white tabular-nums break-words">
                                 {selectedNumbers.join('  ')}
                             </p>
@@ -2428,17 +2442,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                         <p className="text-sm text-white/85">
                                             {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'} • {winner.stage}
                                         </p>
-                                        <p className={cn("text-sm text-white/70 truncate", winner.is_void && "line-through")}>
+                                        <p className={cn("text-base text-white/70 truncate", winner.is_void && "line-through")}>
                                             {winner.prize_description || 'No prize description'}
                                         </p>
                                         {(() => {
                                             const totalLine = describeWinnerTotal(winnerTotalPence(winner));
-                                            return totalLine ? <p className="text-sm font-semibold text-white">{totalLine}</p> : null;
+                                            return totalLine ? <p className="text-base font-semibold text-white">{totalLine}</p> : null;
                                         })()}
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
                                         {winner.is_void && (
-                                            <span className="px-2 py-1 rounded-full text-xs font-semibold border border-[#a57626] text-white bg-[#a57626]/20">
+                                            <span className="px-2 py-1 rounded-full text-sm font-semibold border border-[#a57626] text-white bg-[#a57626]/20">
                                                 VOID
                                             </span>
                                         )}
@@ -2492,17 +2506,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             >
                 <div className="space-y-4">
                     {voidWinnerError && (
-                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+                        <div role="alert" className={modalErrorClass}>
                             {voidWinnerError}
                         </div>
                     )}
-                    <p className="text-sm text-white/90">
+                    <p className="text-base text-white/90">
                         {voidWinnerTarget
                             ? `Voiding the ${voidWinnerTarget.stage} win${voidWinnerTarget.game ? ` from Game ${voidWinnerTarget.game.game_index}` : ''}. The win stays on record, marked void, and stops counting towards the snowball pot.`
                             : ''}
                     </p>
                     <div>
-                        <label htmlFor="voidWinnerReason" className="text-sm text-white/85 block mb-1">
+                        <label htmlFor="voidWinnerReason" className="text-base text-white/85 block mb-1">
                             Reason (required)
                         </label>
                         <textarea
@@ -2511,7 +2525,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             onChange={(e) => setVoidWinnerReason(e.target.value)}
                             rows={3}
                             placeholder="e.g. Claim called on the wrong ball"
-                            className="w-full rounded-md border border-[#1f7c58] bg-[#005131] px-3 py-2 text-white placeholder:text-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
+                            className="w-full rounded-md border border-[#1f7c58] bg-[#005131] px-3 py-2 text-base text-white placeholder:text-white/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
                         />
                     </div>
                 </div>
@@ -2544,17 +2558,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         a game can only move forwards through its stages.
                     </p>
                     {skipStagePrize && (
-                        <p className="text-sm text-[#f3d59d]">
+                        <p className="text-base text-[#f3d59d]">
                             Unawarded: {skipStagePrize}
                         </p>
                     )}
                     {skipIsFinalStage && (
-                        <p className="text-sm text-white/85">
+                        <p className="text-base text-white/85">
                             This is the last stage, so skipping it ends the game.
                         </p>
                     )}
                     {skipError && (
-                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+                        <div role="alert" className={modalErrorClass}>
                             {skipError}
                         </div>
                     )}
@@ -2580,19 +2594,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         left unplayed.
                     </p>
                     {isSnowballGame && (
-                        <p className="text-sm text-[#f3d59d]">
+                        <p className="text-base text-[#f3d59d]">
                             This is the snowball game, so ending it settles the pot: it rolls over if
                             nobody won the jackpot, and resets if somebody did. Leaving the game open
                             instead means the pot does not move at all.
                         </p>
                     )}
                     {isLastGameOfSession && (
-                        <p className="text-sm text-white/85">
+                        <p className="text-base text-white/85">
                             This is the last game of the session, so the session is marked completed too.
                         </p>
                     )}
                     {endGameError && (
-                        <div role="alert" className="rounded border border-[#a57626] bg-[#a57626]/20 p-3 text-sm text-white">
+                        <div role="alert" className={modalErrorClass}>
                             {endGameError}
                         </div>
                     )}
@@ -2615,7 +2629,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             >
                 <div className="space-y-4">
                     {undoError && (
-                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded space-y-3">
+                        <div role="alert" className={cn(modalErrorClass, "space-y-3")}>
                             <p>{undoError.message}</p>
                             {undoError.code === 'winner_on_ball' && (
                                 <Button
@@ -2640,7 +2654,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     <p className="text-white font-semibold">
                         This will take ball {currentNumber ?? '?'} off the board.
                     </p>
-                    <p className="text-white/90 text-sm">
+                    <p className="text-white/90 text-base">
                         The next call will draw ball {currentNumber ?? '?'} again. It goes back in the bag, it is not skipped.
                     </p>
                 </div>
@@ -2669,11 +2683,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     {actionError && (
                         <div role="alert" className={modalErrorClass}>{actionError}</div>
                     )}
-                    <p className="text-sm text-white/85">
+                    <p className="text-base text-white/85">
                         Winners are recorded anonymously. Confirm the prize details below to log the win.
                     </p>
                     <div>
-                        <label className="text-sm text-white/85 block mb-1">Prize Description</label>
+                        <label className="text-base text-white/85 block mb-1">Prize Description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}
@@ -2681,7 +2695,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             autoFocus
                         />
                         {isSnowballEligibilityStage && currentSnowballPot && (
-                            <p className="text-xs text-white/75 mt-2">
+                            <p className="text-base text-white/75 mt-2">
                                 {isSnowballJackpotWindowOpen
                                     ? `Jackpot is live (${snowballCallsLabel}). Mark the winner as snowball eligible to award both prizes.`
                                     : `Jackpot is closed (${snowballCallsLabel}). This will record the normal game prize only.`}
@@ -2692,10 +2706,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <div className="rounded-lg border border-[#a57626]/70 bg-[#005131]/60 px-3 py-3">
                             {isSnowballJackpotWindowOpen ? (
                                 <>
-                                    <p className="text-xs font-semibold text-[#f3d59d] mb-2">
+                                    <p className="text-base font-semibold text-[#f3d59d] mb-2">
                                         Jackpot window is OPEN. Choose eligibility carefully: this decides whether the jackpot is paid out.
                                     </p>
-                                    <p className="text-sm text-white/90 mb-2">
+                                    <p className="text-base text-white/90 mb-2">
                                         Has the winner attended the last 3 games?
                                     </p>
                                     {/* Two explicit choices, no default (T4.6). The old
@@ -2731,7 +2745,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                             Not eligible
                                         </Button>
                                     </div>
-                                    <p className="text-xs text-white/75 mt-2">
+                                    <p className="text-base text-white/75 mt-2">
                                         {snowballEligibleChoice === null
                                             ? 'Choose eligibility before recording.'
                                             : snowballEligibleChoice
@@ -2740,7 +2754,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     </p>
                                 </>
                             ) : (
-                                <p className="text-xs text-white/75">
+                                <p className="text-base text-white/75">
                                     Snowball jackpot cannot be awarded after the call limit. This will record the stage prize only.
                                 </p>
                             )}
@@ -2754,7 +2768,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             onChange={(e) => setPrizeGiven(e.target.checked)}
                             className="w-5 h-5 rounded border-[#1f7c58] bg-[#005131] text-[#a57626] focus:ring-[#a57626] accent-[#a57626] cursor-pointer"
                         />
-                        <label htmlFor="prizeGiven" className="text-sm text-white/90 select-none cursor-pointer">Prize Given Immediately?</label>
+                        <label htmlFor="prizeGiven" className="text-base text-white/90 select-none cursor-pointer">Prize Given Immediately?</label>
                     </div>
                 </div>
                 <div className="mt-6 flex justify-end gap-3">
@@ -2782,7 +2796,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             >
                 <div className="space-y-6 text-center py-4">
                     {actionError && (
-                        <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded text-left">
+                        <div role="alert" className={cn(modalErrorClass, "text-left")}>
                             {actionError}
                         </div>
                     )}
@@ -2806,7 +2820,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     : postWinIsFinalStage ? 'Move to Next Game' : 'Continue Playing'}
                         </Button>
                         {postWinIsEndOfSession && !isPostWinBusy && (
-                            <p className="text-xs text-white/75 -mt-1">
+                            <p className="text-base text-white/75 -mt-1">
                                 This is the last game. Pressing this ends it and closes the session.
                             </p>
                         )}
@@ -2847,7 +2861,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             >
                                 Close and stay paused
                             </Button>
-                            <p className="text-xs text-white/75">
+                            <p className="text-sm text-white/75">
                                 Closes this box and leaves the game paused with the win on screen. Continue or check another claimant from the main pad when you are ready.
                             </p>
                         </div>
@@ -2865,11 +2879,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     {actionError && (
                         <div role="alert" className={modalErrorClass}>{actionError}</div>
                     )}
-                    <p className="text-sm text-white/90">
+                    <p className="text-base text-white/90">
                         Enter tonight&apos;s cash jackpot amount for <span className="font-bold">{cashJackpotGameName}</span> before this game starts.
                     </p>
                     <div>
-                        <label className="text-sm text-white/85 block mb-1">Cash Jackpot Amount</label>
+                        <label className="text-base text-white/85 block mb-1">Cash Jackpot Amount</label>
                         <Input
                             type="number"
                             inputMode="decimal"
@@ -2912,15 +2926,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     {actionError && (
                         <div role="alert" className={modalErrorClass}>{actionError}</div>
                     )}
-                    <div className="p-3 bg-[#a57626]/20 border border-[#a57626] rounded text-white text-sm">
+                    <div className="p-3 bg-[#a57626]/20 border border-[#a57626] rounded text-white text-base">
                         This will record a Snowball Jackpot win, display the celebration, and <strong>reset the pot</strong>.
                         Use this if the automatic trigger was missed or for special circumstances.
                     </div>
-                    <p className="text-sm text-white/85">
+                    <p className="text-base text-white/85">
                         Winners are recorded anonymously. Confirm the prize details below to log the snowball win.
                     </p>
                     <div>
-                        <label className="text-sm text-white/85 block mb-1">Prize Description</label>
+                        <label className="text-base text-white/85 block mb-1">Prize Description</label>
                         <Input
                             value={prizeDescription}
                             onChange={(e) => setPrizeDescription(e.target.value)}

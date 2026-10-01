@@ -5,9 +5,8 @@
 // and the printed address go to the website's what's-on page.
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { cn } from '@/lib/utils';
 import { WHATS_ON_URL } from '@/lib/venue-links';
-import { TV_TEXT_KEY, TV_TEXT_TITLE } from './tv-text';
+import { tvText } from './tv-text';
 
 // At least 40% of the screen height, like the event QR codes.
 const WHATS_ON_QR_SIZE = 'max(40vh, 288px)';
@@ -34,9 +33,9 @@ export function WhatsOnSlide() {
         />
       </div>
       <div className="flex min-w-0 flex-col gap-[2.4vh] text-left">
-        <h1 className={cn(TV_TEXT_TITLE, 'font-black uppercase tracking-[0.05em]')}>Bingo nights at The Anchor</h1>
-        <p className={cn(TV_TEXT_KEY, 'font-semibold')}>See what&apos;s on</p>
-        <p className={cn(TV_TEXT_KEY, 'break-all font-bold text-[#f3d59d]')}>{WHATS_ON_ADDRESS}</p>
+        <h1 className={tvText('lg', 'font-black uppercase tracking-[0.05em]')}>Bingo nights at The Anchor</h1>
+        <p className={tvText('base', 'font-semibold')}>See what&apos;s on</p>
+        <p className={tvText('base', 'break-all font-bold text-[#f3d59d]')}>{WHATS_ON_ADDRESS}</p>
       </div>
     </section>
   );

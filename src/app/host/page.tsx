@@ -84,7 +84,7 @@ export default async function HostPage() {
           </div>
           <div className="flex items-center gap-4">
              <Link href="/" className="text-sm text-white/70 hover:text-white">← Home</Link>
-             <span className="text-xs text-white/80 hidden sm:inline-block">{user.email}</span>
+             <span className="text-sm text-white/80 hidden sm:inline-block">{user.email}</span>
              <form action={signout}>
                 <Button variant="ghost" size="sm" className="text-white hover:bg-[#0f6846]">Sign Out</Button>
              </form>

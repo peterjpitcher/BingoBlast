@@ -108,7 +108,7 @@ export function Modal({
               data-modal-close
               aria-label="Close"
               onClick={onClose}
-              className="p-2.5 rounded-md text-white/70 hover:text-white hover:bg-[#0f6846] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
+              className="flex min-h-11 min-w-11 items-center justify-center p-2.5 rounded-md text-white/70 hover:text-white hover:bg-[#0f6846] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
             >
               ✕
             </button>

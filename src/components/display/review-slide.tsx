@@ -9,9 +9,8 @@
 // so it can never render while the switch is off.
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { cn } from '@/lib/utils';
 import { REVIEW_URL, isReviewInviteEnabled } from '@/lib/venue-links';
-import { TV_TEXT_KEY, TV_TEXT_TITLE } from './tv-text';
+import { tvText } from './tv-text';
 
 // At least half the screen height: 540px at 1080p, 360px at 720p.
 const REVIEW_QR_SIZE = 'max(50vh, 360px)';
@@ -36,8 +35,8 @@ export function ReviewSlide() {
         />
       </div>
       <div className="flex min-w-0 flex-col gap-[2.4vh] text-left">
-        <h1 className={cn(TV_TEXT_TITLE, 'font-black')}>Enjoyed tonight? Tell us how we did</h1>
-        <p className={cn(TV_TEXT_KEY, 'font-semibold text-[#f3d59d]')}>Scan to leave feedback</p>
+        <h1 className={tvText('lg', 'font-black')}>Enjoyed tonight? Tell us how we did</h1>
+        <p className={tvText('base', 'font-semibold text-[#f3d59d]')}>Scan to leave feedback</p>
       </div>
     </section>
   );

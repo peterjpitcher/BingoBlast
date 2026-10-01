@@ -836,7 +836,7 @@ export default function PlayerUI({
         <div className="min-w-0">
           <h1 className="font-bold text-lg leading-tight text-white">{currentSession.name}</h1>
           {hasRenderableGame && currentActiveGame && (
-            <p className="text-sm text-white">
+            <p className="text-base text-white">
               {[activeIdentity, currentActiveGame.name].filter(Boolean).join(' · ')}
             </p>
           )}
@@ -852,7 +852,7 @@ export default function PlayerUI({
           </Button>
           {hasRenderableGame && currentGameState && (
             <div className="bg-[#005131] px-3 py-1 rounded border border-[#1f7c58]">
-              <span className="text-xs text-white uppercase block">Calls</span>
+              <span className="text-sm text-white uppercase block">Calls</span>
               <span className="font-mono font-bold text-xl leading-none">{revealedCallCount}</span>
             </div>
           )}
@@ -864,7 +864,7 @@ export default function PlayerUI({
           match its paper books left white text on near-white at about 1.4:1.
           The hint was invisible, so phones slept mid-game. */}
       {!isWakeLockActive && (
-        <div className="bg-[#003f27] border-b border-[#a57626]/60 px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-white">
+        <div className="bg-[#003f27] border-b border-[#a57626]/60 px-4 py-2 text-center text-base font-semibold uppercase tracking-wide text-white">
           Tap once to keep this screen awake
         </div>
       )}
@@ -938,7 +938,9 @@ export default function PlayerUI({
         )}
 
         {isOnBreak && (
-          <Card className="bg-yellow-900/20 border-yellow-600">
+          // The solid card background, not a 20 percent tint over the game
+          // colour, which left white text at about 1.4:1 on a pale book colour.
+          <Card className="bg-[#003f27] border-yellow-600">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2 animate-bounce">☕️</div>
               <h2 className="text-2xl font-bold text-white">On Break</h2>
@@ -980,8 +982,8 @@ export default function PlayerUI({
             {/* Info Cards */}
             <div className="grid grid-cols-2 gap-3">
               <div className={cn("bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]", !currentPrizeText && "col-span-2")}>
-                <span className="text-xs text-white uppercase block">Playing For</span>
-                <span className="font-bold text-white text-lg leading-tight">
+                <span className="text-sm text-white uppercase block">Playing For</span>
+                <span className="font-bold text-white text-xl leading-tight">
                   {currentStageName}
                 </span>
               </div>
@@ -989,8 +991,8 @@ export default function PlayerUI({
                   only (X12e). */}
               {currentPrizeText && (
                 <div className="bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]">
-                  <span className="text-xs text-white uppercase block">Prize</span>
-                  <span className="font-bold text-lg leading-tight text-white">
+                  <span className="text-sm text-white uppercase block">Prize</span>
+                  <span className="font-bold text-xl leading-tight text-white">
                     {currentPrizeText}
                   </span>
                 </div>
@@ -1007,7 +1009,7 @@ export default function PlayerUI({
                   <>
                     <div className="flex justify-between items-center gap-4">
                       <div>
-                        <span className="text-white text-xs font-bold uppercase block">Snowball Jackpot</span>
+                        <span className="text-white text-sm font-bold uppercase block">Snowball Jackpot</span>
                         <span className="text-2xl font-bold text-white">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
                       </div>
                       <div className="text-right shrink-0">
@@ -1016,7 +1018,7 @@ export default function PlayerUI({
                             <span className="block text-6xl font-black leading-none text-white tabular-nums">
                               {snowballCallsRemaining}
                             </span>
-                            <span className="block text-[0.7rem] font-bold uppercase tracking-wider text-white/90 mt-1">
+                            <span className="block text-sm font-bold uppercase tracking-wider text-white/90 mt-1">
                               Calls Left
                             </span>
                           </>
@@ -1027,7 +1029,7 @@ export default function PlayerUI({
                         )}
                       </div>
                     </div>
-                    <p className="text-xs text-white/90 mt-2">
+                    <p className="text-base text-white/90 mt-2">
                       {revealedCallCount}/{currentSnowballPot.current_max_calls} calls made for the jackpot
                     </p>
                   </>
@@ -1070,11 +1072,11 @@ export default function PlayerUI({
                 component rather than of whichever colour the admin picked. */}
             <div className="rounded-xl border border-[#1f7c58] bg-[#003f27]/90 p-3">
               <div className="flex justify-between items-end mb-2">
-                <span className="text-sm text-white font-medium">Recent Calls</span>
+                <span className="text-base text-white font-medium">Recent Calls</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-white h-auto min-h-[44px] px-3 underline decoration-[#f3d59d] underline-offset-4 hover:bg-white/10"
+                  className="text-white h-auto min-h-[44px] px-3 text-base underline decoration-[#f3d59d] underline-offset-4 hover:bg-white/10"
                   onClick={() => setShowFullHistory(true)}
                 >
                   View All Numbers
@@ -1089,7 +1091,7 @@ export default function PlayerUI({
                     className={i === 0 ? "w-[4.9rem] h-[4.9rem] text-[1.75rem] bg-[#005131] text-white border-white/70" : "w-[4.2rem] h-[4.2rem] text-[1.575rem] opacity-80 bg-[#005131] text-white border-white/50"}
                   />
                 ))}
-                {delayedNumbers.length === 0 && <p className="text-white italic text-sm">No numbers called yet</p>}
+                {delayedNumbers.length === 0 && <p className="text-white italic text-base">No numbers called yet</p>}
               </div>
             </div>
           </>
@@ -1111,7 +1113,7 @@ export default function PlayerUI({
                 <div
                   key={num}
                   className={cn(
-                    "aspect-square flex items-center justify-center text-sm font-bold rounded",
+                    "aspect-square flex items-center justify-center text-base font-bold rounded",
                     isCalled ? "bg-green-600 text-white" : "bg-[#003f27] text-white"
                   )}
                 >

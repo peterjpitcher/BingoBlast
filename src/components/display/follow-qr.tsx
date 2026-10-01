@@ -6,10 +6,9 @@
 // card so a phone can read it from across the room.
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { cn } from '@/lib/utils';
 import { stripScheme } from '@/lib/follow-link';
 import { KITCHEN_OPEN_UNTIL } from '@/lib/venue-links';
-import { TV_TEXT_BODY, TV_TEXT_KEY, TV_TEXT_TITLE } from './tv-text';
+import { tvText } from './tv-text';
 
 const QR_TITLE = 'QR code: follow the numbers on your phone';
 
@@ -35,7 +34,7 @@ export function FollowQrBadge({ url }: { url: string }) {
           style={{ display: 'block', width: CORNER_QR_SIZE, height: CORNER_QR_SIZE }}
         />
       </div>
-      <p className={cn(TV_TEXT_BODY, 'whitespace-nowrap font-bold text-white')}>Follow along</p>
+      <p className={tvText('xs', 'whitespace-nowrap font-bold text-white')}>Follow along</p>
     </div>
   );
 }
@@ -60,13 +59,13 @@ export function FollowAlongSlide({ url }: { url: string }) {
         />
       </div>
       <div className="flex min-w-0 flex-col gap-[2.4vh] text-left">
-        <p className={cn(TV_TEXT_BODY, 'font-semibold uppercase tracking-[0.2em] text-white/85')}>Anchor Bingo Night</p>
-        <h1 className={cn(TV_TEXT_TITLE, 'font-black uppercase tracking-[0.05em]')}>Follow the numbers on your phone</h1>
-        <p className={cn(TV_TEXT_KEY, 'font-semibold')}>Point your camera at the code</p>
-        <p className={cn(TV_TEXT_KEY, 'break-all font-bold text-[#f3d59d]')}>{stripScheme(url)}</p>
+        <p className={tvText('xs', 'font-semibold uppercase tracking-[0.2em] text-white/85')}>Anchor Bingo Night</p>
+        <h1 className={tvText('lg', 'font-black uppercase tracking-[0.05em]')}>Follow the numbers on your phone</h1>
+        <p className={tvText('base', 'font-semibold')}>Point your camera at the code</p>
+        <p className={tvText('base', 'break-all font-bold text-[#f3d59d]')}>{stripScheme(url)}</p>
         <div className="mt-[1vh] rounded-3xl border border-[#a57626] bg-[#005131]/90 p-[2vh]">
-          <p className={cn(TV_TEXT_KEY, 'font-black uppercase tracking-[0.06em]')}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</p>
-          <p className={cn(TV_TEXT_BODY, 'mt-1 font-medium')}>Get your drinks and order food at the bar!</p>
+          <p className={tvText('base', 'font-black uppercase tracking-[0.06em]')}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</p>
+          <p className={tvText('xs', 'mt-1 font-medium')}>Get your drinks and order food at the bar!</p>
         </div>
       </div>
     </section>

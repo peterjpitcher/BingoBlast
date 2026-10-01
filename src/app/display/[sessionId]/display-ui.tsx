@@ -48,7 +48,7 @@ import { useEventsProjection } from '@/components/display/use-events-projection'
 import { useMinuteClock, useWindowOrigin } from '@/components/display/screen-hooks';
 import { useSessionOverview } from '@/components/display/use-session-overview';
 import { useDisplayLifecycle } from '@/components/display/use-display-lifecycle';
-import { TV_TEXT_KEY } from '@/components/display/tv-text';
+import { tvText } from '@/components/display/tv-text';
 import { logError } from '@/lib/log-error';
 
 // Define types for props
@@ -857,20 +857,24 @@ export default function DisplayUI({
 
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
-  const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
+  // Key information (stage, prize, snowball), one line each: three lines of
+  // tv-base fill the 10rem footer at 1080p, so a long prize ends in "..."
+  // rather than spilling out of the footer.
+  const footerLeftTextClass = tvText('base', 'truncate font-semibold text-white');
   // The break and between-games screens share one centred column (the end
-  // of the night is a slide loop of its own). Each scale takes min() of a
-  // width term and a height term, so the shorter screen wins; every vh term
-  // is chosen so 1080p lands on its clamp maximum.
-  const serviceColumnClass = "mx-auto flex h-full w-full max-w-4xl flex-col justify-center gap-4 2xl:gap-6 text-center";
+  // of the night is a slide loop of its own). Sizes are the text-tv-* tokens
+  // (tailwind.config.ts). Headlines sit on a backing panel, never straight on
+  // the game colour, which can be a pale yellow or peach.
+  const serviceColumnClass = "mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-4 2xl:gap-6 text-center";
   const serviceCardPadClass = "p-4 2xl:p-5";
-  const serviceEyebrowClass = "text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold";
-  const serviceHeadlineClass = "text-[clamp(2rem,min(4.6vw,6.5vh),4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1";
-  const serviceSubheadClass = "text-[clamp(1rem,min(1.55vw,2.1vh),1.35rem)] text-white/90 mt-2";
-  const servicePromoTitleClass = "text-[clamp(1.7rem,min(3.2vw,4.6vh),3.1rem)] font-black uppercase tracking-[0.08em] text-white animate-pulse";
-  const servicePromoBodyClass = "text-[clamp(1rem,min(1.7vw,2.3vh),1.5rem)] text-white mt-2 font-medium";
-  const serviceCardTitleClass = "text-[clamp(1.5rem,min(2.3vw,3.6vh),2.3rem)] font-bold text-white";
-  const serviceCardBodyClass = "text-[clamp(1rem,min(1.45vw,2vh),1.3rem)] text-white/90 mt-1";
+  const serviceHeadlinePanelClass = "rounded-3xl border border-[#1f7c58] bg-[#003f27]/85 backdrop-blur-md";
+  const serviceEyebrowClass = tvText('xs', 'uppercase tracking-[0.2em] text-white/85 font-semibold');
+  const serviceHeadlineClass = tvText('xl', 'font-black uppercase tracking-[0.07em] text-white mt-1');
+  const serviceSubheadClass = tvText('sm', 'text-white/90 mt-2');
+  const servicePromoTitleClass = tvText('lg', 'font-black uppercase tracking-[0.08em] text-white');
+  const servicePromoBodyClass = tvText('sm', 'text-white mt-2 font-medium');
+  const serviceCardTitleClass = tvText('base', 'font-bold text-white');
+  const serviceCardBodyClass = tvText('sm', 'text-white/90 mt-1');
   const stagePrizePreview = currentActiveGame
     ? currentActiveGame.stage_sequence.map((stage, index) => {
         const prize = currentActiveGame.prizes?.[stage as keyof typeof currentActiveGame.prizes];
@@ -897,7 +901,7 @@ export default function DisplayUI({
 
   const renderBreakSlide = () => (
     <div className={serviceColumnClass}>
-      <div>
+      <div className={cn(serviceHeadlinePanelClass, serviceCardPadClass)}>
         <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
         <h1 className={serviceHeadlineClass}>Break Time</h1>
         <p className={serviceSubheadClass}>Please hold your tickets, we will resume shortly.</p>
@@ -914,14 +918,14 @@ export default function DisplayUI({
   // name and colour once the game list is in.
   const renderNextGameSlide = () => (
     <div className={serviceColumnClass}>
-      <div>
+      <div className={cn(serviceHeadlinePanelClass, serviceCardPadClass)}>
         <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
         <h1 className={serviceHeadlineClass}>Next game coming up</h1>
         {nextGame && (
           <div className="mt-[2vh] space-y-[1vh]">
-            <p className={cn(TV_TEXT_KEY, 'font-bold text-white')}>{nextGame.name}</p>
+            <p className={tvText('base', 'font-bold text-white')}>{nextGame.name}</p>
             {nextIdentity && (
-              <p className={cn(TV_TEXT_KEY, 'flex items-center justify-center gap-[0.4em] font-bold text-[#f3d59d]')}>
+              <p className={tvText('base', 'flex items-center justify-center gap-[0.4em] font-bold text-[#f3d59d]')}>
                 <span
                   aria-hidden
                   className="inline-block shrink-0 rounded-full border-2 border-white"
@@ -968,8 +972,8 @@ export default function DisplayUI({
   // its first response.
   if (loadPhase === 'loading') {
     return (
-      <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-current mr-3" />
+      <div className={tvText('sm', 'flex h-screen items-center justify-center text-white')} style={{ backgroundColor: '#005131' }}>
+        <span className="inline-block h-[0.4em] w-[0.4em] animate-pulse rounded-full bg-current mr-[0.6em]" />
         Connecting to game…
       </div>
     );
@@ -985,16 +989,16 @@ export default function DisplayUI({
         className="flex h-screen flex-col items-center justify-center gap-5 px-10 text-center text-white"
         style={{ backgroundColor: '#005131' }}
       >
-        <p className="text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] font-semibold text-white/85">
+        <p className={tvText('xs', 'uppercase tracking-[0.2em] font-semibold text-white/85')}>
           Anchor Bingo Night
         </p>
-        <h1 className="text-[clamp(2rem,4.6vw,4.2rem)] font-black uppercase tracking-[0.07em]">
+        <h1 className={tvText('2xl', 'font-black uppercase tracking-[0.07em]')}>
           Reconnecting To The Game
         </h1>
-        <p className="text-[clamp(1rem,1.55vw,1.35rem)] text-white/90">
+        <p className={tvText('sm', 'text-white/90')}>
           Hold on to your tickets, the screen will catch up in a moment.
         </p>
-        <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-white" />
+        <span className="inline-block h-[1.5vh] w-[1.5vh] min-h-3 min-w-3 animate-pulse rounded-full bg-white" />
       </div>
     );
   }
@@ -1006,9 +1010,9 @@ export default function DisplayUI({
       )}
       style={{ backgroundColor: displayBackgroundColor }}
     >
-      <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
+      <ConnectionBanner variant="tv" visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Top Bar */}
-      <div className="h-24 shrink-0 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10">
+      <div className="h-24 shrink-0 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10" data-check-overlap="top-bar">
          <div className="flex items-center gap-4 shrink-0">
              <div className="relative w-64 h-20">
                  <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
@@ -1017,11 +1021,13 @@ export default function DisplayUI({
          {/* min-w-0 lets this column shrink inside the flex row, and truncate
              keeps a long session or game name to one line instead of pushing
              out of the 6rem bar (X12f). During play the second line leads with
-             the game number and book colour (spec 5.3). */}
+             the game number and book colour (spec 5.3), at the key-information
+             size; with leading-[1.1] on the name the two lines fit the 6rem
+             bar at 1080p (41.6px + 51px). */}
          <div className="min-w-0 flex-1 pl-6 text-right">
-             <h2 className="truncate text-[36px] font-bold tracking-tight">{currentSession.name}</h2>
+             <h2 className={tvText('sm', 'truncate font-bold tracking-tight leading-[1.1]')}>{currentSession.name}</h2>
              {hasRenderableGame && currentActiveGame && (
-               <p className={cn("truncate text-[27px] font-medium uppercase tracking-wider", dimTextColor)}>
+               <p className={tvText('base', 'truncate font-medium uppercase tracking-wider', dimTextColor)}>
                  {[activeIdentity, currentActiveGame.name].filter(Boolean).join(' · ')}
                </p>
              )}
@@ -1031,13 +1037,21 @@ export default function DisplayUI({
       {/* Main Content Area */}
       <div className="flex-1 min-h-0 flex gap-6 relative p-6 overflow-hidden">
 
+          {/* data-check-overlap marks the TV's main regions for the render
+              check (scripts/check-render.js): none of them may overlap. The
+              slide column is only marked while slides show, because the
+              snowball badge sits over its corner (clear of the ball) during
+              play. */}
           {showCornerQr && (
-            <div className="flex shrink-0 items-end" data-check-overlap>
+            <div className="flex shrink-0 items-end" data-check-overlap="qr">
               <FollowQrBadge url={followUrl} />
             </div>
           )}
 
-          <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center" data-check-overlap>
+          <div
+            className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center"
+            data-check-overlap={playlist.length > 0 ? 'slides' : undefined}
+          >
             {playlist.length > 0 && (
               <SlideLoop className="h-full w-full" slides={playlist} renderSlide={renderSlide} />
             )}
@@ -1045,7 +1059,7 @@ export default function DisplayUI({
             {showActiveGame && (
               <div className="flex flex-col items-center justify-center h-full w-full">
                 {currentNumberDelayed ? (
-                  <div className="relative animate-in zoom-in duration-300">
+                  <div className="relative animate-in zoom-in duration-300" data-check-overlap="ball">
                      {/* Massive Main Number.
                         The 19rem subtracted below is the real vertical chrome:
                         h-24 top bar (6rem) + h-40 footer (10rem) + the main area's
@@ -1075,26 +1089,27 @@ export default function DisplayUI({
                   </div>
                 ) : (
                   <>
+                    {/* Stages and prizes are key information, so they are
+                        not pulsed: people need to read them. */}
                     {showPreCallStagePreview ? (
-                      <div className="w-full max-w-4xl bg-[#005131]/92 border border-[#a57626] rounded-3xl p-8 text-white animate-in fade-in duration-500">
-                        <p className="text-[clamp(1rem,1.5vw,1.2rem)] uppercase tracking-[0.2em] font-semibold text-[#f3d59d] text-center animate-pulse">
+                      <div className="w-full max-w-6xl bg-[#005131]/92 border border-[#a57626] rounded-3xl p-8 text-white animate-in fade-in duration-500" data-check-overlap="stages">
+                        <p className={tvText('xs', 'uppercase tracking-[0.2em] font-semibold text-[#f3d59d] text-center')}>
                           Game Stages & Prizes
                         </p>
                         <div className="mt-5 space-y-3">
                           {stagePrizePreview.map((item) => (
                             <div
                               key={`${item.stageLabel}-${item.index}`}
-                              className="grid grid-cols-[1fr_auto] gap-4 items-center bg-[#003f27]/75 border border-[#1f7c58] rounded-2xl px-5 py-4 animate-pulse"
-                              style={{ animationDelay: `${item.index * 180}ms` }}
+                              className="grid grid-cols-[1fr_auto] gap-4 items-center bg-[#003f27]/75 border border-[#1f7c58] rounded-2xl px-5 py-4"
                             >
-                              <p className="text-[clamp(1.2rem,2vw,1.8rem)] font-bold tracking-wide">
+                              <p className={tvText('base', 'font-bold tracking-wide')}>
                                 Stage {item.index + 1}: {item.stageLabel}
                               </p>
                               {/* An empty prize is a setup gap for the host to
                                   fix, not something to put in front of guests
                                   (X12e): the host screen still flags it. */}
                               {item.prizeLabel && (
-                                <p className="text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold text-[#f3d59d]">
+                                <p className={tvText('base', 'font-semibold text-[#f3d59d] text-right')}>
                                   {item.prizeLabel}
                                 </p>
                               )}
@@ -1103,7 +1118,11 @@ export default function DisplayUI({
                         </div>
                       </div>
                     ) : (
-                      <h1 className="text-[72px] font-bold opacity-40 animate-pulse">READY...</h1>
+                      // On a backing panel at full strength: it used to be
+                      // 40 percent white straight on the game colour.
+                      <div className="rounded-3xl border border-[#1f7c58] bg-[#003f27]/85 px-[4vh] py-[2vh]" data-check-overlap="ready">
+                        <h1 className={tvText('3xl', 'font-bold text-white')}>READY...</h1>
+                      </div>
                     )}
                   </>
                 )}
@@ -1115,32 +1134,29 @@ export default function DisplayUI({
               the corner QR, and static so it needs no prefers-reduced-motion
               opt-out. The z-70 claim overlay and the z-80 win overlay cover it
               as they cover everything else. */}
+          {/* max-w-[20vw] keeps the badge clear of the ball at 1280x720 and
+              1920x1080, so a long label such as "Last qualifying call" wraps
+              instead of running across the ball. */}
           {isSnowballGame && (showActiveGame || showPausedForValidation) && currentSnowballPot && snowballWindowStatus && (
-            <div className="absolute top-4 right-4 z-40 rounded-3xl border border-[#a57626] bg-[#005131]/92 px-6 py-4 text-center backdrop-blur-sm">
+            <div className="absolute top-4 right-4 z-40 max-w-[20vw] rounded-3xl border border-[#a57626] bg-[#005131]/92 px-6 py-4 text-center backdrop-blur-sm" data-check-overlap="snowball">
               {snowballWindowStatus === 'open' ? (
                 <>
                   <p
-                    className="font-black leading-none text-[#f3d59d]"
-                    style={{
-                      fontSize: 'clamp(3rem,6vw,5.5rem)',
-                      fontVariantNumeric: 'tabular-nums lining-nums',
-                    }}
+                    className={tvText('3xl', 'font-black leading-none text-[#f3d59d]')}
+                    style={{ fontVariantNumeric: 'tabular-nums lining-nums' }}
                   >
                     {snowballCallsRemaining}
                   </p>
-                  <p className="mt-1 text-[clamp(0.9rem,1.3vw,1.2rem)] font-bold uppercase tracking-[0.16em] text-white">
+                  <p className={tvText('xs', 'mt-1 font-bold uppercase tracking-[0.16em] text-white')}>
                     Calls Left
                   </p>
                 </>
               ) : (
-                <p
-                  className="font-black uppercase leading-none text-[#f3d59d]"
-                  style={{ fontSize: 'clamp(1.6rem,3vw,2.8rem)' }}
-                >
+                <p className={tvText('base', 'font-black uppercase leading-[1.05] text-[#f3d59d]')}>
                   {snowballCallsLabel}
                 </p>
               )}
-              <p className="mt-2 text-[clamp(1.1rem,1.8vw,1.6rem)] font-bold text-white">
+              <p className={tvText('base', 'mt-2 font-bold text-white')}>
                 £{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}
               </p>
             </div>
@@ -1151,7 +1167,7 @@ export default function DisplayUI({
               "Checking Claim" card. */}
           {showPausedForValidation && claimPanel && (
             <div className="absolute inset-0 z-[70] flex items-center justify-center overflow-hidden bg-[#003f27]/95 backdrop-blur-md p-[1.5vh]">
-                <div className="w-full max-w-[1500px] rounded-3xl border border-[#a57626] bg-[#005131]/90 p-[2vh]">
+                <div className="w-full max-w-[1500px] rounded-3xl border border-[#a57626] bg-[#005131]/90 p-[2vh]" data-check-overlap="claim">
                     <ClaimPanel state={claimPanel} variant="tv" />
                 </div>
             </div>
@@ -1163,19 +1179,17 @@ export default function DisplayUI({
           {showWinState && currentGameState && (
             <div className="absolute inset-0 z-[80] flex flex-col items-center justify-center gap-[3vh] overflow-hidden bg-[#003f27]/95 backdrop-blur-md animate-in fade-in duration-300 p-[2vh] text-center">
               <h1
-                className={cn(
-                    claimPanel && claimPanel.balls.length > 0
-                      ? "text-[clamp(2.5rem,min(7vw,11vh),8rem)]"
-                      : "text-[clamp(3rem,10vw,9rem)]",
+                className={tvText(
+                    claimPanel && claimPanel.balls.length > 0 ? '3xl' : '4xl',
                     "leading-[0.9] font-black text-white"
                 )}
               >
                   {currentGameState.display_win_text}
               </h1>
               {currentGameState.display_winner_name && (
-                  <div className="w-full max-w-3xl bg-[#005131]/92 px-12 py-8 rounded-3xl border border-[#a57626] backdrop-blur-xl animate-in slide-in-from-bottom duration-500">
-                      <p className="text-[clamp(1rem,2vw,1.5rem)] text-[#f3d59d] uppercase tracking-[0.16em] mb-2 font-bold">Winner</p>
-                      <h2 className="text-[clamp(2.2rem,6vw,5rem)] font-black text-white break-words">{currentGameState.display_winner_name}</h2>
+                  <div className="w-full max-w-5xl bg-[#005131]/92 px-12 py-8 rounded-3xl border border-[#a57626] backdrop-blur-xl animate-in slide-in-from-bottom duration-500">
+                      <p className={tvText('xs', 'text-[#f3d59d] uppercase tracking-[0.16em] mb-2 font-bold')}>Winner</p>
+                      <h2 className={tvText('2xl', 'font-black text-white break-words')}>{currentGameState.display_winner_name}</h2>
                   </div>
               )}
               {claimPanel && <ClaimBalls balls={claimPanel.balls} variant="tv" />}
@@ -1189,8 +1203,8 @@ export default function DisplayUI({
           padding). Change this height and you must re-do that subtraction. It
           only shows while a game is being called, checked or won. */}
       {showFooter && (
-        <div className="h-40 shrink-0 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10">
-              <div className="flex flex-col justify-center border-r border-white/10 pr-8">
+        <div className="h-40 shrink-0 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10" data-check-overlap="footer">
+              <div className="flex min-w-0 flex-col justify-center border-r border-white/10 pr-8">
                   <p className={footerLeftTextClass}>
                     Playing for: {formatStageLabel(currentStageName ?? undefined)}
                   </p>
@@ -1213,15 +1227,18 @@ export default function DisplayUI({
               <div className="flex flex-col justify-center pl-8 overflow-hidden">
                   {delayedNumbers.length > 0 && (
                       <>
-                        <div className="flex justify-between items-end mb-2">
-                            <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
-                            <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {revealedCallCount}</span>
+                        <div className="flex justify-between items-end gap-4 mb-2">
+                            <span className={tvText('xs', "uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
+                            <span className={tvText('xs', "uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {revealedCallCount}</span>
                         </div>
+                        {/* The digits stay in px: they are sized to the
+                            balls, which are fixed rem like the footer. 44px
+                            in the small balls is the key-information floor. */}
                         <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
                             {delayedNumbers.slice().reverse().map((num, idx) => (
                                 <div key={idx} className={cn(
                                     "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
-                                    idx === 0 ? "w-[5.6rem] h-[5.6rem] text-[50px] border-4 border-white" : "w-[4.2rem] h-[4.2rem] text-[38px] opacity-70"
+                                    idx === 0 ? "w-[5.6rem] h-[5.6rem] text-[50px] border-4 border-white" : "w-[4.2rem] h-[4.2rem] text-[44px] opacity-70"
                                 )}>
                                     {num}
                                 </div>

@@ -221,7 +221,7 @@ export default function HostDashboard({
           on the game screen is gone once the host leaves or reloads, so the
           dashboard keeps offering it until the pot is settled. */}
       {settlementCheckFailed && (
-        <div role="alert" className="rounded-xl border border-[#a57626] bg-[#7a5719]/40 p-4 text-sm text-white">
+        <div role="alert" className="rounded-xl border-2 border-red-500 bg-red-950/80 p-4 text-base text-white">
           Could not check whether every snowball pot has settled. Reload to try again.
         </div>
       )}
@@ -230,7 +230,7 @@ export default function HostDashboard({
           <CardContent className="p-4 space-y-3">
             <div>
               <h2 className="text-lg font-bold text-white">Snowball pot not settled</h2>
-              <p className="text-sm text-white/85">
+              <p className="text-base text-white/85">
                 These snowball games have finished but their pot never moved, so the jackpot is
                 still showing its old figure. Settle each one. If a pot was already corrected by
                 hand in Admin, do not settle it here as well.
@@ -245,7 +245,7 @@ export default function HostDashboard({
                       {g.sessionName}{g.sessionStartDate ? `, ${formatDateInLondon(g.sessionStartDate)}` : ''}
                     </p>
                     {settleError?.gameId === g.gameId && (
-                      <p role="alert" className="mt-1 text-sm text-white">{settleError.message}</p>
+                      <p role="alert" className="mt-1 rounded border-2 border-red-500 bg-red-950/80 px-2 py-1 text-base font-semibold text-white">{settleError.message}</p>
                     )}
                   </div>
                   <Button
@@ -305,17 +305,17 @@ export default function HostDashboard({
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="text-lg font-bold text-white">{session.name}</h3>
                       {session.is_test_session && (
-                        <span className="px-2 py-0.5 text-xs font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">TEST</span>
+                        <span className="px-2 py-0.5 text-sm font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">TEST</span>
                       )}
                     </div>
                     <p className="text-sm text-white/80">{formatDateInLondon(session.start_date)}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     {session.status === 'running' && (
-                      <span className="px-2 py-1 text-xs font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626] animate-pulse">RUNNING</span>
+                      <span className="px-2 py-1 text-sm font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">RUNNING</span>
                     )}
                     {session.status === 'ready' && (
-                      <span className="px-2 py-1 text-xs font-bold bg-[#0f6846] text-white rounded-full border border-[#1f7c58]">READY</span>
+                      <span className="px-2 py-1 text-sm font-bold bg-[#0f6846] text-white rounded-full border border-[#1f7c58]">READY</span>
                     )}
                     <div className={cn("transform transition-transform text-white/75", expandedSessionId === session.id ? "rotate-180" : "")}>
                       ▼
@@ -364,7 +364,7 @@ export default function HostDashboard({
                                   <h4 className={cn("font-bold", isCompleted ? "text-white/80" : "text-white")}>
                                     Game {game.game_index}: {game.name}
                                   </h4>
-                                  <div className="flex gap-2 text-xs">
+                                  <div className="flex gap-2 text-sm">
                                     <span className="text-white/80 uppercase tracking-wider">{game.type}</span>
                                     {status === 'not_started' && <span className="text-white/70">Not Started</span>}
                                     {status === 'in_progress' && <span className="text-white font-bold">In Progress</span>}
@@ -406,7 +406,7 @@ export default function HostDashboard({
                                   </Button>
                                 )}
                                 {gameStartError && (
-                                  <p role="alert" className="max-w-[16rem] text-right text-xs text-white">
+                                  <p role="alert" className="max-w-[16rem] rounded border-2 border-red-500 bg-red-950/80 px-2 py-1 text-right text-sm font-semibold text-white">
                                     {gameStartError}
                                   </p>
                                 )}
@@ -423,7 +423,7 @@ export default function HostDashboard({
                         has been played. */}
                     {session.status === 'running' && (
                       <div className="mt-4 pt-4 border-t border-[#1f7c58] flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-sm text-white/80">
+                        <p className="text-base text-white/80">
                           {gameInProgress
                             ? `Finish Game ${gameInProgress.game_index} before ending the night.`
                             : 'Finished for tonight? End the night so the TV shows the end-of-night screen.'}
@@ -453,7 +453,7 @@ export default function HostDashboard({
         className="max-w-md bg-[#003f27] border border-[#1f7c58]"
       >
         <div className="space-y-4">
-          <p className="text-sm text-white/90">
+          <p className="text-base text-white/90">
             <span className="font-bold text-white">{reopenTarget?.gameName}</span> has finished.
             Re-opening it resumes calling so you can correct a mistake.
           </p>
@@ -481,28 +481,28 @@ export default function HostDashboard({
       >
         <div className="space-y-4">
           {endNightError && (
-            <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+            <div role="alert" className="p-3 bg-red-950/80 border-2 border-red-500 text-white rounded">
               {endNightError}
             </div>
           )}
-          <p className="text-sm text-white/90">
+          <p className="text-base text-white/90">
             <span className="font-bold text-white">{endNightTarget?.sessionName}</span> will be marked as
             finished. The TV and the phones move to the end-of-night screen.
           </p>
           {endNightTarget && endNightTarget.unplayedGames.length > 0 ? (
             <div className="space-y-2">
-              <p className="text-sm font-semibold text-white">These games have not been played and will stay unplayed:</p>
-              <ul className="list-disc pl-5 text-sm text-white/90">
+              <p className="text-base font-semibold text-white">These games have not been played and will stay unplayed:</p>
+              <ul className="list-disc pl-5 text-base text-white/90">
                 {endNightTarget.unplayedGames.map((name) => (
                   <li key={name}>{name}</li>
                 ))}
               </ul>
-              <p className="text-sm text-white/85">A snowball pot on an unplayed game does not move.</p>
+              <p className="text-base text-white/85">A snowball pot on an unplayed game does not move.</p>
             </div>
           ) : (
-            <p className="text-sm text-white/85">Every game has been played.</p>
+            <p className="text-base text-white/85">Every game has been played.</p>
           )}
-          <p className="text-xs text-white/75">Only an admin can open the night again once it has ended.</p>
+          <p className="text-base text-white/75">Only an admin can open the night again once it has ended.</p>
         </div>
         <div className="mt-6 flex justify-end gap-3">
           <Button variant="secondary" className="min-h-[44px]" onClick={closeEndNight} disabled={isEndingNight}>
@@ -527,15 +527,15 @@ export default function HostDashboard({
       >
         <div className="space-y-4">
           {cashJackpotError && (
-            <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+            <div role="alert" className="p-3 bg-red-950/80 border-2 border-red-500 text-white rounded">
               {cashJackpotError}
             </div>
           )}
-          <p className="text-sm text-white/85">
+          <p className="text-base text-white/85">
             Enter tonight&apos;s cash jackpot for <span className="font-bold text-white">{cashJackpotPrompt?.gameName}</span>. This will be shown as the game prize.
           </p>
           <div>
-            <label className="text-sm text-white/90 block mb-1">Cash Jackpot Amount</label>
+            <label className="text-base text-white/90 block mb-1">Cash Jackpot Amount</label>
             <Input
               type="number"
               inputMode="decimal"

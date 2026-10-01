@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { formatEventWhenAndTime } from '@/lib/dates';
 import type { ScreenEvent, ScreenEventImage } from '@/lib/playlist';
 import { eventImageLoader, eventImageSizes } from './event-image';
-import { TV_TEXT_BODY, TV_TEXT_KEY, TV_TEXT_TITLE } from './tv-text';
+import { tvText } from './tv-text';
 
 // At least 40% of the screen height: 432px at 1080p, 288px at 720p.
 const EVENT_QR_SIZE = 'max(40vh, 288px)';
@@ -81,9 +81,11 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow }: EventSlideProps) {
 
       <div className="flex min-w-0 flex-1 flex-col gap-[1.6vh] text-left">
         {image && !image.square && renderImage(image, 'aspect-video h-[40vh] max-w-full self-start')}
-        <p className={cn(TV_TEXT_BODY, 'font-semibold uppercase tracking-[0.2em] text-white/85')}>{eyebrow}</p>
-        <h2 className={cn(TV_TEXT_TITLE, 'line-clamp-2 font-black')}>{event.title}</h2>
-        {whenLine && <p className={cn(TV_TEXT_KEY, 'font-bold text-[#f3d59d]')}>{whenLine}</p>}
+        <p className={tvText('xs', 'font-semibold uppercase tracking-[0.2em] text-white/85')}>{eyebrow}</p>
+        {/* leading-[1.15]: the clamp hides overflow, and the title size's
+            tighter 1.05 line shaved the bottoms off descenders such as "g". */}
+        <h2 className={tvText('lg', 'line-clamp-2 font-black leading-[1.15]')}>{event.title}</h2>
+        {whenLine && <p className={tvText('base', 'font-bold text-[#f3d59d]')}>{whenLine}</p>}
       </div>
 
       <div className="flex shrink-0 flex-col items-center gap-[1.2vh]">
@@ -99,7 +101,7 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow }: EventSlideProps) {
             style={{ display: 'block', width: EVENT_QR_SIZE, height: EVENT_QR_SIZE }}
           />
         </div>
-        <p className={cn(TV_TEXT_BODY, 'font-bold')}>Scan for details</p>
+        <p className={tvText('xs', 'font-bold')}>Scan for details</p>
       </div>
     </section>
   );

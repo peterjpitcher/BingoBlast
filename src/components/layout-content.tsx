@@ -25,7 +25,7 @@ export function LayoutContent({
         {children}
       </main>
       {!pathname.startsWith('/display') && !pathname.startsWith('/player') && !isHostGamePage && (
-        <footer className="w-full py-4 text-center text-xs text-emerald-100/75 bg-[#003c25] border-t border-[#1f7c58]">
+        <footer className="w-full py-4 text-center text-sm text-emerald-100/75 bg-[#003c25] border-t border-[#1f7c58]">
           © {currentYear} Orange Jelly Limited. All rights reserved.
         </footer>
       )}

@@ -9,7 +9,7 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
 import type { ClaimBall, ClaimPanelState } from '@/lib/claim-panel';
-import { TV_TEXT_BODY, TV_TEXT_KEY } from './tv-text';
+import { tvText } from './tv-text';
 
 export type ClaimPanelVariant = 'tv' | 'phone';
 
@@ -118,13 +118,13 @@ export function ClaimPanel({ state, variant }: ClaimPanelProps) {
 
   return (
     <div className="flex w-full flex-col items-center gap-[1.6vh] text-center" role="status" aria-live="polite">
-      <h1 className={cn(TV_TEXT_KEY, 'font-black uppercase tracking-[0.06em] text-white')}>{state.headline}</h1>
+      <h1 className={tvText('base', 'font-black uppercase tracking-[0.06em] text-white')}>{state.headline}</h1>
       <ClaimBalls balls={state.balls} variant="tv" />
-      <p className={cn(isVerdict ? TV_TEXT_KEY : TV_TEXT_BODY, isVerdict ? 'font-bold' : 'font-semibold', 'max-w-[90%] text-white')}>
+      <p className={tvText(isVerdict ? 'base' : 'xs', isVerdict ? 'font-bold' : 'font-semibold', 'max-w-[90%] text-white')}>
         {state.detail}
       </p>
       {state.lastNumberLine && (
-        <p className={cn(TV_TEXT_BODY, 'font-bold uppercase tracking-[0.1em] text-[#f3d59d]')}>{state.lastNumberLine}</p>
+        <p className={tvText('xs', 'font-bold uppercase tracking-[0.1em] text-[#f3d59d]')}>{state.lastNumberLine}</p>
       )}
     </div>
   );
