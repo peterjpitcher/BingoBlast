@@ -504,3 +504,16 @@ The owner said yes to showing events in the gap between games too.
 
 **Test trap:** a background tab in the browser pane does not paint, so a slide's image looked blank in a capture although it had loaded. Front the tab before trusting a screenshot.
 
+
+## Admin backup page query (1 October 2026)
+
+`/admin/backup` always showed "Error loading backup data": its embed of `sessions` from `games` named no foreign key, and the two tables are joined twice (`games_session_id_fkey`, `sessions_active_game_id_fkey`), so PostgREST refused it as ambiguous (PGRST201).
+
+- [x] Reproduce on the local stack: the page's exact request returns HTTP 300 PGRST201.
+- [x] Name the relationship: `sessions:sessions!games_session_id_fkey (name, start_date)`. Same request then returns HTTP 200 with all 10 seeded games; `game_states` embeds as a single object (one foreign key, unique).
+- [x] Check the `.order('start_date', { foreignTable: 'sessions' })` call. It is accepted with the hinted embed but has never sorted the list: it orders rows inside the embed, a no-op for a single session. With the two local sessions on different dates the games came back interleaved by `game_index`. Replaced with `.order('sessions(start_date)', { ascending: false })`, then `session_id`, then `game_index`.
+- [x] Check every other embed in `src` (75 literal selects scanned, 6 with embeds; the column-list constants hold no embeds). All return HTTP 200 on the local stack. `pg_constraint` shows games and sessions are the only pair of tables with more than one foreign key, and no table is a many-to-many junction.
+- [x] Regression test `src/lib/postgrest-embeds.test.ts`: scans `src` for an unhinted games/sessions embed. Fails against the page as it is on main, passes with the fix.
+- [x] Run the page itself on the local stack: 10 call sheets, latest session first. The unfixed build on port 3100 shows the error.
+
+**Assumption:** two sessions on the same date are kept apart by `session_id`, so their games do not interleave; which of the two comes first is not meaningful.
