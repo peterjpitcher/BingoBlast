@@ -303,9 +303,9 @@ select t('grants :: every public function is executable by service_role',
 -- The whole matrix, function by function, as read from production on
 -- 2026-09-29 (sixteen callable by authenticated and service_role, four trigger
 -- functions by service_role only, none by anon), plus what the 2026-10-01
--- migrations add: M1 (20261001000100) three caller-facing lifecycle functions
--- and one trigger function; M2a (20261001000200) three claim functions, the
--- stage count helper and the guard trigger function; M3 (20261001000300)
+-- migrations add: M1 (20261001075034) three caller-facing lifecycle functions
+-- and one trigger function; M2a (20261001075215) three claim functions, the
+-- stage count helper and the guard trigger function; M3 (20261001075401)
 -- list_unsettled_snowball_games. M2b adds none. It must come out the same in
 -- both worlds, or a rebuilt project is not the project it rebuilds.
 with expected(fname, authd, svc) as (

@@ -1,9 +1,9 @@
 -- Behavioural assertions for the claim migrations, run against the fully
 -- replayed database in suites D and E of supabase/tests/run.sh:
---   M2a  20261001000200_claim_attempts.sql      begin_claim_check,
+--   M2a  20261001075215_claim_attempts.sql      begin_claim_check,
 --        set_claim_draft, check_claim, guard_claim_fields, the bound undo and
 --        the public mirror
---   M2b  20261001000400_claim_enforcement.sql   record_winner_atomic requiring
+--   M2b  20261001075456_claim_enforcement.sql   record_winner_atomic requiring
 --        the checked attempt, the manual snowball exemption, the win text and
 --        the money text
 -- M2b sits on M3, so this is the final combined definition, as production will

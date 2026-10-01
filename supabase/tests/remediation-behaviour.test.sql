@@ -22,7 +22,7 @@ $$;
 -- A checked, valid claim for a game's current stage, as the host screen makes
 -- one: begin a check for the attempt (replacing any other), then check the last
 -- N balls called, which always include the last ball. Since
--- 20261001000400_claim_enforcement.sql record_winner_atomic records a new
+-- 20261001075456_claim_enforcement.sql record_winner_atomic records a new
 -- winner only for such an attempt, with the attempt id as p_client_request_id.
 -- pg_temp keeps it out of public, where the replay's function count would see it.
 create or replace function pg_temp.valid_claim(p_game_id uuid, p_attempt_id uuid)

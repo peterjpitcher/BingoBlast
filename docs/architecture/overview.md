@@ -96,10 +96,10 @@ Each performs precheck-and-mutate atomically under a row lock so a host cannot s
 
 The four migrations of 1 October 2026 move the rest of the live night onto the same pattern, with one lock order (session row, then `game_states` row):
 
-- `20261001000100_night_lifecycle.sql`: `start_game`, `finish_game`, `end_night`, plus `sessions.started_at`, `completed_at` and `state_version`. `start_game` also takes the cash jackpot amount for a fresh start of a jackpot game and writes its prize text in the same transaction, because `games` UPDATE is admin only in RLS.
-- `20261001000200_claim_attempts.sql`: the claim attempt (`begin_claim_check`, `set_claim_draft`, `check_claim`, `required_claim_count`), the public `claim_numbers` and `claim_result`, and `void_last_number` bound to the attempt while paused. The attempt replaces the claim key the Record Winner modal used to mint.
-- `20261001000300_jackpot_components.sql`: the snowball jackpot as its own money component on `winners`, `settle_snowball_pot` refusing an unfinished game, and `list_unsettled_snowball_games`, the read-only Settle list on the host dashboard.
-- `20261001000400_claim_enforcement.sql`: `record_winner_atomic` records a new winner only from a checked, valid claim attempt.
+- `20261001075034_night_lifecycle.sql`: `start_game`, `finish_game`, `end_night`, plus `sessions.started_at`, `completed_at` and `state_version`. `start_game` also takes the cash jackpot amount for a fresh start of a jackpot game and writes its prize text in the same transaction, because `games` UPDATE is admin only in RLS.
+- `20261001075215_claim_attempts.sql`: the claim attempt (`begin_claim_check`, `set_claim_draft`, `check_claim`, `required_claim_count`), the public `claim_numbers` and `claim_result`, and `void_last_number` bound to the attempt while paused. The attempt replaces the claim key the Record Winner modal used to mint.
+- `20261001075401_jackpot_components.sql`: the snowball jackpot as its own money component on `winners`, `settle_snowball_pot` refusing an unfinished game, and `list_unsettled_snowball_games`, the read-only Settle list on the host dashboard.
+- `20261001075456_claim_enforcement.sql`: `record_winner_atomic` records a new winner only from a checked, valid claim attempt.
 
 They replace the host actions `validateClaim`, `pauseForValidation` and `announceWin`, and the internal `maybeCompleteSession`. See [[server-actions]].
 

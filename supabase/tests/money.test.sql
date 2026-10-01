@@ -1,5 +1,5 @@
 -- Behavioural assertions for M3, the jackpot money components
--- (20261001000300_jackpot_components.sql), run against the fully replayed
+-- (20261001075401_jackpot_components.sql), run against the fully replayed
 -- database in suites D and E of supabase/tests/run.sh. Winners are recorded
 -- through checked claims, because M2b is in place on top.
 --

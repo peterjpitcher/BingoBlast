@@ -1,4 +1,4 @@
--- Rollback for 20261001000200_claim_attempts.sql (M2a). Function definitions
+-- Rollback for 20261001075215_claim_attempts.sql (M2a). Function definitions
 -- only.
 --
 -- WHAT IT DOES

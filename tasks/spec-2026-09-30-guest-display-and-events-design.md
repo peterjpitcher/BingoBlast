@@ -1,7 +1,7 @@
 # Spec: claims on screen, start and end of night, events carousel and review QR
 
 **Version:** 2, 30 September 2026. Version 1 (same date) was reviewed in `tasks/review-2026-09-30-guest-display-and-events.md`; section 17 maps every finding to its change here.
-**Status:** Built. Owner decisions and confirmations recorded (section 0). Release approved by the owner on 1 October 2026.
+**Status:** Released on 1 October 2026. The reliability slice is production deployment `dpl_HD6VoCiYRdRBAqA4uEzECcJ138PB` (commit `0d5faf3`); the features are deployment `dpl_FwYnHWHVhTPuXVVwh75ztZeaFdD2` (commit `677ddca`), with the four migrations applied as versions `20261001075034`, `20261001075215`, `20261001075401` and `20261001075456`. The migration files in this repo carry those applied versions; where this spec says M1, M2a, M3 and M2b it means those four, in that order.
 **Author:** Claude, for Peter Pitcher (owner)
 **Repo baseline:** `main` at `d12b836`. Production app https://bingo-blast-ten.vercel.app (Vercel project `oj-cashbingo`). Production database Supabase `bcmorqsgeumtmhvctvgu` (eu-west-2, Postgres 17).
 **Other repos involved:**
@@ -746,7 +746,7 @@ This follows the review's second option (R05): one release outside play, with a 
 **Recovery:**
 
 - Function rollback scripts are in `supabase/rollback/`.
-- **To roll the screens back to the previous release, first apply `supabase/rollback/20261001000400_claim_enforcement.rollback.sql`, then roll back in Vercel.** M2b refuses any winner recorded without a checked claim, so the previous host screen cannot record winners while M2b is in place (suite F proves both halves). M1, M2a and M3 can stay: they work with the previous screens.
+- **To roll the screens back to the previous release, first apply `supabase/rollback/20261001075456_claim_enforcement.rollback.sql`, then roll back in Vercel.** M2b refuses any winner recorded without a checked claim, so the previous host screen cannot record winners while M2b is in place (suite F proves both halves). M1, M2a and M3 can stay: they work with the previous screens.
 - If M2b blocks a real save during play, the host uses Manual Snowball Win only where it genuinely applies. Otherwise apply the M2b rollback script, which restores the M3 definition.
 - The steps are in `docs/runbooks/backup-and-recovery.md`, section 7.
 
