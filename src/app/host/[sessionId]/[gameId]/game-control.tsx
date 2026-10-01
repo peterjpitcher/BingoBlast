@@ -1,11 +1,16 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Database, UserRole } from '@/types/database';
+import type { PostgrestError } from '@supabase/supabase-js';
+import { ClaimResult, Database, UserRole } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
-import { callNextNumber, toggleBreak, validateClaim, recordWinner, skipStage, voidLastNumber, pauseForValidation, resumeGame, announceWin, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost, endGame, settleSnowballPotForGame } from '@/app/host/actions';
+import { callNextNumber, toggleBreak, recordWinner, skipStage, voidLastNumber, resumeGame, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost, endGame, settleSnowballPotForGame, beginClaimCheck, setClaimDraft, checkClaim, undoLastNumberForClaim } from '@/app/host/actions';
+import type { ClaimSnapshot } from '@/app/host/claim-action-types';
 import type { ActionFailureCode, ActionResult } from '@/types/actions';
+import { createClaimDraftQueue, type ClaimDraftQueue, type ClaimDraftQueueState } from '@/lib/claim-draft-queue';
+import { createPollRunner } from '@/lib/poll-runner';
+import { describeWinnerTotal, winnerTotalPence } from '@/lib/money';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
@@ -34,6 +39,38 @@ type SessionWinner = Winner & {
     game: Pick<Game, 'id' | 'name' | 'game_index'> | null;
 };
 
+/** One host poll of the game state: the query's own answer, never thrown. */
+interface GameStatePoll {
+    data: GameState | null;
+    error: PostgrestError | null;
+}
+
+/**
+ * A draft refusal that retrying cannot fix: the claim ended, the attempt was
+ * replaced, a verdict was given, the stage moved or the list itself is wrong.
+ * The draft queue stops on these instead of retrying for ever. Anything else,
+ * including a dropped connection, is retried.
+ */
+const PERMANENT_DRAFT_REFUSALS: ReadonlySet<ActionFailureCode | undefined> = new Set<ActionFailureCode>([
+    'not_paused',
+    'attempt_mismatch',
+    'verdict_already_given',
+    'stale_attempt',
+    'number_out_of_range',
+    'duplicate_numbers',
+    'too_many_numbers',
+    'unknown_stage',
+]);
+
+/** The missing_last_ball decision (A1), captured when check_claim asks for it. */
+interface MissingLastBallPrompt {
+    lastNumber: number;
+    /** The ball count the host saw, which binds the one undo to exactly this ball. */
+    expectedCount: number;
+    /** False once this attempt has used its undo: then only "reject as late" is left. */
+    undoAvailable: boolean;
+}
+
 interface GameControlProps {
     sessionId: string;
     gameId: string;
@@ -57,8 +94,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [isCallingNumber, setIsCallingNumber] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
     const [showValidationModal, setShowValidationModal] = useState(false);
+    // The claim on screen (spec 5.2). The numbers are in TAP order, because
+    // that is the order the TV and phones show them as the caller reads them.
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
-    const [validationResult, setValidationResult] = useState<{ valid: boolean; invalidNumbers?: number[] } | null>(null);
+    // The server's verdict for this attempt, or null while none has been given.
+    const [claimVerdict, setClaimVerdict] = useState<ClaimResult | null>(null);
+    // check_claim answered missing_last_ball: the host decides (A1).
+    const [missingLastBall, setMissingLastBall] = useState<MissingLastBallPrompt | null>(null);
+    const [isUndoingForClaim, setIsUndoingForClaim] = useState(false);
+    // Short guidance inside the claim modal: an adopted claim, a full grid.
+    const [claimNotice, setClaimNotice] = useState<string | null>(null);
+    // The draft queue's state, for "TV not updated, retrying".
+    const [draftQueueState, setDraftQueueState] = useState<ClaimDraftQueueState>('idle');
     const [showWinnerModal, setShowWinnerModal] = useState(false);
     const [showManualSnowballModal, setShowManualSnowballModal] = useState(false);
     const [showPostWinModal, setShowPostWinModal] = useState(false);
@@ -77,32 +124,42 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [isRecordingSnowballWinner, setIsRecordingSnowballWinner] = useState(false);
     const [currentWinners, setCurrentWinners] = useState<Winner[]>([]);
     const [sessionWinners, setSessionWinners] = useState<SessionWinner[]>([]);
+    // The recovery below must not reopen a claim that is already a recorded
+    // winner, so it waits until this game's winners have been read once.
+    const [winnersLoaded, setWinnersLoaded] = useState(false);
 
-    // Idempotency keys for recording a win, one per claim attempt. Refs rather
-    // than state: nothing renders them, and a handler must read the current value
-    // rather than the one captured by the render it was created in.
+    // The claim ATTEMPT (spec 5.2). Minted on this phone when the host taps
+    // Check Claim or Check another claimant, stored by begin_claim_check, and
+    // from then on it binds every draft, the verdict, the one permitted undo
+    // and the recorded winner: it IS record_winner_atomic's idempotency key.
+    // A committed save retried after a lost response, a reload, the next stage
+    // or a takeover returns the existing winner instead of a second one. It
+    // replaced the React-ref claim key, which a reload or a takeover lost.
     //
-    // The key is what makes a retry safe. A record-winner call that commits but
-    // loses its response on the bar wifi used to insert a second winner when the
-    // host tapped again, at the same stage and the same ball, and the same prize
-    // was then owed twice. Same claim, same key, so the server refuses the second
-    // insert and hands back the state instead. A tie is a different claim and gets
-    // a different key, so both winners still save.
-    //
-    // Minted where each modal opens, which is also what regenerates it for
-    // "Validate Another Winner": that path goes back through the claim check and
-    // reopens Record Winner. The two paths keep separate keys so they can never
-    // borrow each other's.
-    const claimRequestIdRef = useRef<string | null>(null);
+    // State for rendering, mirrored in a ref for handlers that must read the
+    // latest value rather than the one their render captured.
+    const [claimAttemptId, setClaimAttemptId] = useState<string | null>(null);
+    const claimAttemptIdRef = useRef<string | null>(null);
+    // Sends each tap to set_claim_draft: one request at a time, newest list wins.
+    const claimDraftQueueRef = useRef<ClaimDraftQueue | null>(null);
+    // Attempts this tab has finished with (recorded, or closed by the host once
+    // the stage was won), so the recovery below does not keep reopening them.
+    const dismissedAttemptIdsRef = useRef<Set<string>>(new Set());
+    // Where a finishing move was heading when the snowball pot did not settle
+    // (X6): the host sees the retry banner first, then carries on from it.
+    const [pendingRedirect, setPendingRedirect] = useState<string | null>(null);
     /**
      * Idempotency key for one intended ball, set on the tap and cleared as soon
      * as any response arrives. It survives only a transport failure, which is
      * exactly the case where the host will tap again and must not draw twice.
      */
     const callRequestIdRef = useRef<string | null>(null);
+    // Manual Snowball Win keeps its own key: it is the one route that records a
+    // winner without a checked claim (a snowball Full House inside the open
+    // jackpot window, checked under the lock by record_winner_atomic).
     const manualSnowballRequestIdRef = useRef<string | null>(null);
 
-    /** The key for the claim on screen, minted on first use if a path missed it. */
+    /** The manual award's key, minted on first use if a path missed it. */
     const ensureClaimRequestId = (ref: React.RefObject<string | null>): string => {
         ref.current ??= newClaimRequestId();
         return ref.current;
@@ -174,12 +231,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const isAnyModalOpen =
         showValidationModal || showWinnerModal || showManualSnowballModal ||
         showPostWinModal || showSessionWinnersModal || showCashJackpotModal ||
-        showUndoModal || showEndGameModal || showSkipConfirm || voidWinnerTarget !== null;
+        showUndoModal || showEndGameModal || showSkipConfirm || voidWinnerTarget !== null ||
+        missingLastBall !== null;
     const isAnyRequestInFlight =
         isCallingNumber || isRecordingWinner || isRecordingSnowballWinner ||
         isTakingControl || isTogglingBreak || isVoiding || isAdvancing ||
         isSkipping || isResuming || isPausing || isMovingGame || isCheckingWin ||
-        isVoidingWinner || isSubmittingCashJackpot || isEndingGame || isSettlingPot;
+        isVoidingWinner || isSubmittingCashJackpot || isEndingGame || isSettlingPot ||
+        isUndoingForClaim;
+    // The claim itself now survives a reload (the server holds the attempt and
+    // its draft), but a reload mid-claim still costs the host their place, so
+    // the guard stays.
     const hasUnsavedWork = isAnyModalOpen || selectedNumbers.length > 0 || isAnyRequestInFlight;
 
     // New releases (S0.4). The host screen never reloads by itself: it offers
@@ -188,7 +250,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // read out.
     const isInClaim =
         showValidationModal || showWinnerModal || showManualSnowballModal ||
-        showPostWinModal || selectedNumbers.length > 0;
+        showPostWinModal || selectedNumbers.length > 0 || claimAttemptId !== null ||
+        missingLastBall !== null;
     const { showPrompt: showNewVersionPrompt, reload: reloadForNewVersion } = useBuildCheck({
         mode: 'prompt',
         safe: !isInClaim,
@@ -208,10 +271,24 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const health = useConnectionHealth();
     const { markPollSuccess, markPollFailure, markRealtimeStatus } = health;
 
-    // Polling guards: monotonic sequence + in-flight flag prevent stale poll
-    // results from clobbering newer state when responses arrive out-of-order.
-    const pollSeqRef = useRef(0);
-    const pollInFlightRef = useRef(false);
+    // The host's own 3 second poll, through the same runner as the public
+    // screens (spec 5.8): one request at a time, an 8 second deadline so a hung
+    // request frees the in-flight flag instead of stopping the poll for good,
+    // and a sequence so a slow answer never lands on top of a newer one.
+    const pollRunner = useMemo(
+        () => createPollRunner<GameStatePoll>({
+            run: async (signal) => {
+                const { data, error } = await supabase
+                    .from('game_states')
+                    .select('*')
+                    .eq('game_id', gameId)
+                    .abortSignal(signal)
+                    .single<GameState>();
+                return { data, error };
+            },
+        }),
+        [supabase, gameId],
+    );
 
   useWakeLock();
 
@@ -266,7 +343,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // control so a void refreshes both lists without waiting on Realtime.
     const fetchGameWinners = useCallback(async () => {
         const { data } = await supabase.from('winners').select('*').eq('game_id', gameId).order('created_at', { ascending: false });
-        if (data) setCurrentWinners(data);
+        if (data) {
+            setCurrentWinners(data);
+            setWinnersLoaded(true);
+        }
     }, [supabase, gameId]);
 
     const fetchSessionWinners = useCallback(async () => {
@@ -363,6 +443,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const requiredSelectionCount = getRequiredSelectionCountForStage(currentStageName);
     const isStageValidForClaimCheck = requiredSelectionCount !== null;
     const claimIncludesLastBall = currentNumber !== null && selectedNumbers.includes(currentNumber);
+    const calledNumberSet = new Set<number>(currentGameState.called_numbers ?? []);
+    // Tapped but never called, in tap order: the fault the host must not miss.
+    const claimNumbersNotCalled = selectedNumbers.filter((n) => !calledNumberSet.has(n));
     const isClaimCountMet = requiredSelectionCount !== null && selectedNumbers.length === requiredSelectionCount;
     const isSnowballGame = game.type === 'snowball';
     const snowballCallsLabel = currentSnowballPot
@@ -397,6 +480,15 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // window still open. There used to be an effect auto-ticking eligibility here
     // and another resetting it in handleCheckWin, and the two fought each other.
     const isSnowballChoiceRequired = isSnowballEligibilityStage && isSnowballJackpotWindowOpen;
+
+    // X4: a live (non-void) winner is already on record for the stage being
+    // played. resumeGame refuses then, so the pad offers Continue to the next
+    // stage instead of Resume calling.
+    const isCurrentStageWon = currentWinners.some(
+        (w) => w.stage === currentStageName && w.is_void !== true,
+    );
+    const hasNextStage = currentGameState.current_stage_index < lastStageIndex;
+    const nextStageName = hasNextStage ? game.stage_sequence[currentGameState.current_stage_index + 1] : null;
 
     const navigateToHostPath = (targetPath?: string) => {
         const destination = targetPath || '/host';
@@ -494,22 +586,20 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // handler, and the realtime reconnect path. Tracks an in-flight flag and a
     // monotonic sequence so a slow response can't clobber newer state.
     const pollGameState = useCallback(async () => {
-        if (pollInFlightRef.current) return;
-        const seq = ++pollSeqRef.current;
-        pollInFlightRef.current = true;
+        // Null while a poll is still in flight; the runner frees that flag at
+        // the 8 second deadline even if the request never answers.
+        const started = pollRunner.start();
+        if (!started) return;
         try {
-            const { data: freshState, error } = await supabase
-                .from('game_states')
-                .select('*')
-                .eq('game_id', gameId)
-                .single<GameState>();
+            const { data: freshState, error } = await started.promise;
             if (error) {
                 markPollFailure();
                 logError('host-control', error);
                 return;
             }
-            // If a newer poll has started since this one fired, drop the result.
-            if (seq !== pollSeqRef.current) return;
+            // A newer poll or a Realtime payload has moved on since this one
+            // started, so its answer is older than what is on screen.
+            if (!pollRunner.isCurrent(started.seq)) return;
             if (freshState) {
                 setCurrentGameState((current) =>
                     isFreshGameState(current, freshState) ? freshState : current,
@@ -517,15 +607,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 markPollSuccess();
             }
         } catch (err) {
+            // Includes the deadline: a hung request counts as a failed poll.
             markPollFailure();
             logError('host-control', err);
-        } finally {
-            pollInFlightRef.current = false;
         }
         // Depends on the stable health callbacks, never on the health object:
         // the object changes every second, which would give this callback a new
         // identity every second and re-arm the 3 second poll interval forever.
-    }, [supabase, gameId, markPollSuccess, markPollFailure]);
+    }, [pollRunner, markPollSuccess, markPollFailure]);
 
     /**
      * Applies whatever state a mutation returned, and turns a conflict into a
@@ -538,6 +627,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
      *
      * Returns true on success so callers can gate their own follow-up work.
      */
+    /** Applies a committed row from the server, unless something newer is already on screen. */
+    const applyIncomingState = useCallback((incoming: GameState) => {
+        setCurrentGameState((current) =>
+            isFreshGameState(current, incoming) ? incoming : current,
+        );
+    }, []);
+
     const applyMutation = useCallback(
         (result: ActionResult<{ gameState: GameState }> | undefined, fallback: string): boolean => {
             if (!result?.success) {
@@ -547,16 +643,68 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 if (result && 'conflict' in result && result.conflict) void pollGameState();
                 return false;
             }
-            if (result.data?.gameState) {
-                const incoming = result.data.gameState;
-                setCurrentGameState((current) =>
-                    isFreshGameState(current, incoming) ? incoming : current,
-                );
-            }
+            if (result.data?.gameState) applyIncomingState(result.data.gameState);
             return true;
         },
-        [pollGameState],
+        [pollGameState, applyIncomingState],
     );
+
+    /** Drops the claim on this screen: the attempt, its draft queue, its numbers and verdict. */
+    const clearLocalClaim = useCallback(() => {
+        claimDraftQueueRef.current?.dispose();
+        claimDraftQueueRef.current = null;
+        claimAttemptIdRef.current = null;
+        setClaimAttemptId(null);
+        setSelectedNumbers([]);
+        setClaimVerdict(null);
+        setMissingLastBall(null);
+        setClaimNotice(null);
+        setDraftQueueState('idle');
+    }, []);
+
+    /**
+     * Takes on the claim the server holds: the attempt, its numbers in tap
+     * order, its verdict, and a fresh draft queue that continues the stored
+     * sequence. Used when a check starts, when another attempt is adopted
+     * (attempt_mismatch), and when a reload or a takeover finds a claim open.
+     */
+    const adoptClaim = useCallback((claim: Pick<ClaimSnapshot, 'attemptId' | 'claimNumbers' | 'claimResult' | 'claimDraftSeq'>) => {
+        claimDraftQueueRef.current?.dispose();
+        claimDraftQueueRef.current = null;
+        claimAttemptIdRef.current = claim.attemptId;
+        setClaimAttemptId(claim.attemptId);
+        setSelectedNumbers(claim.claimNumbers);
+        setClaimVerdict(claim.claimResult);
+        setMissingLastBall(null);
+        setClaimNotice(null);
+        setDraftQueueState('idle');
+
+        const attemptId = claim.attemptId;
+        // No drafts once a verdict exists: the server refuses them.
+        if (!attemptId || claim.claimResult !== null) return;
+
+        claimDraftQueueRef.current = createClaimDraftQueue({
+            initialSeq: claim.claimDraftSeq,
+            send: async (numbers, seq) => {
+                const result = await setClaimDraft(gameId, attemptId, [...numbers], seq);
+                if (result?.success) return 'ok';
+                if (result && (result.conflict || PERMANENT_DRAFT_REFUSALS.has(result.code))) {
+                    // The claim moved under us. Re-read the game, so the screen
+                    // shows what the server actually holds.
+                    void pollGameState();
+                    return 'stop';
+                }
+                return 'error';
+            },
+            onStateChange: setDraftQueueState,
+        });
+    }, [gameId, pollGameState]);
+
+    // The draft queue can hold a retry timer; it must not outlive the screen.
+    useEffect(() => {
+        const queueRef = claimDraftQueueRef;
+        return () => queueRef.current?.dispose();
+    }, []);
 
     // Live game state. useRealtimeChannel owns the reconnect (X1): one channel
     // at a time, at most one pending retry with a 1s to 30s backoff, and the
@@ -584,6 +732,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 },
                 (payload) => {
                     if (!isCurrent()) return;
+                    // A poll already in flight started before this change, so
+                    // its answer is discarded (spec 5.8).
+                    pollRunner.invalidate();
                     setCurrentGameState((current) =>
                         isFreshGameState(current, payload.new) ? payload.new : current,
                     );
@@ -612,6 +763,44 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
     }, [pollGameState, reconnectRealtime]);
+
+    // Recovery (spec 5.2). After a reload, or a takeover from another phone,
+    // the claim the server holds (its attempt, numbers in tap order, draft
+    // sequence and any verdict) reopens here, so the host carries on where it
+    // was left instead of the claim vanishing with the old page.
+    //
+    // Not reopened: a claim already recorded as a winner (the pad offers
+    // Continue and Check another claimant instead), one this tab has finished
+    // with, or while this tab is starting a check of its own. It waits for the
+    // winners to load once, because only they can say the claim was recorded.
+    const claimOnServer = currentGameState.status === 'in_progress' && currentGameState.paused_for_validation
+        ? currentGameState.claim_attempt_id
+        : null;
+    useEffect(() => {
+        if (!isController || !winnersLoaded || isPausing || !claimOnServer) return;
+        if (claimAttemptIdRef.current !== null) return;
+        if (dismissedAttemptIdsRef.current.has(claimOnServer)) return;
+        if (currentWinners.some((w) => w.client_request_id === claimOnServer)) return;
+
+        adoptClaim({
+            attemptId: claimOnServer,
+            claimNumbers: currentGameState.claim_numbers ?? [],
+            claimResult: currentGameState.claim_result,
+            claimDraftSeq: currentGameState.claim_draft_seq ?? 0,
+        });
+        setClaimNotice('This claim was already being checked. Carry on from where it was left.');
+        setShowValidationModal(true);
+    }, [
+        isController,
+        winnersLoaded,
+        isPausing,
+        claimOnServer,
+        currentWinners,
+        currentGameState.claim_numbers,
+        currentGameState.claim_result,
+        currentGameState.claim_draft_seq,
+        adoptClaim,
+    ]);
 
     const handleCallNextNumber = async () => {
         if (!isController || isCallingNumber) return;
@@ -672,12 +861,27 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     };
 
     /**
-     * Post Win "Continue Playing" and "Continue and Take Break" (spec 4.3).
-     * Advances one stage, optionally starts a break, then closes the Post Win and
-     * validation modals and clears the selection. The prize text follows the new
-     * stage through the current_stage_index effect above.
+     * Where a finishing move was heading, once the snowball pot question is
+     * settled (X6). When the pot did not move, the host sees the retry banner
+     * first and carries on from there; otherwise this navigates at once.
      */
-    const handleContinuePlaying = async (putOnBreak: boolean = false) => {
+    const continueAfterFinish = (redirectTo: string | undefined, potDidNotSettle: boolean) => {
+        if (potDidNotSettle) {
+            setPotNeedsSettling(true);
+            setPendingRedirect(redirectTo ?? null);
+            return;
+        }
+        navigateToHostPath(redirectTo);
+    };
+
+    /**
+     * Post Win "Continue Playing" and "Continue and Take Break" (spec 4.3), and
+     * the pad's "Continue to [next stage]" once a stage has been won (X4).
+     * Advances one stage, optionally starts a break, then closes the Post Win and
+     * validation modals and drops the claim. The prize text follows the new stage
+     * through the current_stage_index effect above.
+     */
+    const handleContinuePlaying = async (putOnBreak: boolean = false, stageIndex: number = postWinStage) => {
         if (!isController || isAdvancing) return;
         setActionError(null);
         setIsAdvancing(true);
@@ -685,20 +889,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         // server binds to this rather than to a value it reads itself, so a
         // retry after a lost response is absorbed rather than advancing a
         // second time, even after the poll has moved the live state on.
-        const expectedStageIndex = postWinStage;
+        const expectedStageIndex = stageIndex;
         try {
             // One call, not two. "Continue and Take Break" used to advance the
             // stage and then issue the break separately, so a break that failed
             // or was lost left the stage already moved, and the retry advanced
             // again with a whole stage skipped and its prize unawarded.
-            if (!applyMutation(
-                await advanceToNextStage(gameId, expectedStageIndex, putOnBreak),
-                "Failed to continue playing."
-            )) return;
+            const result = await advanceToNextStage(gameId, expectedStageIndex, putOnBreak);
+            if (!applyMutation(result, "Failed to continue playing.")) return;
+            if (result.success && result.data?.snowballPotDidNotSettle) setPotNeedsSettling(true);
 
             setShowPostWinModal(false);
             setShowValidationModal(false);
-            handleClearSelection();
+            clearLocalClaim();
         } catch (err) {
             logError('host-control', err);
             setActionError("Could not reach the server to move the game on. Check the connection and tap again: if it did save, tapping again will not skip a stage.");
@@ -727,6 +930,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 if (result && 'conflict' in result && result.conflict) void pollGameState();
                 return;
             }
+            const potDidNotSettle = result.data?.snowballPotDidNotSettle === true;
+            if (potDidNotSettle) setPotNeedsSettling(true);
             if (result.data?.requiresCashJackpotAmount) {
                 setCashJackpotMode('next');
                 setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
@@ -737,8 +942,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             }
             setShowPostWinModal(false);
             setShowValidationModal(false);
-            handleClearSelection();
-            navigateToHostPath(result.data?.redirectTo);
+            clearLocalClaim();
+            continueAfterFinish(result.data?.redirectTo, potDidNotSettle);
         } catch (err) {
             logError('host-control', err);
             setActionError("Could not reach the server to move to the next game. Check the connection and try again.");
@@ -764,6 +969,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 if (result && 'conflict' in result && result.conflict) void pollGameState();
                 return;
             }
+            const potDidNotSettle = result.data?.snowballPotDidNotSettle === true;
+            if (potDidNotSettle) setPotNeedsSettling(true);
             if (result.data?.requiresCashJackpotAmount) {
                 setCashJackpotMode('break');
                 setCashJackpotGameName(result.data.gameName || 'Jackpot Game');
@@ -774,8 +981,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             }
             setShowPostWinModal(false);
             setShowValidationModal(false);
-            handleClearSelection();
-            navigateToHostPath(result.data?.redirectTo);
+            clearLocalClaim();
+            continueAfterFinish(result.data?.redirectTo, potDidNotSettle);
         } catch (err) {
             logError('host-control', err);
             setActionError("Could not reach the server to move to the next game. Check the connection and try again.");
@@ -813,7 +1020,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
             setShowCashJackpotModal(false);
             clearSpentClaim();
-            navigateToHostPath(transitionResult.data?.redirectTo);
+            const potDidNotSettle = transitionResult.data?.snowballPotDidNotSettle === true;
+            continueAfterFinish(transitionResult.data?.redirectTo, potDidNotSettle);
         } catch (err) {
             logError('host-control', err);
             setActionError("Could not reach the server to start the next game. Check the connection and try again.");
@@ -828,6 +1036,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setCashJackpotAmount('');
 
         if (currentGameState.status === 'completed') {
+            // The pot banner, if it is up, comes first: leaving now would take
+            // the retry away with the page (X6).
+            if (potNeedsSettling) {
+                setPendingRedirect('/host');
+                return;
+            }
             navigateToHostPath('/host');
             return;
         }
@@ -835,65 +1049,156 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setShowPostWinModal(true);
     };
 
+    /**
+     * A tap on the claim grid. The grid keeps TAP order, because the TV and the
+     * phones show the claim in the order the caller reads it (spec 5.2), and
+     * every tap sends the whole ordered list through the draft queue. A tap
+     * never waits for the server: the grid updates at once, and a failed send
+     * retries by itself while "TV not updated, retrying" shows.
+     */
     const handleToggleNumber = (num: number) => {
-        setSelectedNumbers(prev =>
-            prev.includes(num) ? prev.filter(n => n !== num) : [...prev, num].sort((a, b) => a - b)
-        );
+        if (!isController || claimVerdict !== null || !claimAttemptIdRef.current) return;
+        setClaimNotice(null);
+
+        let next: number[];
+        if (selectedNumbers.includes(num)) {
+            next = selectedNumbers.filter((n) => n !== num);
+        } else {
+            // The server refuses more than the stage needs, so the grid does too.
+            if (requiredSelectionCount !== null && selectedNumbers.length >= requiredSelectionCount) {
+                setClaimNotice(`${currentStageName} needs ${requiredSelectionCount} numbers. Untap one to change it.`);
+                return;
+            }
+            next = [...selectedNumbers, num];
+        }
+
+        setSelectedNumbers(next);
+        // Changing the claim withdraws any open "missing the last number" question.
+        setMissingLastBall(null);
+        claimDraftQueueRef.current?.push(next);
     };
 
     const handleClearSelection = () => {
+        if (claimVerdict !== null) return;
         setSelectedNumbers([]);
-        setValidationResult(null);
+        setMissingLastBall(null);
+        setClaimNotice(null);
+        claimDraftQueueRef.current?.push([]);
     };
 
     /**
-     * A recorded claim is spent, so every trace of it has to go.
+     * A recorded claim is spent, so every trace of it has to go from this
+     * screen.
      *
-     * Still load-bearing after the claim key landed, and worth being exact about
-     * why. The key stops a *retry* of one attempt: same modal, same key, so the
-     * server refuses the second insert. It cannot stop a *fresh* attempt on a
-     * ticket that was already paid, because reopening Record Winner mints a new
-     * key, and it has to: that is the same path a genuine tie arrives on, and the
-     * server has no way to tell the two apart. Leaving `showValidationModal` open
-     * behind the Post Win modal produced exactly that: closing Post Win revealed
-     * the green Valid Claim panel again, with the same numbers highlighted and
-     * nothing saying the win was already recorded. One tap wrote a second winners
-     * row, and on a snowball Full House it paid the jackpot twice.
+     * Leaving the validation modal open behind Post Win once produced a second
+     * winners row from one ticket: closing Post Win revealed the green Valid
+     * Claim panel again with a live Record Winner button. The attempt now makes
+     * a repeat save return the same winner, but the modal still closes, and the
+     * attempt is marked as finished in this tab so the recovery below does not
+     * reopen it.
      *
      * Call this on every path that records a win, and on the Post Win escape.
      */
     const clearSpentClaim = () => {
+        const attemptId = claimAttemptIdRef.current;
+        if (attemptId) dismissedAttemptIdsRef.current.add(attemptId);
         setShowValidationModal(false);
-        setValidationResult(null);
-        setSelectedNumbers([]);
+        clearLocalClaim();
     };
 
-    const handleBeginClaimCheck = async () => {
+    /**
+     * Check Claim, and Check another claimant (spec 5.2).
+     *
+     * Mints a fresh attempt and asks begin_claim_check to start it. When
+     * another attempt is already being checked (this phone reloaded, or took
+     * over from another), the answer is attempt_mismatch with that attempt and
+     * its draft, and this screen adopts it and carries on. `newClaimant` is the
+     * explicit "a different person is claiming": it replaces the attempt and
+     * clears the claim and the win on screen, so a tie is a separate winner.
+     */
+    const handleBeginClaimCheck = async (newClaimant: boolean = false) => {
         if (!isController || isPausing) return;
         setActionError(null);
-        setValidationResult(null);
+        clearLocalClaim();
         setShowValidationModal(true);
         setIsPausing(true);
+        const attemptId = newClaimRequestId();
         try {
-            // pauseForValidation also nulls the win display fields, which is what
-            // returns the public screens to "Checking Claim" when the host chooses
-            // "Validate Another Winner" in the Post Win modal (spec 4.3).
-            const pauseResult = await pauseForValidation(gameId);
-            if (!applyMutation(pauseResult, "Failed to start claim check.")) {
+            const result = await beginClaimCheck(gameId, attemptId, newClaimant);
+            if (!result?.success) {
+                setActionError(result?.error || "Failed to start the claim check.");
+                if (result && 'conflict' in result && result.conflict) void pollGameState();
                 setShowValidationModal(false);
+                return;
+            }
+            applyIncomingState(result.data!.gameState);
+            const adopted = result.data!;
+            if (adopted.attemptId) dismissedAttemptIdsRef.current.delete(adopted.attemptId);
+            adoptClaim(adopted);
+            if (adopted.code === 'attempt_mismatch') {
+                setClaimNotice('This claim was already being checked. Carry on from where it was left.');
             }
         } catch (err) {
             logError('host-control', err);
-            setActionError("Could not reach the server to pause for a claim check. Check the connection and try again.");
+            // Safe to repeat: a check that did start is adopted on the next tap.
+            setActionError("Could not reach the server to start the claim check. Check the connection and tap Check Claim again.");
             setShowValidationModal(false);
         } finally {
             setIsPausing(false);
         }
     };
 
+    /** Check another claimant: a new attempt for a different person, for a tie. */
+    const handleCheckAnotherClaimant = async () => {
+        setShowPostWinModal(false);
+        setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
+        await handleBeginClaimCheck(true);
+    };
+
+    /**
+     * Sends the claim to check_claim and shows the answer. Shared by Check Win,
+     * the re-check after the bound undo, and "No: reject as late".
+     */
+    const runClaimCheck = async (attemptId: string, numbers: number[], rejectAsLate: boolean) => {
+        const result = await checkClaim(gameId, attemptId, numbers, rejectAsLate);
+        if (!result?.success) {
+            setActionError(result?.error || "Failed to check the claim.");
+            if (result && 'conflict' in result && result.conflict) void pollGameState();
+            return;
+        }
+        const checked = result.data!;
+        applyIncomingState(checked.gameState);
+        setSelectedNumbers(checked.claimNumbers.length > 0 ? checked.claimNumbers : numbers);
+
+        if (checked.code === 'missing_last_ball') {
+            setClaimVerdict(null);
+            setMissingLastBall(checked.lastNumber === null ? null : {
+                lastNumber: checked.lastNumber,
+                expectedCount: checked.gameState.numbers_called_count,
+                undoAvailable: !checked.gameState.claim_undo_used,
+            });
+            return;
+        }
+
+        // A verdict is final for this attempt: no more drafts.
+        claimDraftQueueRef.current?.dispose();
+        claimDraftQueueRef.current = null;
+        setDraftQueueState('idle');
+        setMissingLastBall(null);
+        setClaimVerdict(checked.code);
+        // X5: nothing is announced here any more. The TV shows the win only once
+        // record_winner_atomic has recorded it.
+        if (checked.code === 'valid') handleOpenRecordWinnerModal();
+    };
+
     const handleCheckWin = async () => {
         if (!isController || isCheckingWin) return;
         setActionError(null);
+        const attemptId = claimAttemptIdRef.current;
+        if (!attemptId) {
+            setActionError("This claim check has ended. Tap Check Claim to start again.");
+            return;
+        }
         if (requiredSelectionCount === null) {
             setActionError(`This stage is not valid for claim checking.`);
             return;
@@ -902,43 +1207,71 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError(`Select exactly ${requiredSelectionCount} numbers for ${currentStageName || 'this stage'} before checking.`);
             return;
         }
-        if (!currentNumber) {
-            setActionError("No last called number is available to verify this claim.");
-            return;
-        }
-        if (!selectedNumbers.includes(currentNumber)) {
-            setActionError(`Claim must include the last called number (${currentNumber}).`);
-            return;
-        }
 
         setIsCheckingWin(true);
         try {
-            const result = await validateClaim(gameId, selectedNumbers);
-            if (!result?.success) {
-                setActionError(result?.error || "Failed to validate claim.");
-                setValidationResult(null);
-                return;
-            }
-            const validation = result.data;
-            setValidationResult(validation || null);
-            if (validation?.valid) {
-                const currentStage = currentStageName;
-                if (!applyMutation(await announceWin(gameId, currentStage), "Failed to announce win.")) {
-                    return;
-                }
-                handleOpenRecordWinnerModal();
-            }
+            // Send any draft still waiting, so the room sees the list being
+            // checked. Correctness does not depend on it: check_claim gets the
+            // full list below.
+            await claimDraftQueueRef.current?.flush();
+            await runClaimCheck(attemptId, selectedNumbers, false);
         } catch (err) {
-            // Checking a claim writes nothing until the win is announced, so a
-            // retry is always safe. Saying so matters: the host is standing in
-            // front of a punter holding a book.
+            // Safe to repeat: the same attempt with the same numbers returns the
+            // verdict already given.
             logError('host-control', err);
-            setActionError("Could not reach the server to check that claim. Check the connection and tap Check Claim again.");
-            setValidationResult(null);
+            setActionError("Could not reach the server to check that claim. Check the connection and tap Check Win again.");
         } finally {
             setIsCheckingWin(false);
         }
     }
+
+    /**
+     * "Yes: undo [n] and check again" (A1). The claim came before the last ball
+     * was announced, so that ball is taken back off the board, once, bound to
+     * this attempt and to the ball count the host saw. A repeated tap, or a
+     * retry after the undo landed, answers already_undone rather than taking a
+     * second ball off, and the same numbers are then checked again.
+     */
+    const handleUndoLastBallAndRecheck = async () => {
+        const attemptId = claimAttemptIdRef.current;
+        const prompt = missingLastBall;
+        if (!isController || !attemptId || !prompt || isUndoingForClaim || isCheckingWin) return;
+        setActionError(null);
+        setIsUndoingForClaim(true);
+        try {
+            const undo = await undoLastNumberForClaim(gameId, attemptId, prompt.expectedCount);
+            if (undo?.success) {
+                applyIncomingState(undo.data!.gameState);
+            } else if (undo?.code !== 'already_undone') {
+                setActionError(undo?.error || "Could not undo the last number.");
+                if (undo && 'conflict' in undo && undo.conflict) void pollGameState();
+                return;
+            }
+            setMissingLastBall(null);
+            await runClaimCheck(attemptId, selectedNumbers, false);
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server. Tap Yes again: the ball is only ever taken off once for this claim.");
+        } finally {
+            setIsUndoingForClaim(false);
+        }
+    };
+
+    /** "No: reject as late" (A1): the claim came after the last ball was announced. */
+    const handleRejectAsLate = async () => {
+        const attemptId = claimAttemptIdRef.current;
+        if (!isController || !attemptId || isCheckingWin || isUndoingForClaim) return;
+        setActionError(null);
+        setIsCheckingWin(true);
+        try {
+            await runClaimCheck(attemptId, selectedNumbers, true);
+        } catch (err) {
+            logError('host-control', err);
+            setActionError("Could not reach the server to reject the claim. Check the connection and tap again.");
+        } finally {
+            setIsCheckingWin(false);
+        }
+    };
 
     const handleRecordWinner = async () => {
         if (!isController) return;
@@ -949,11 +1282,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             setActionError("Current stage is not available for this game.");
             return;
         }
+        // The checked attempt is the winner's key. Without one there is no
+        // checked claim to record, and the server would refuse it anyway.
+        const attemptId = claimAttemptIdRef.current;
+        if (!attemptId) {
+            setActionError("Check the claim before recording the winner.");
+            return;
+        }
         // Money decision: never record a snowball Full House while the pot is
         // unknown. With the pot unread, isSnowballChoiceRequired is false, so
         // the guard below would wave the claim through with eligible = false and
         // pay an ordinary prize for a jackpot win. Refusing is the only safe
-        // answer: the host can retry once the pot loads, and the claim key means
+        // answer: the host can retry once the pot loads, and the attempt means
         // retrying costs nothing.
         if (isSnowballEligibilityStage && potLoadState === 'failed') {
             setActionError("Cannot record this yet: the snowball pot has not loaded, so eligibility cannot be judged. Check the connection and try again in a moment.");
@@ -977,7 +1317,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 prizeGiven,
                 false,
                 snowballEligibleChoice === true,
-                ensureClaimRequestId(claimRequestIdRef)
+                attemptId
             );
 
             if (applyMutation(result, "Failed to record winner.")) {
@@ -997,9 +1337,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         } catch (err) {
             // A transport failure here used to be the worst case: the host sees
             // "Recording…" flash back to idle with no way to know whether the win
-            // landed, and a second tap could record it twice. The claim key makes
-            // that second tap safe, so the message now says to take it. The key is
-            // deliberately left on the ref for exactly that reason.
+            // landed, and a second tap could record it twice. The attempt makes
+            // that second tap safe, so the message says to take it.
             logError('host-control', err);
             setActionError("Could not reach the server. Check the connection and tap Confirm Winner again: if the win did save, tapping again will not record it twice.");
         } finally {
@@ -1022,9 +1361,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 setSkipError(result?.error || 'Failed to skip stage.');
             }
             if (applyMutation(result, "Failed to skip stage.")) {
+                // Skipping the last stage finishes the game, which settles the
+                // snowball pot; a pot that did not move gets its banner (X6).
+                if (result.success && result.data?.snowballPotDidNotSettle) setPotNeedsSettling(true);
                 setShowSkipConfirm(false);
                 setShowValidationModal(false);
-                handleClearSelection();
+                clearLocalClaim();
             }
         } catch (err) {
             logError('host-control', err);
@@ -1050,12 +1392,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     /**
      * Opens Record Winner with the eligibility choice cleared, so every win is a
      * fresh decision and a previous "Eligible" can never carry over to the next
-     * one.
-     *
-     * This is the only path that opens the modal, so minting the claim key here is
-     * what guarantees one key per claim: every retry inside this modal reuses it,
-     * and the next claim (including the tie that arrives via "Validate Another
-     * Winner") comes back through here for a fresh one.
+     * one. The winner's key is the claim attempt, which check_claim has just
+     * called valid; there is no separate key to mint here any more.
      */
     const handleOpenRecordWinnerModal = () => {
         // This modal now shows actionError, so clear any stale one from an earlier
@@ -1066,7 +1404,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         // Win prefill ("£140 (Manual Snowball Win)") used to survive a cancel
         // and greet the next ordinary winner.
         setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
-        claimRequestIdRef.current = newClaimRequestId();
         setShowWinnerModal(true);
     };
 
@@ -1142,8 +1479,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
      * briefing both announced last week's figure as if it had never been played
      * for. The only correction was a manual pot edit.
      *
-     * endGame already settles the pot and completes the session when this was
-     * the last game. This just gives it a button.
+     * endGame goes through finish_game, which also completes the session when
+     * this was the last game to finish, and then settles the pot.
      */
     const handleConfirmEndGame = async () => {
         if (!isController || isEndingGame) return;
@@ -1159,6 +1496,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             applyMutation(result, 'Failed to end the game.');
             if (result.data?.snowballPotDidNotSettle) setPotNeedsSettling(true);
             setShowEndGameModal(false);
+            setShowValidationModal(false);
+            clearLocalClaim();
         } catch (err) {
             logError('host-control', err);
             setEndGameError('Could not reach the server to end the game. Check the connection and try again.');
@@ -1178,6 +1517,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 return;
             }
             setPotNeedsSettling(false);
+            // Settled: carry on to wherever the finishing move was heading.
+            if (pendingRedirect) {
+                const destination = pendingRedirect;
+                setPendingRedirect(null);
+                navigateToHostPath(destination);
+            }
         } catch (err) {
             logError('host-control', err);
             setActionError('Could not reach the server to settle the pot. Check the connection and try again.');
@@ -1186,14 +1531,29 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
+    /** Leaves the pot banner behind and carries on (X6). The pot stays unsettled. */
+    const handleCarryOnWithoutSettling = () => {
+        if (!pendingRedirect || isSettlingPot) return;
+        const destination = pendingRedirect;
+        setPendingRedirect(null);
+        navigateToHostPath(destination);
+    };
+
     const handleResumeGame = async () => {
         if (!isController || isResuming) return;
         setActionError(null);
         setIsResuming(true);
         try {
-            if (!applyMutation(await resumeGame(gameId), "Failed to resume game.")) return;
+            const result = await resumeGame(gameId);
+            if (!result?.success && result?.code === 'stage_already_won') {
+                // X4: the stage was won, so calling on would be for a prize that
+                // is gone. The pad now offers Continue instead; the winners list
+                // is what tells it so.
+                void refreshWinnerLists();
+            }
+            if (!applyMutation(result, "Failed to resume game.")) return;
             setShowValidationModal(false);
-            handleClearSelection();
+            clearLocalClaim();
         } catch (err) {
             logError('host-control', err);
             setActionError("Could not reach the server to resume the game. Check the connection and try again.");
@@ -1202,15 +1562,48 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
-    /** Post Win: "Validate Another Winner" (spec 4.3). */
-    const handleValidateAnotherWinner = async () => {
-        setShowPostWinModal(false);
-        setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
-        handleClearSelection();
-        await handleBeginClaimCheck();
+    /**
+     * Closes the claim modal and leaves the game paused. Only offered once the
+     * stage has been won (resuming is then refused, X4): the pad takes over
+     * with Continue and Check another claimant.
+     */
+    const handleCloseClaimAndStayPaused = () => {
+        if (isCheckingWin || isUndoingForClaim) return;
+        const attemptId = claimAttemptIdRef.current;
+        if (attemptId) dismissedAttemptIdsRef.current.add(attemptId);
+        setActionError(null);
+        setShowValidationModal(false);
+        clearLocalClaim();
     };
 
-    /** Post Win: "Close and stay paused" (spec 4.3). The guaranteed escape. */
+    /**
+     * Rejects an invalid or late claim. With no winner at this stage that is
+     * Reject & Resume. Once the stage has been won, resuming is refused (X4), so
+     * the host goes to the Post Win choices instead: continue, check another
+     * claimant, or stay paused.
+     */
+    const handleRejectClaim = async () => {
+        if (!isCurrentStageWon) {
+            await handleResumeGame();
+            return;
+        }
+        handleCloseClaimAndStayPaused();
+        openPostWinModal();
+    };
+
+    /** The pad's way on once the stage has been won (X4). */
+    const handleContinueAfterStageWon = async () => {
+        if (!isController) return;
+        if (!hasNextStage) {
+            // The last stage: Post Win has the right choices (next game, a
+            // break, or finishing the session).
+            openPostWinModal();
+            return;
+        }
+        await handleContinuePlaying(false, currentGameState.current_stage_index);
+    };
+
+    /** Post Win "Close and stay paused" (spec 4.3). The guaranteed escape. */
     const handleClosePostWinAndStayPaused = () => {
         if (isPostWinBusy) return;
         setActionError(null);
@@ -1271,7 +1664,9 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
 
     const isNextNumberDisabled = !isController || isCallingNumber || currentGameState.on_break || isGameNotInProgress || isGameCompleted || isPausedForValidation || currentGameState.numbers_called_count >= 90;
     const isBreakToggleDisabled = !isController || isTogglingBreak || isGameNotInProgress || isGameCompleted || isPausedForValidation;
-    const isValidateButtonDisabled = !isController || isPausing || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0;
+    // Once the stage has a winner, the paused banner offers Check another
+    // claimant explicitly, so the pad's Check Claim stands down.
+    const isValidateButtonDisabled = !isController || isPausing || isGameNotInProgress || currentGameState.on_break || isGameCompleted || currentGameState.numbers_called_count === 0 || (isPausedForValidation && isCurrentStageWon);
     const isVoidLastNumberDisabled = !isController || isVoiding || currentGameState.numbers_called_count === 0 || isGameCompleted || isPausedForValidation;
     const canVoidWinner = currentUserRole === 'admin';
     const hostSurfaceClass = "bg-[#003f27]/88 border border-[#1f7c58]";
@@ -1280,7 +1675,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // because a banner on the page behind a modal is a banner the host never sees.
     // The page banner therefore stands down while one of those is open: two
     // role="alert" regions holding the same text would be announced twice.
-    const isActionErrorShownInModal = showValidationModal || showWinnerModal || showPostWinModal || showCashJackpotModal || showManualSnowballModal || showSessionWinnersModal;
+    const isActionErrorShownInModal = showValidationModal || showWinnerModal || showPostWinModal || showCashJackpotModal || showManualSnowballModal || showSessionWinnersModal || missingLastBall !== null;
 
 
     return (
@@ -1422,16 +1817,34 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             The jackpot is still showing its old figure. Trying again is safe: if it did
                             move after all, this will say so and change nothing.
                         </p>
+                        {pendingRedirect && (
+                            <p className="text-sm text-white/85 mt-1">
+                                Settle it before you move on if you can. If you carry on without it, ask an
+                                admin to settle it from the host console.
+                            </p>
+                        )}
                     </div>
-                    <Button
-                        variant="primary"
-                        size="lg"
-                        className="min-h-[56px] shrink-0"
-                        onClick={handleRetrySettlement}
-                        disabled={isSettlingPot}
-                    >
-                        {isSettlingPot ? 'Settling…' : 'Settle the pot'}
-                    </Button>
+                    <div className="flex flex-col gap-2 shrink-0">
+                        <Button
+                            variant="primary"
+                            size="lg"
+                            className="min-h-[56px]"
+                            onClick={handleRetrySettlement}
+                            disabled={isSettlingPot}
+                        >
+                            {isSettlingPot ? 'Settling…' : 'Settle the pot'}
+                        </Button>
+                        {pendingRedirect && (
+                            <Button
+                                variant="ghost"
+                                className="min-h-[44px] text-white/85 hover:text-white hover:bg-[#0f6846]"
+                                onClick={handleCarryOnWithoutSettling}
+                                disabled={isSettlingPot}
+                            >
+                                {pendingRedirect === '/host' ? 'Leave without settling' : 'Go to the next game without settling'}
+                            </Button>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -1443,26 +1856,67 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 Next Number, no Break, no Undo, no Resume. The host was stuck with
                 nothing to press, and the Post Win modal's own copy told them to
                 "Resume ... from the main pad", which did not exist. The only way
-                out was to reopen Check Claim and cancel it. */}
+                out was to reopen Check Claim and cancel it.
+
+                Once the stage has a winner, Resume is refused (X4): "Close and
+                stay paused" then "Resume calling" used to carry on calling for a
+                prize that had already gone. The way out is then Continue to the
+                next stage, or Check another claimant for a tie. */}
             {isPausedForValidation && !isGameCompleted && (
-                <div className={cn(
-                    "mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
-                    !isController && "opacity-50 pointer-events-none"
-                )}>
-                    <div>
-                        <p className="font-bold text-white">Paused for a claim check</p>
-                        <p className="text-sm text-white/85">Calling is on hold until you resume.</p>
+                isCurrentStageWon ? (
+                    <div className={cn(
+                        "mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
+                        !isController && "opacity-50 pointer-events-none"
+                    )}>
+                        <div>
+                            <p className="font-bold text-white">{currentStageName} has been won</p>
+                            <p className="text-sm text-white/85">
+                                Move on when the room is ready, or check another claimant if someone else
+                                has the same win.
+                            </p>
+                        </div>
+                        <div className="flex flex-col gap-2 shrink-0 sm:items-end">
+                            <Button
+                                variant="primary"
+                                size="lg"
+                                className="min-h-[56px]"
+                                onClick={() => { void handleContinueAfterStageWon(); }}
+                                disabled={!isController || isAdvancing || isPausing}
+                            >
+                                {isAdvancing
+                                    ? 'Working…'
+                                    : hasNextStage && nextStageName ? `Continue to ${nextStageName}` : 'Finish this game'}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
+                                onClick={() => { void handleBeginClaimCheck(true); }}
+                                disabled={!isController || isPausing || isAdvancing}
+                            >
+                                {isPausing ? 'Starting…' : 'Check another claimant'}
+                            </Button>
+                        </div>
                     </div>
-                    <Button
-                        variant="primary"
-                        size="lg"
-                        className="min-h-[56px] shrink-0"
-                        onClick={handleResumeGame}
-                        disabled={!isController || isResuming}
-                    >
-                        {isResuming ? 'Resuming…' : 'Resume calling'}
-                    </Button>
-                </div>
+                ) : (
+                    <div className={cn(
+                        "mb-4 rounded-xl border border-[#a57626] bg-[#7a5719]/40 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
+                        !isController && "opacity-50 pointer-events-none"
+                    )}>
+                        <div>
+                            <p className="font-bold text-white">Paused for a claim check</p>
+                            <p className="text-sm text-white/85">Calling is on hold until you resume.</p>
+                        </div>
+                        <Button
+                            variant="primary"
+                            size="lg"
+                            className="min-h-[56px] shrink-0"
+                            onClick={handleResumeGame}
+                            disabled={!isController || isResuming}
+                        >
+                            {isResuming ? 'Resuming…' : 'Resume calling'}
+                        </Button>
+                    </div>
+                )
             )}
 
             {/* Control Pad */}
@@ -1493,7 +1947,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     variant="secondary"
                     size="lg"
                     className="h-16 bg-[#0f6846] border border-[#a57626] text-white hover:bg-[#136f4b]"
-                    onClick={handleBeginClaimCheck}
+                    onClick={() => { void handleBeginClaimCheck(false); }}
                     disabled={isValidateButtonDisabled}
                 >
                     {isPausing ? 'Pausing…' : 'Check Claim'}
@@ -1596,26 +2050,46 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <h3 className="font-bold text-white">Winners</h3>
                     </div>
                     <div className="divide-y divide-[#1f7c58]">
-                        {currentWinners.map(winner => (
-                            <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
-                                <div>
-                                    <p className="font-bold text-white">{winner.winner_name}</p>
-                                    <p className="text-sm text-white/85">{winner.stage} - {winner.prize_description}</p>
-                                </div>
-                                <Button
-                                    size="sm"
-                                    variant={winner.prize_given ? "outline" : "secondary"}
-                                    className={cn(
-                                        "min-w-[100px] shrink-0",
-                                        winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
+                        {currentWinners.map(winner => {
+                            // X14: a voided win is not a prize owed. It used to
+                            // look like any other on this card, with a working
+                            // Give Prize button; set_winner_prize_given now
+                            // refuses it too.
+                            const isVoid = winner.is_void === true;
+                            // X22: the ordinary share plus the jackpot share.
+                            const totalLine = describeWinnerTotal(winnerTotalPence(winner));
+                            return (
+                                <div key={winner.id} className="p-4 flex items-center justify-between gap-4">
+                                    <div className="min-w-0">
+                                        <p className="font-bold text-white">{winner.winner_name}</p>
+                                        <p className={cn("text-sm text-white/85", isVoid && "line-through")}>
+                                            {winner.stage} - {winner.prize_description}
+                                        </p>
+                                        {totalLine && (
+                                            <p className="text-sm font-semibold text-white">{totalLine}</p>
+                                        )}
+                                    </div>
+                                    {isVoid ? (
+                                        <span className="px-2 py-1 rounded-full text-xs font-semibold border border-[#a57626] text-white bg-[#a57626]/20 shrink-0">
+                                            VOID
+                                        </span>
+                                    ) : (
+                                        <Button
+                                            size="sm"
+                                            variant={winner.prize_given ? "outline" : "secondary"}
+                                            className={cn(
+                                                "min-w-[100px] shrink-0",
+                                                winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
+                                            )}
+                                            onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
+                                            disabled={!canTogglePrize}
+                                        >
+                                            {winner.prize_given ? "Given ✅" : "Give Prize"}
+                                        </Button>
                                     )}
-                                    onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
-                                    disabled={!canTogglePrize}
-                                >
-                                    {winner.prize_given ? "Given ✅" : "Give Prize"}
-                                </Button>
-                            </div>
-                        ))}
+                                </div>
+                            );
+                        })}
                     </div>
                 </Card>
             )}
@@ -1636,13 +2110,30 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             modal: that one renders the same error where the host is
                             looking, and two role="alert" regions holding the same
                             text would be announced twice. */}
-                        {actionError && !showWinnerModal && <div role="alert" className={cn(modalErrorClass, "mb-3")}>{actionError}</div>}
+                        {actionError && !showWinnerModal && missingLastBall === null && <div role="alert" className={cn(modalErrorClass, "mb-3")}>{actionError}</div>}
+
+                        {/* Shown under the error, never instead of it: an adopted
+                            claim, a full grid. */}
+                        {claimNotice && (
+                            <p role="status" className="mb-3 text-center text-sm font-semibold text-[#f3d59d]">{claimNotice}</p>
+                        )}
+
+                        {/* The draft queue failed a send and is retrying by itself.
+                            The claim here is safe either way: Check Win sends the
+                            full list. Only the room's view is behind. */}
+                        {draftQueueState === 'retrying' && (
+                            <p role="status" className="mb-3 text-center text-sm font-semibold text-white">
+                                TV not updated, retrying
+                            </p>
+                        )}
 
                         {/* Claim progress. Big enough to read at arm's length behind the
                             bar, and announced politely so it does not chatter. Stays up
                             after a rejected claim, because that is when the host is
-                            re-counting the ticket. */}
-                        {!validationResult?.valid && (
+                            re-counting the ticket. The last-ball line is a guide
+                            only: a claim without it goes to the server, which asks
+                            whether it came before that ball was announced (A1). */}
+                        {claimVerdict !== 'valid' && (
                             <div aria-live="polite" className="text-center mb-3">
                                 {isStageValidForClaimCheck ? (
                                     <p className={cn(
@@ -1671,44 +2162,66 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             with its prize unawarded and cannot be undone, while the
                             cheaper Undo Last Call has a confirmation. Skip is now
                             separated, quieter, and confirmed. */}
-                        {validationResult ? (
-                            validationResult.valid ? (
-                                <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg mb-4">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <span className="text-white font-bold text-lg">Valid Claim</span>
-                                        <Button className="min-h-[48px]" onClick={handleOpenRecordWinnerModal}>Record Winner</Button>
-                                    </div>
-                                    <div className="mt-4 pt-3 border-t border-[#1f7c58]/70">
-                                        <Button
-                                            variant="ghost"
-                                            onClick={openSkipConfirm}
-                                            disabled={isSkipping}
-                                            className="text-white/70 hover:text-white hover:bg-[#0f6846] min-h-[44px] text-sm"
-                                        >
-                                            {isSkipping ? 'Skipping…' : 'Skip this stage with no winner'}
-                                        </Button>
-                                    </div>
+                        {claimVerdict === 'valid' ? (
+                            <div className="p-4 bg-[#005131]/80 border border-[#1f7c58] rounded-lg mb-4">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-white font-bold text-lg">Valid Claim</span>
+                                    <Button className="min-h-[48px]" onClick={handleOpenRecordWinnerModal}>Record Winner</Button>
                                 </div>
-                            ) : (
-                                <div className="p-4 bg-[#a57626]/20 border border-[#a57626] rounded-lg mb-4">
-                                    <span className="text-white font-bold text-lg block mb-1">Invalid Claim</span>
-                                    <span className="text-white/85 text-sm">Numbers not called: {validationResult.invalidNumbers?.join(', ')}</span>
-                                    <div className="mt-2">
-                                        <Button variant="outline" size="sm" onClick={handleResumeGame} disabled={isResuming} className="text-white border-[#a57626] hover:bg-[#a57626]/25 min-h-[44px]">
-                                            {isResuming ? 'Resuming…' : 'Reject & Resume'}
-                                        </Button>
-                                    </div>
+                                <p className="mt-2 text-sm text-white/85">
+                                    The TV shows every number as called. The win goes up on screen once you record it.
+                                </p>
+                                <div className="mt-4 pt-3 border-t border-[#1f7c58]/70">
+                                    <Button
+                                        variant="ghost"
+                                        onClick={openSkipConfirm}
+                                        disabled={isSkipping}
+                                        className="text-white/70 hover:text-white hover:bg-[#0f6846] min-h-[44px] text-sm"
+                                    >
+                                        {isSkipping ? 'Skipping…' : 'Skip this stage with no winner'}
+                                    </Button>
                                 </div>
-                            )
+                            </div>
+                        ) : claimVerdict === 'invalid' || claimVerdict === 'late' ? (
+                            <div className="p-4 bg-[#a57626]/20 border border-[#a57626] rounded-lg mb-4">
+                                <span className="text-white font-bold text-lg block mb-1">
+                                    {claimVerdict === 'late' ? 'Too late' : 'Not a winner'}
+                                </span>
+                                <span className="text-white/85 text-sm">
+                                    {claimVerdict === 'late'
+                                        ? `The claim had to include ${currentNumber ?? 'the last number called'}.`
+                                        : `Numbers not called: ${claimNumbersNotCalled.join(', ')}`}
+                                </span>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => { void handleRejectClaim(); }}
+                                        disabled={isResuming || isPausing}
+                                        className="text-white border-[#a57626] hover:bg-[#a57626]/25 min-h-[44px]"
+                                    >
+                                        {isResuming ? 'Resuming…' : isCurrentStageWon ? 'Reject' : 'Reject & Resume'}
+                                    </Button>
+                                    <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={() => { void handleBeginClaimCheck(true); }}
+                                        disabled={isResuming || isPausing}
+                                        className="min-h-[44px]"
+                                    >
+                                        {isPausing ? 'Starting…' : 'Check another claimant'}
+                                    </Button>
+                                </div>
+                            </div>
                         ) : (
                             <div className="space-y-2">
-                                <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below.</p>
+                                <p className="text-white/85 text-sm text-center">Tap the claimed numbers on the grid below, in the order the caller reads them. The TV shows each one as you tap it.</p>
                                 {isStageValidForClaimCheck ? (
                                     <p className="text-white text-sm text-center font-semibold">Select exactly {requiredSelectionCount} numbers for {currentStageName || 'this stage'}.</p>
                                 ) : (
                                     <p className="text-white text-sm text-center font-semibold">Check the game&apos;s stages in the admin screen, then try again.</p>
                                 )}
-                                <p className="text-white/75 text-xs text-center">The claim must include the last called number (highlighted).</p>
+                                <p className="text-white/75 text-xs text-center">A winning claim includes the last called number (highlighted).</p>
                             </div>
                         )}
                     </div>
@@ -1727,12 +2240,16 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         Six columns on a phone gives roughly 48px targets. The
                         called state is now a different background, not a different
                         text opacity, and every button carries aria-pressed and a
-                        spoken label so the state is not conveyed by colour alone. */}
+                        spoken label so the state is not conveyed by colour alone.
+
+                        Locked once the server has given its verdict: the verdict
+                        belongs to exactly these numbers. A different claim is
+                        Check another claimant. */}
                     <div className="flex-1 overflow-y-auto bg-[#003f27]/80 rounded-lg p-2 border border-[#1f7c58]">
                         <div className="grid grid-cols-6 sm:grid-cols-10 gap-1.5 sm:gap-2">
                             {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
                                 const isSelected = selectedNumbers.includes(num);
-                                const isCalled = (currentGameState.called_numbers as number[]).includes(num);
+                                const isCalled = calledNumberSet.has(num);
                                 const isLastCalled = num === currentNumber;
 
                                 // Uncalled: dark and flat. Anything tapped that is
@@ -1770,7 +2287,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
                                             buttonStyle
                                         )}
-                                        disabled={!isController}
+                                        disabled={!isController || claimVerdict !== null || claimAttemptId === null}
                                     >
                                         {num}
                                     </button>
@@ -1782,43 +2299,96 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     {/* Read-back. The host is comparing a paper ticket against a
                         grid of ninety cells; asking them to verify the tap by
                         finding it again in the grid is asking them to make the
-                        same mistake twice. Sorted, because that is the order the
-                        numbers are on the ticket. Numbers that were tapped but
-                        never called are called out separately, because that is the
-                        one case that must not reach "Check Win" unnoticed. */}
-                    {selectedNumbers.length > 0 && !validationResult && (
+                        same mistake twice. In tap order, because that is exactly
+                        what the TV and the phones are showing the room. Numbers
+                        that were tapped but never called are called out
+                        separately, because that is the one case that must not
+                        reach "Check Win" unnoticed. */}
+                    {selectedNumbers.length > 0 && claimVerdict === null && (
                         <div className="shrink-0 mt-3 rounded-lg border border-[#1f7c58] bg-[#00301d] p-3" aria-live="polite">
-                            <p className="text-xs uppercase tracking-wider text-white/70 mb-1">You have tapped</p>
+                            <p className="text-xs uppercase tracking-wider text-white/70 mb-1">You have tapped, as the TV shows it</p>
                             <p className="font-mono text-lg text-white tabular-nums break-words">
-                                {[...selectedNumbers].sort((a, b) => a - b).join('  ')}
+                                {selectedNumbers.join('  ')}
                             </p>
-                            {selectedNumbers.some((n) => !(currentGameState.called_numbers as number[]).includes(n)) && (
+                            {claimNumbersNotCalled.length > 0 && (
                                 <p className="mt-2 text-sm font-semibold text-red-300">
                                     Not called yet:{' '}
-                                    {[...selectedNumbers]
-                                        .filter((n) => !(currentGameState.called_numbers as number[]).includes(n))
-                                        .sort((a, b) => a - b)
-                                        .join(', ')}
+                                    {[...claimNumbersNotCalled].sort((a, b) => a - b).join(', ')}
                                 </p>
                             )}
                         </div>
                     )}
 
                     <div className="shrink-0 pt-4 mt-4 border-t border-[#1f7c58] flex justify-between gap-3">
-                        <Button variant="secondary" className="min-h-[44px]" onClick={handleResumeGame} disabled={isResuming}>
-                            {isResuming ? 'Resuming…' : currentGameState.paused_for_validation ? 'Cancel & Resume' : 'Cancel'}
-                        </Button>
+                        {isCurrentStageWon ? (
+                            // Resume is refused once the stage has a winner (X4).
+                            // Close leaves the game paused; the pad offers
+                            // Continue and Check another claimant.
+                            <Button variant="secondary" className="min-h-[44px]" onClick={handleCloseClaimAndStayPaused} disabled={isCheckingWin || isUndoingForClaim}>
+                                Close
+                            </Button>
+                        ) : (
+                            <Button variant="secondary" className="min-h-[44px]" onClick={handleResumeGame} disabled={isResuming}>
+                                {isResuming ? 'Resuming…' : currentGameState.paused_for_validation ? 'Cancel & Resume' : 'Cancel'}
+                            </Button>
+                        )}
                         <div className="flex gap-2">
-                            <Button variant="ghost" className="min-h-[44px]" onClick={handleClearSelection} disabled={selectedNumbers.length === 0}>Clear</Button>
+                            <Button variant="ghost" className="min-h-[44px]" onClick={handleClearSelection} disabled={selectedNumbers.length === 0 || claimVerdict !== null}>Clear</Button>
                             <Button
                                 variant="primary"
                                 className="min-h-[44px]"
                                 onClick={handleCheckWin}
-                                disabled={!isStageValidForClaimCheck || isCheckingWin || !isClaimCountMet || (currentNumber !== null && !claimIncludesLastBall)}
+                                disabled={!isStageValidForClaimCheck || isCheckingWin || isUndoingForClaim || isPausing || !isClaimCountMet || claimVerdict !== null || claimAttemptId === null}
                             >
                                 {isCheckingWin ? 'Checking…' : 'Check Win'}
                             </Button>
                         </div>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* The claim missed the last number called (spec 5.2, A1). The app
+                does not guess from timings, because the TV can lag: the host
+                decides. Yes takes that one ball back off the board, bound to
+                this attempt, then checks the same numbers again. No rejects the
+                claim as late. */}
+            <Modal
+                isOpen={missingLastBall !== null}
+                onClose={() => { if (!isUndoingForClaim && !isCheckingWin) setMissingLastBall(null); }}
+                title="The last number is not in this claim"
+                className="bg-[#003f27] border border-[#1f7c58] max-w-md"
+            >
+                <div className="space-y-4">
+                    {actionError && (
+                        <div role="alert" className={modalErrorClass}>{actionError}</div>
+                    )}
+                    <p className="text-white text-lg font-semibold">
+                        This claim does not include the last number called ({missingLastBall?.lastNumber}). Did they call before {missingLastBall?.lastNumber} was announced?
+                    </p>
+                    {missingLastBall && !missingLastBall.undoAvailable && (
+                        <p className="text-sm text-white/85">
+                            A number has already been undone once for this claim, so it can only be rejected as late now.
+                        </p>
+                    )}
+                    <div className="flex flex-col gap-3 pt-2">
+                        {missingLastBall?.undoAvailable && (
+                            <Button
+                                variant="primary"
+                                className="min-h-[48px] w-full"
+                                onClick={() => { void handleUndoLastBallAndRecheck(); }}
+                                disabled={isUndoingForClaim || isCheckingWin}
+                            >
+                                {isUndoingForClaim ? 'Undoing and checking…' : `Yes: undo ${missingLastBall.lastNumber} and check again`}
+                            </Button>
+                        )}
+                        <Button
+                            variant="secondary"
+                            className="min-h-[48px] w-full"
+                            onClick={() => { void handleRejectAsLate(); }}
+                            disabled={isUndoingForClaim || isCheckingWin}
+                        >
+                            {isCheckingWin ? 'Checking…' : 'No: reject as late'}
+                        </Button>
                     </div>
                 </div>
             </Modal>
@@ -1858,9 +2428,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                         <p className="text-sm text-white/85">
                                             {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'} • {winner.stage}
                                         </p>
-                                        <p className="text-sm text-white/70 truncate">
+                                        <p className={cn("text-sm text-white/70 truncate", winner.is_void && "line-through")}>
                                             {winner.prize_description || 'No prize description'}
                                         </p>
+                                        {(() => {
+                                            const totalLine = describeWinnerTotal(winnerTotalPence(winner));
+                                            return totalLine ? <p className="text-sm font-semibold text-white">{totalLine}</p> : null;
+                                        })()}
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
                                         {winner.is_void && (
@@ -1868,18 +2442,21 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                                 VOID
                                             </span>
                                         )}
-                                        <Button
-                                            size="sm"
-                                            variant={winner.prize_given ? "outline" : "secondary"}
-                                            className={cn(
-                                                "min-w-[120px] min-h-[44px]",
-                                                winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
-                                            )}
-                                            onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
-                                            disabled={!canTogglePrize || winner.is_void === true}
-                                        >
-                                            {winner.prize_given ? "Given ✅" : "Mark Given"}
-                                        </Button>
+                                        {/* X14: no prize to hand over on a voided win. */}
+                                        {!winner.is_void && (
+                                            <Button
+                                                size="sm"
+                                                variant={winner.prize_given ? "outline" : "secondary"}
+                                                className={cn(
+                                                    "min-w-[120px] min-h-[44px]",
+                                                    winner.prize_given ? "text-white border-[#a57626] hover:bg-[#a57626]/20" : "bg-[#a57626] hover:bg-[#8f6621] text-white border-[#a57626]"
+                                                )}
+                                                onClick={() => handleTogglePrize(winner.id, winner.prize_given || false)}
+                                                disabled={!canTogglePrize}
+                                            >
+                                                {winner.prize_given ? "Given ✅" : "Mark Given"}
+                                            </Button>
+                                        )}
                                         {!winner.is_void && (
                                             <Button
                                                 size="sm"
@@ -2235,13 +2812,17 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         )}
 
                         <div className="grid grid-cols-1 gap-3">
+                            {/* A second person with the same win is a new claim
+                                attempt, so a tie is a separate winner with its own
+                                key (spec 5.2). It replaced "Validate Another
+                                Winner". */}
                             <Button
                                 variant="secondary"
                                 className="min-h-[44px]"
-                                onClick={handleValidateAnotherWinner}
+                                onClick={() => { void handleCheckAnotherClaimant(); }}
                                 disabled={isPostWinBusy}
                             >
-                                Validate Another Winner
+                                Check another claimant
                             </Button>
 
                             {/* Hidden at the end of the session: there is no next
@@ -2267,7 +2848,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                 Close and stay paused
                             </Button>
                             <p className="text-xs text-white/75">
-                                Closes this box and leaves the game paused with the win on screen. Resume or check another claim from the main pad when you are ready.
+                                Closes this box and leaves the game paused with the win on screen. Continue or check another claimant from the main pad when you are ready.
                             </p>
                         </div>
                     </div>

@@ -9,7 +9,36 @@
  * on, so it never has to pattern-match the host-facing wording. Add a key here
  * rather than matching on `error` text, which is copy and will be reworded.
  */
-export type ActionFailureCode = 'winner_on_ball'
+export type ActionFailureCode =
+  | 'winner_on_ball'
+  // Night lifecycle: start_game, finish_game, end_night
+  // (supabase/migrations/20261001000100_night_lifecycle.sql).
+  | 'night_ended'
+  | 'other_game_in_progress'
+  | 'invalid_sequence'
+  | 'session_not_found'
+  | 'game_in_progress'
+  // Claims: begin_claim_check, set_claim_draft, check_claim, the bound undo in
+  // void_last_number (20261001000200_claim_attempts.sql) and the enforcement in
+  // record_winner_atomic (20261001000400_claim_enforcement.sql).
+  | 'stage_already_won'
+  | 'attempt_required'
+  | 'unknown_stage'
+  | 'attempt_mismatch'
+  | 'stale_attempt'
+  | 'verdict_already_given'
+  | 'already_undone'
+  | 'not_paused'
+  | 'number_out_of_range'
+  | 'duplicate_numbers'
+  | 'too_many_numbers'
+  | 'wrong_count'
+  | 'claim_fields_protected'
+  | 'claim_not_checked'
+  | 'claim_not_valid'
+  // Money (20261001000300_jackpot_components.sql).
+  | 'game_not_completed'
+  | 'winner_void'
 
 export type ActionResult<T = void> =
   | { success: true; data?: T; redirectTo?: string }

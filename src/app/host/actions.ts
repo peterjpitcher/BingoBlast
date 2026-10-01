@@ -1,18 +1,25 @@
 'use server'
 
+import { randomInt } from 'node:crypto'
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
-import { GameStatus, WinStage, UserRole } from '@/types/database'
-import type { Database } from '@/types/database'
+import { WinStage, UserRole } from '@/types/database'
+import type { ClaimRpcResult, Database } from '@/types/database'
 import type { ActionFailureCode, ActionResult } from '@/types/actions'
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { formatCashJackpotPrize, isCashJackpotGame, parseCashJackpotAmount } from '@/lib/jackpot'
-import { getRequiredSelectionCountForStage } from '@/lib/win-stages'
-import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
+import { HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
 import { logActionFailure, logActionLatency } from '@/lib/log-action-failure'
 import { reportError } from '@/lib/report-error'
 import { isUuid } from '@/lib/utils'
+import type {
+  BeginClaimCheckData,
+  CheckClaimData,
+  CheckClaimOutcome,
+  ClaimSnapshot,
+  FinishedGameData,
+  SetClaimDraftData,
+} from './claim-action-types'
 
 type GameStateRow = Database['public']['Tables']['game_states']['Row']
 
@@ -37,16 +44,103 @@ interface MappedRpcError {
 }
 
 /**
- * Contract with supabase/migrations/20260729231945_atomic_host_mutations.sql and
- * 20260730064309_winner_idempotency_key.sql. Those functions raise short
- * machine-readable keys, and this map is the only place those keys become words a
- * host reads. Keep the two in step.
+ * Contract with supabase/migrations/20260729231945_atomic_host_mutations.sql,
+ * 20260730064309_winner_idempotency_key.sql and the four migrations of
+ * 1 October 2026 (20261001000100_night_lifecycle.sql,
+ * 20261001000200_claim_attempts.sql, 20261001000300_jackpot_components.sql,
+ * 20261001000400_claim_enforcement.sql). Those functions raise short
+ * machine-readable keys, and the claim functions also return them as `code`
+ * on a refusal; this map is the only place those keys become words a host
+ * reads. Keep the two in step.
+ *
+ * An entry whose text is GENERIC_ACTION_ERROR is a client bug rather than a
+ * refusal, so rpcFailure reports it instead of only logging it.
  */
 const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
   not_controller: { error: 'Another host is now controlling this game.', conflict: true },
   not_in_progress: { error: 'This game is not in progress.', conflict: true },
   on_break: { error: 'The game is on a break. Resume before calling.', conflict: true },
   paused_for_validation: { error: 'The game is paused for a claim check.', conflict: true },
+
+  // Night lifecycle (start_game, finish_game, end_night).
+  night_ended: {
+    error: 'This night has ended. An admin must set the session back to running before a game can start.',
+    conflict: true,
+    code: 'night_ended',
+  },
+  other_game_in_progress: {
+    error: 'Another game is still in progress. Finish that game first.',
+    conflict: true,
+    code: 'other_game_in_progress',
+  },
+  invalid_sequence: { error: GENERIC_ACTION_ERROR, code: 'invalid_sequence' },
+  session_not_found: { error: 'Could not find this session. Please reload.', code: 'session_not_found' },
+  game_in_progress: {
+    error: 'A game is still in progress. End that game before ending the night.',
+    conflict: true,
+    code: 'game_in_progress',
+  },
+
+  // Claims (begin_claim_check, set_claim_draft, check_claim, the bound undo,
+  // and the checks record_winner_atomic makes on a new winner).
+  attempt_required: { error: GENERIC_ACTION_ERROR, code: 'attempt_required' },
+  unknown_stage: {
+    error: "This stage is not set up for claim checking. Check the game's stages in Admin.",
+    code: 'unknown_stage',
+  },
+  attempt_mismatch: {
+    error: 'Another claim is being checked on this game. Showing that claim now.',
+    conflict: true,
+    code: 'attempt_mismatch',
+  },
+  stale_attempt: {
+    error: 'The stage has moved on since this claim was started. Start a new claim check.',
+    conflict: true,
+    code: 'stale_attempt',
+  },
+  verdict_already_given: {
+    error: 'This claim has already been checked. Use Check another claimant for a different claim.',
+    conflict: true,
+    code: 'verdict_already_given',
+  },
+  already_undone: {
+    error: 'That ball has already been taken off. Checking the claim again.',
+    conflict: true,
+    code: 'already_undone',
+  },
+  not_paused: {
+    error: 'The game is no longer paused for this claim. Refreshed now.',
+    conflict: true,
+    code: 'not_paused',
+  },
+  number_out_of_range: { error: 'Each number must be between 1 and 90.', code: 'number_out_of_range' },
+  duplicate_numbers: { error: 'A number was tapped twice. Clear the claim and tap each number once.', code: 'duplicate_numbers' },
+  too_many_numbers: { error: 'Too many numbers for this stage. Untap one first.', code: 'too_many_numbers' },
+  wrong_count: { error: 'Tap exactly the numbers this stage needs, then check again.', code: 'wrong_count' },
+  claim_fields_protected: { error: GENERIC_ACTION_ERROR, code: 'claim_fields_protected' },
+  claim_not_checked: {
+    error: 'Check this claim before recording the winner.',
+    conflict: true,
+    code: 'claim_not_checked',
+  },
+  claim_not_valid: {
+    error: 'This claim is not a winner, so it cannot be recorded.',
+    conflict: true,
+    code: 'claim_not_valid',
+  },
+
+  // Money.
+  game_not_completed: {
+    error: 'The game has not finished yet, so the snowball pot cannot be settled.',
+    conflict: true,
+    code: 'game_not_completed',
+  },
+  winner_void: {
+    error: 'This win has been voided, so its prize cannot be marked as given.',
+    conflict: true,
+    code: 'winner_void',
+  },
+
   stage_mismatch: { error: 'The live stage has moved on. Refreshing now.', conflict: true },
   too_soon: { error: 'Just a moment, that was too quick.' },
   no_more_numbers: { error: 'All 90 balls have been called.' },
@@ -198,34 +292,53 @@ async function requireController(
   return { authorized: true, user: authResult.user!, role: authResult.role }
 }
 
-function getServiceRoleClient() {
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-        return createSupabaseClient<Database>(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY,
-            {
-                auth: {
-                    autoRefreshToken: false,
-                    persistSession: false
-                }
-            }
-        );
-    }
-    return null;
-}
-
-// Helper to generate a shuffled 1-90 array
+/**
+ * The draw order for a game: 1 to 90 shuffled with Node's crypto (Fisher-Yates
+ * with an unbiased randomInt). start_game checks it is a permutation of 1 to
+ * 90 before it stores it. It used to use Math.random, which is not a source a
+ * money game should draw from.
+ */
 function generateShuffledNumberSequence(): number[] {
   const numbers = Array.from({ length: 90 }, (_, i) => i + 1);
   for (let i = numbers.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [numbers[i], numbers[j]] = [numbers[j], numbers[i]]; // Swap
+    const j = randomInt(i + 1);
+    [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
   }
   return numbers;
 }
 
-/** Postgres unique violation. */
-const UNIQUE_VIOLATION_CODE = '23505'
+/** A refusal code a claim function returned with ok = false, as a host-facing failure. */
+function claimRefusal(
+  action: string,
+  code: string,
+  startedAtMs: number
+): { success: false; error: string; conflict?: true; code?: ActionFailureCode } {
+  const mapped = mapHostRpcError(code)
+  logActionFailure(action, `refused: ${code}`)
+  logActionLatency(action, startedAtMs)
+  return { success: false, ...mapped }
+}
+
+/** Only whole numbers survive; the jsonb column is never trusted to be tidy. */
+function toNumberList(value: unknown): number[] {
+  return Array.isArray(value) ? value.filter((n): n is number => Number.isInteger(n)) : []
+}
+
+/** The claim fields every claim function returns, in the shape the host screen adopts. */
+function toClaimSnapshot(result: ClaimRpcResult<string>): ClaimSnapshot {
+  return {
+    attemptId: result.attempt_id ?? null,
+    claimNumbers: toNumberList(result.claim_numbers),
+    claimResult: result.claim_result ?? null,
+    claimDraftSeq: Number.isInteger(result.claim_draft_seq) ? result.claim_draft_seq : 0,
+    gameState: result.game_state,
+  }
+}
+
+/** A claim list from the host screen: whole numbers only, checked before any round trip. */
+function isClaimNumberList(numbers: unknown): numbers is number[] {
+  return Array.isArray(numbers) && numbers.length <= 90 && numbers.every((n) => Number.isInteger(n))
+}
 
 interface SnowballSettlementResult {
     /**
@@ -236,6 +349,8 @@ interface SnowballSettlementResult {
     success: boolean
     /** Diagnostic detail for the log. Never shown to the host. */
     error?: string
+    /** The raised message, when the function refused, so the caller can map its key. */
+    rpcMessage?: string
 }
 
 /**
@@ -270,7 +385,7 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, gameI
     const { data, error } = await supabase.rpc('settle_snowball_pot', { p_game_id: gameId });
 
     if (error) {
-        return { success: false, error: `Failed to settle the snowball pot: ${error.message}` };
+        return { success: false, error: `Failed to settle the snowball pot: ${error.message}`, rpcMessage: error.message };
     }
 
     const settlement = data?.[0];
@@ -303,16 +418,26 @@ async function handleSnowballPotUpdate(supabase: SupabaseClient<Database>, gameI
  * 'already_settled' and leaves the pot exactly where it is. So the retry needs
  * no new guard, only a route to it.
  *
- * Deliberately does NOT check the game status. The whole point is that the game
- * is finished.
+ * Does not check the game status itself: settle_snowball_pot refuses with
+ * game_not_completed unless the game is completed (X7), and that refusal is
+ * mapped to plain words here rather than reported as a pot that did not move.
+ *
+ * Used by the retry banner on the host game screen and by the Settle button on
+ * the host dashboard, which lists finished snowball games with no settlement
+ * record, so a failed settlement survives a reload or leaving the page (X6).
  */
 export async function settleSnowballPotForGame(gameId: string): Promise<ActionResult> {
+    const startedAtMs = Date.now();
     const supabase = await createClient();
     const authResult = await authorizeHost(supabase);
     if (!authResult.authorized) return failure('settleSnowballPotForGame', authResult.error);
 
     const result = await handleSnowballPotUpdate(supabase, gameId);
     if (!result.success) {
+        const mapped = mapHostRpcError(result.rpcMessage);
+        if (mapped.code) {
+            return rpcFailure('settleSnowballPotForGame', { message: result.rpcMessage }, startedAtMs);
+        }
         return failure('settleSnowballPotForGame', SNOWBALL_POT_NOT_MOVED_ERROR, result.error);
     }
 
@@ -320,69 +445,88 @@ export async function settleSnowballPotForGame(gameId: string): Promise<ActionRe
     return { success: true };
 }
 
-async function maybeCompleteSession(supabase: SupabaseClient<Database>, sessionId: string) {
-    const { data: games, error } = await supabase
-        .from('games')
-        .select('id')
-        .eq('session_id', sessionId)
+/**
+ * Finishes a game through finish_game, then settles the snowball pot (X9, X6).
+ *
+ * finish_game locks the session and then the game state, completes the game,
+ * clears the pause, break, win and claim, clears active_game_id if it points
+ * here, and completes the session when every game is completed. That replaced
+ * separate writes to game_states and sessions (and maybeCompleteSession), which
+ * could leave a game half finished or a completed night with a running game.
+ * It is idempotent: a retry after a lost response returns the completed game.
+ *
+ * Settlement stays a separate call after it, and runs on every finishing path,
+ * including a repeat: settle_snowball_pot is once per game, so a repeat either
+ * settles a pot that failed before or answers already_settled. A pot that did
+ * not move never fails the finish: the game HAS finished, and the answer says
+ * so with `snowballPotDidNotSettle` so the host screen can offer the retry.
+ *
+ * Cookie client only: finish_game and settle_snowball_pot read auth.uid().
+ */
+async function finishGameAndSettle(
+    supabase: SupabaseClient<Database>,
+    action: string,
+    gameId: string,
+    startedAtMs: number
+): Promise<ActionResult<FinishedGameData>> {
+    const { data, error } = await supabase.rpc('finish_game', { p_game_id: gameId });
 
-    if (error || !games || games.length === 0) {
-        // Silent before. A read failure here means the session is simply never
-        // marked complete, which looks identical to "there is another game to
-        // play" and is impossible to diagnose the morning after.
-        if (error) logActionFailure('maybeCompleteSession', error);
-        return;
+    if (error) {
+        return rpcFailure(action, error, startedAtMs);
+    }
+    const gameState = data?.game_state;
+    if (!gameState) {
+        return failure(action, COULD_NOT_READ_GAME_ERROR, 'finish_game returned no game state');
     }
 
-    const gameIds = games.map((g: { id: string }) => g.id);
-    const { data: completedStates, error: completedStatesError } = await supabase
-        .from('game_states')
-        .select('game_id')
-        .in('game_id', gameIds)
-        .eq('status', 'completed');
-
-    if (completedStatesError) {
-        logActionFailure('maybeCompleteSession', completedStatesError);
-        return;
+    const potResult = await handleSnowballPotUpdate(supabase, gameId);
+    if (!potResult.success) {
+        logActionFailure(action, potResult.error ?? 'snowball pot update failed');
     }
 
-    const completedGameIds = new Set((completedStates || []).map((s: { game_id: string }) => s.game_id));
-    const hasIncompleteGame = gameIds.some((id: string) => !completedGameIds.has(id));
-
-    if (!hasIncompleteGame) {
-        // .select() so a write RLS filtered out is a real failure rather than a
-        // silent one. Without it a session could stay 'running' for ever with
-        // nothing anywhere saying why, and the next night's /host and /display
-        // would both still list it as live.
-        const { data: completedRows, error: completeError } = await supabase
-            .from('sessions')
-            .update({ status: 'completed', active_game_id: null })
-            .eq('id', sessionId)
-            .select('id')
-
-        if (completeError) {
-            logActionFailure('maybeCompleteSession', completeError);
-            return;
-        }
-        if (!completedRows || completedRows.length === 0) {
-            logActionFailure('maybeCompleteSession', 'session completion matched no rows');
-        }
-    }
+    logActionLatency(action, startedAtMs);
+    return {
+        success: true,
+        data: {
+            gameState,
+            sessionCompleted: data.session_completed === true,
+            ...(potResult.success ? {} : { snowballPotDidNotSettle: true as const }),
+        },
+    };
 }
 
+/**
+ * Starts, re-opens or takes over a game (X10, X11).
+ *
+ * The writes are one call to start_game, which locks the session and then the
+ * game state, refuses night_ended and other_game_in_progress under that lock,
+ * and then either creates the state, re-opens a completed game (stage kept) or
+ * hands control to this host, before setting the session running, pointing
+ * active_game_id here and stamping started_at the first time. The separate
+ * game_states and sessions writes this used to make could race an end of night
+ * and leave a running game in a completed night, and could re-open a game while
+ * another was running.
+ *
+ * Cookie client only: start_game reads auth.uid() for the controller. The
+ * service-role write client that used to sit here, with its silent fallback to
+ * the cookie client, is gone.
+ *
+ * What stays in TypeScript: the shuffle (with crypto; the database checks it is
+ * a permutation of 1 to 90), the session pairing check, the cash-jackpot prize,
+ * and the heartbeat check before a takeover.
+ */
 export async function startGame(
   sessionId: string,
   gameId: string,
   cashJackpotAmountInput?: string
 ): Promise<ActionResult<{ requiresCashJackpotAmount?: boolean; gameName?: string }>> {
+  const startedAtMs = Date.now()
   try {
       const supabase = await createClient()
       const authResult = await authorizeHost(supabase)
       if (!authResult.authorized) return failure('startGame', authResult.error)
 
-      const dbClient = getServiceRoleClient() || supabase;
-
-      const { data: gameDetailsForStart, error: gameDetailsError } = await dbClient
+      const { data: gameDetailsForStart, error: gameDetailsError } = await supabase
         .from('games')
         .select('session_id, name, type, stage_sequence, prizes')
         .eq('id', gameId)
@@ -393,11 +537,9 @@ export async function startGame(
       }
 
       // The two ids are supplied by the caller and were never checked against
-      // each other. This action then writes `status: 'running'` and
-      // `active_game_id: gameId` onto whichever session it was named, so a
-      // mismatched pair pointed one session's live game at another session.
-      // Every other host action derives the session from the game; this one is
-      // the last place that trusted the pairing.
+      // each other. A mismatched pair used to point one session's live game at
+      // another session. start_game derives the session from the game, and
+      // this refuses the mismatch before anything is written at all.
       if (gameDetailsForStart.session_id !== sessionId) {
         return failure(
           'startGame',
@@ -406,12 +548,11 @@ export async function startGame(
         );
       }
 
-      // 1. Check if game_state already exists
-      const { data: existingGameState, error: fetchGameStateError } = await dbClient
+      const { data: existingGameState, error: fetchGameStateError } = await supabase
         .from('game_states')
-        .select('id, status, number_sequence, called_numbers, numbers_called_count, current_stage_index, controlling_host_id, controller_last_seen_at, call_delay_seconds')
+        .select('status, controlling_host_id, controller_last_seen_at')
         .eq('game_id', gameId)
-        .single<Pick<Database['public']['Tables']['game_states']['Row'], 'id' | 'status' | 'number_sequence' | 'called_numbers' | 'numbers_called_count' | 'current_stage_index' | 'controlling_host_id' | 'controller_last_seen_at' | 'call_delay_seconds'>>()
+        .single<Pick<GameStateRow, 'status' | 'controlling_host_id' | 'controller_last_seen_at'>>()
 
       if (fetchGameStateError && fetchGameStateError.code !== 'PGRST116') {
         return failure('startGame', COULD_NOT_READ_GAME_ERROR, fetchGameStateError);
@@ -460,11 +601,12 @@ export async function startGame(
           prizes: updatedPrizes,
         };
         // .select() is what makes this honest. games UPDATE is admin-only in
-        // RLS, so with no service-role key configured a host-role account's
-        // write matches zero rows, and PostgREST answers with no error and no
-        // rows. Without this check the host would be told the jackpot amount
-        // saved while the TV kept showing the old prize.
-        const { data: prizeRows, error: gamePrizeError } = await dbClient
+        // RLS, and there is no service-role client here any more, so a
+        // host-role account's write matches zero rows and PostgREST answers
+        // with no error and no rows. Without this check the host would be told
+        // the jackpot amount saved while the TV kept showing the old prize. It
+        // fails closed, before the game starts, and says who can do it.
+        const { data: prizeRows, error: gamePrizeError } = await supabase
           .from('games')
           .update(gamePrizeUpdate)
           .eq('id', gameId)
@@ -482,8 +624,8 @@ export async function startGame(
         }
       }
 
-      const nowIso = new Date().toISOString();
-
+      // A takeover of a game another host is still driving is refused here, as
+      // before: start_game hands control to whoever calls it.
       if (existingGameState?.status === 'in_progress') {
         const lastSeen = existingGameState.controller_last_seen_at
           ? new Date(existingGameState.controller_last_seen_at)
@@ -496,132 +638,18 @@ export async function startGame(
         ) {
           return failure('startGame', "Another host is currently controlling this game.");
         }
-
-        // Bound to the status this branch was chosen for. Without it a delayed
-        // request could apply a takeover to a game that has since been reset.
-        const { data: takeoverRows, error: updateError } = await dbClient
-          .from('game_states')
-          .update({
-            controlling_host_id: authResult.user!.id,
-            controller_last_seen_at: nowIso,
-          } satisfies Database['public']['Tables']['game_states']['Update'])
-          .eq('game_id', gameId)
-          .eq('status', 'in_progress')
-          .select('id')
-
-        if (updateError) {
-          return failure('startGame', 'Could not take control of this game. Please try again.', updateError);
-        }
-        if (!takeoverRows || takeoverRows.length === 0) {
-          return conflictFailure('startGame', STATE_MOVED_ERROR, 'takeover found no in_progress row');
-        }
-      } else if (existingGameState?.status === 'completed') {
-        // Bound to 'completed'. Without it a delayed restart could re-open a game
-        // another host has already started and is calling balls in.
-        const { data: restartRows, error: updateError } = await dbClient
-          .from('game_states')
-          .update({
-            status: 'in_progress',
-            ended_at: null,
-            paused_for_validation: false,
-            display_win_type: null,
-            display_win_text: null,
-            display_winner_name: null,
-            controlling_host_id: authResult.user!.id,
-            controller_last_seen_at: nowIso,
-          } satisfies Database['public']['Tables']['game_states']['Update'])
-          .eq('game_id', gameId)
-          .eq('status', 'completed')
-          .select('id')
-
-        if (updateError) {
-          return failure('startGame', 'Could not restart this game. Please try again.', updateError);
-        }
-        if (!restartRows || restartRows.length === 0) {
-          return conflictFailure('startGame', STATE_MOVED_ERROR, 'restart found no completed row');
-        }
-      } else {
-        const sequence = existingGameState?.number_sequence ?? generateShuffledNumberSequence();
-        const callDelaySeconds = existingGameState?.call_delay_seconds ?? DEFAULT_PUBLIC_CALL_DELAY_SECONDS;
-
-        const freshState: Database['public']['Tables']['game_states']['Insert'] = {
-          game_id: gameId,
-          number_sequence: sequence,
-          called_numbers: [],
-          numbers_called_count: 0,
-          current_stage_index: 0,
-          status: 'in_progress',
-          started_at: nowIso,
-          ended_at: null,
-          last_call_at: null,
-          on_break: false,
-          paused_for_validation: false,
-          call_delay_seconds: callDelaySeconds,
-          display_win_type: null,
-          display_win_text: null,
-          display_winner_name: null,
-          controlling_host_id: authResult.user!.id,
-          controller_last_seen_at: nowIso,
-        };
-
-        if (existingGameState) {
-          // Bound to 'not_started', and this is the destructive one: freshState
-          // zeroes called_numbers and numbers_called_count. Two host devices on
-          // the same unstarted game both read 'not_started'; the second, delayed
-          // request must not wipe a board the first has already filled.
-          const { data: freshRows, error: updateError } = await dbClient
-            .from('game_states')
-            .update(freshState)
-            .eq('game_id', gameId)
-            .eq('status', 'not_started')
-            .select('id')
-
-          if (updateError) {
-            return failure('startGame', 'Could not start this game. Please try again.', updateError);
-          }
-          if (!freshRows || freshRows.length === 0) {
-            return conflictFailure('startGame', STATE_MOVED_ERROR, 'fresh start found no not_started row');
-          }
-        } else {
-          const { error: insertError } = await dbClient
-            .from('game_states')
-            .insert(freshState);
-
-          if (insertError) {
-            // game_states.game_id is unique, so a duplicate here means another
-            // device created the state first. That is a conflict, not a failure.
-            if (insertError.code === UNIQUE_VIOLATION_CODE) {
-              return conflictFailure('startGame', STATE_MOVED_ERROR, insertError);
-            }
-            return failure('startGame', 'Could not start this game. Please try again.', insertError);
-          }
-        }
       }
 
-      // 4. Update session status to 'running' and set active_game_id
-      const { data: session, error: fetchSessionError } = await dbClient
-        .from('sessions')
-        .select('status, active_game_id')
-        .eq('id', sessionId)
-        .single<Pick<Database['public']['Tables']['sessions']['Row'], 'status' | 'active_game_id'>>()
+      // A fresh start sends a new shuffle. A not_started row that already holds
+      // a sequence keeps it (start_game prefers the stored one), and a re-open
+      // or a takeover needs none.
+      const { error: startError } = await supabase.rpc('start_game', {
+        p_game_id: gameId,
+        p_number_sequence: isFirstStartAttempt ? generateShuffledNumberSequence() : null,
+      });
 
-      if (fetchSessionError || !session) {
-        return failure('startGame', 'Could not read this session. Please reload.', fetchSessionError ?? 'session not found');
-      }
-
-      if (session.status !== 'running' || session.active_game_id !== gameId) {
-        const sessionUpdate: Database['public']['Tables']['sessions']['Update'] = {
-          status: 'running',
-          active_game_id: gameId,
-        };
-        const { error: updateSessionError } = await dbClient
-          .from('sessions')
-          .update(sessionUpdate)
-          .eq('id', sessionId)
-        
-        if (updateSessionError) {
-          return failure('startGame', 'Could not mark this session as running. Please try again.', updateSessionError);
-        }
+      if (startError) {
+        return rpcFailure('startGame', startError, startedAtMs);
       }
 
       revalidatePath(`/host`);
@@ -631,7 +659,42 @@ export async function startGame(
       return failure('startGame', GENERIC_ACTION_ERROR, e);
   }
 
+  logActionLatency('startGame', startedAtMs);
   return { success: true, redirectTo: `/host/${sessionId}/${gameId}` };
+}
+
+/**
+ * Ends the night (spec 5.1).
+ *
+ * end_night locks the session, refuses game_in_progress while a game is being
+ * played, and otherwise marks the session completed and clears active_game_id.
+ * Unplayed games stay not_started and their snowball pot is untouched. It is
+ * idempotent: ending a night that has already ended returns it as it is, and
+ * the first completed_at stands.
+ *
+ * Cookie client only, like every host function.
+ */
+export async function endNight(
+  sessionId: string
+): Promise<ActionResult<{ session: Database['public']['Tables']['sessions']['Row'] }>> {
+  const startedAtMs = Date.now()
+  if (!isUuid(sessionId)) {
+    return failure('endNight', GENERIC_ACTION_ERROR, `invalid sessionId: ${sessionId}`)
+  }
+
+  const supabase = await createClient()
+  const { data: session, error } = await supabase.rpc('end_night', { p_session_id: sessionId })
+
+  if (error) {
+    return rpcFailure('endNight', error, startedAtMs)
+  }
+  if (!session || session.status !== 'completed') {
+    return failure('endNight', 'The night did not end. Please reload and try again.', 'end_night returned a session that is not completed')
+  }
+
+  revalidatePath('/host')
+  logActionLatency('endNight', startedAtMs)
+  return { success: true, data: { session } }
 }
 
 export async function takeControl(gameId: string): Promise<ActionResult<{ gameState: GameStateRow }>> {
@@ -692,29 +755,6 @@ export async function sendHeartbeat(gameId: string): Promise<ActionResult> {
     if (error) return failure('sendHeartbeat', GENERIC_ACTION_ERROR, error);
 
     return { success: true };
-}
-
-export async function getCurrentGameState(gameId: string): Promise<ActionResult<GameStateRow>> {
-    const supabase = await createClient();
-    const authResult = await authorizeHost(supabase);
-    if (!authResult.authorized) return failure('getCurrentGameState', authResult.error);
-
-    const { data: gameState, error } = await supabase
-        .from('game_states')
-        .select('*')
-        .eq('game_id', gameId)
-        .single<GameStateRow>();
-
-    if (error && error.code !== 'PGRST116') { // PGRST116 means 'no rows found'
-        return failure('getCurrentGameState', COULD_NOT_READ_GAME_ERROR, error);
-    }
-
-    // If no game state found, return null or a default
-    if (!gameState) {
-        return failure('getCurrentGameState', "No game state found for this game.");
-    }
-
-    return { success: true, data: gameState };
 }
 
 /**
@@ -821,43 +861,261 @@ export async function toggleBreak(gameId: string, onBreak: boolean): Promise<Act
     return { success: true, data: { gameState: rows[0] } };
 }
 
-export async function pauseForValidation(gameId: string): Promise<ActionResult<{ gameState: GameStateRow }>> {
-    const supabase = await createClient()
-    const controlResult = await requireController(supabase, gameId)
-    if (!controlResult.authorized) return failure('pauseForValidation', controlResult.error)
+/**
+ * Starts a claim check for one claim attempt (spec 5.2). Replaces
+ * pauseForValidation.
+ *
+ * The host's phone mints the attempt id when the host taps Check Claim or
+ * Check another claimant. begin_claim_check pauses the game, clears the win
+ * fields and stores the attempt with its stage and ball-count snapshots. The
+ * attempt then binds every draft, the verdict, the one permitted undo and the
+ * recorded winner, whose idempotency key it is.
+ *
+ * - Same attempt again (a retry after a lost response): nothing is written.
+ * - A different attempt is already being checked and `newClaimant` is false:
+ *   the answer is code 'attempt_mismatch' with that attempt and its draft,
+ *   which the phone adopts. This is how a reloaded or taken-over phone picks
+ *   up a claim in progress, so it is a success for the caller, not a failure:
+ *   nothing was written and the data says exactly what to show.
+ * - `newClaimant` (Check another claimant) replaces the attempt and clears the
+ *   claim and the win on screen.
+ */
+export async function beginClaimCheck(
+    gameId: string,
+    attemptId: string,
+    newClaimant: boolean = false
+): Promise<ActionResult<BeginClaimCheckData>> {
+    const startedAtMs = Date.now();
+    if (!isUuid(attemptId)) {
+        return failure('beginClaimCheck', GENERIC_ACTION_ERROR, `invalid attemptId: ${attemptId}`);
+    }
 
-    const validationUpdate: Database['public']['Tables']['game_states']['Update'] = {
-        paused_for_validation: true,
-        display_win_type: null, // Clear old win display if any
-        display_win_text: null,
-        display_winner_name: null,
-    };
-    const { data: rows, error } = await supabase
-        .from('game_states')
-        .update(validationUpdate)
-        .eq('game_id', gameId)
-        .eq('controlling_host_id', controlResult.user!.id)
-        .eq('status', 'in_progress')
-        .eq('on_break', false)
-        .select('*');
+    // Cookie-based client, never the service role: the function reads auth.uid().
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('begin_claim_check', {
+        p_game_id: gameId,
+        p_attempt_id: attemptId,
+        p_new_claimant: newClaimant,
+    });
 
     if (error) {
-        return failure('pauseForValidation', GENERIC_ACTION_ERROR, error);
+        return rpcFailure('beginClaimCheck', error, startedAtMs);
     }
-    if (!rows || rows.length === 0) {
-        return conflictFailure(
-            'pauseForValidation',
-            'Could not pause for a claim check. The game may be on a break or no longer in progress.'
-        );
+    if (!data?.game_state) {
+        return failure('beginClaimCheck', COULD_NOT_READ_GAME_ERROR, 'begin_claim_check returned no game state');
     }
 
-    return { success: true, data: { gameState: rows[0] } };
+    logActionLatency('beginClaimCheck', startedAtMs);
+    return { success: true, data: { code: data.code, ...toClaimSnapshot(data) } };
 }
 
+/**
+ * Stores the live draft of a claim, in tap order, for the TV and phones.
+ *
+ * Called by the host screen's claim draft queue (src/lib/claim-draft-queue.ts):
+ * one request at a time, the newest list wins, and `seq` only goes up. A
+ * sequence the server has already passed is answered 'stale_seq' and ignored,
+ * so an out-of-order write can never replace a newer draft. A refusal (the
+ * claim ended, the attempt was replaced, a verdict was given) comes back as a
+ * failure with its code, and the queue stops.
+ *
+ * Correctness never depends on this: Check Win sends the full list.
+ */
+export async function setClaimDraft(
+    gameId: string,
+    attemptId: string,
+    numbers: number[],
+    seq: number
+): Promise<ActionResult<SetClaimDraftData>> {
+    const startedAtMs = Date.now();
+    if (!isUuid(attemptId) || !isClaimNumberList(numbers) || !Number.isInteger(seq) || seq < 1) {
+        return failure('setClaimDraft', GENERIC_ACTION_ERROR, 'invalid claim draft arguments');
+    }
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('set_claim_draft', {
+        p_game_id: gameId,
+        p_attempt_id: attemptId,
+        p_numbers: numbers,
+        p_seq: seq,
+    });
+
+    if (error) {
+        return rpcFailure('setClaimDraft', error, startedAtMs);
+    }
+    if (!data) {
+        return failure('setClaimDraft', COULD_NOT_READ_GAME_ERROR, 'set_claim_draft returned nothing');
+    }
+    if (!data.ok || (data.code !== 'saved' && data.code !== 'stale_seq')) {
+        return claimRefusal('setClaimDraft', data.code, startedAtMs);
+    }
+
+    logActionLatency('setClaimDraft', startedAtMs);
+    return {
+        success: true,
+        data: { code: data.code, claimDraftSeq: Number.isInteger(data.claim_draft_seq) ? data.claim_draft_seq : seq },
+    };
+}
+
+const CHECK_CLAIM_OUTCOMES: ReadonlySet<string> = new Set<CheckClaimOutcome>(['valid', 'invalid', 'late', 'missing_last_ball']);
+
+/**
+ * The server's verdict on a claim (spec 5.2, X16). Replaces validateClaim.
+ *
+ * check_claim re-reads the board under the lock and, for the stage's count of
+ * numbers with no duplicates, answers:
+ * - 'invalid' when any number has not been called (with `invalidNumbers`);
+ * - 'missing_last_ball' when every number was called but the last ball is not
+ *   among them and `rejectAsLate` is false. No verdict is written: the host
+ *   decides whether the claim came before that ball was announced (A1);
+ * - 'late' in that same case when `rejectAsLate` is true;
+ * - 'valid' otherwise.
+ *
+ * A retry with the same numbers once a verdict exists returns that verdict, so
+ * a lost response is safe to repeat. It no longer announces the win (X5): the
+ * TV shows the win only once record_winner_atomic has recorded it.
+ */
+export async function checkClaim(
+    gameId: string,
+    attemptId: string,
+    numbers: number[],
+    rejectAsLate: boolean = false
+): Promise<ActionResult<CheckClaimData>> {
+    const startedAtMs = Date.now();
+    if (!isUuid(attemptId) || !isClaimNumberList(numbers)) {
+        return failure('checkClaim', GENERIC_ACTION_ERROR, 'invalid claim check arguments');
+    }
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('check_claim', {
+        p_game_id: gameId,
+        p_attempt_id: attemptId,
+        p_numbers: numbers,
+        p_reject_as_late: rejectAsLate,
+    });
+
+    if (error) {
+        return rpcFailure('checkClaim', error, startedAtMs);
+    }
+    if (!data?.game_state) {
+        return failure('checkClaim', COULD_NOT_READ_GAME_ERROR, 'check_claim returned no game state');
+    }
+    if (!data.ok || !CHECK_CLAIM_OUTCOMES.has(data.code)) {
+        return claimRefusal('checkClaim', data.code, startedAtMs);
+    }
+
+    logActionLatency('checkClaim', startedAtMs);
+    return {
+        success: true,
+        data: {
+            ...toClaimSnapshot(data),
+            code: data.code as CheckClaimOutcome,
+            invalidNumbers: toNumberList(data.invalid_numbers),
+            lastNumber: Number.isInteger(data.last_number) ? data.last_number : null,
+        },
+    };
+}
+
+/**
+ * The one undo a claim attempt may make (X17, A1): the host said the claim was
+ * made before the last ball was announced.
+ *
+ * void_last_number, paused, needs the matching attempt, no verdict yet, the
+ * undo not already used, and `expectedCount` equal to the ball count the host
+ * saw. So a repeated tap, or a retry after the first undo landed, refuses with
+ * already_undone instead of removing a second ball. It also refuses while a
+ * live winner sits on that ball.
+ */
+export async function undoLastNumberForClaim(
+    gameId: string,
+    attemptId: string,
+    expectedCount: number
+): Promise<ActionResult<{ gameState: GameStateRow }>> {
+    const startedAtMs = Date.now();
+    if (!isUuid(attemptId) || !Number.isInteger(expectedCount) || expectedCount < 1) {
+        return failure('undoLastNumberForClaim', GENERIC_ACTION_ERROR, 'invalid claim undo arguments');
+    }
+
+    // Cookie-based client, never the service role: the function reads auth.uid().
+    const supabase = await createClient();
+    const { data: gameState, error } = await supabase.rpc('void_last_number', {
+        p_game_id: gameId,
+        p_attempt_id: attemptId,
+        p_expected_count: expectedCount,
+    });
+
+    if (error) {
+        return rpcFailure('undoLastNumberForClaim', error, startedAtMs);
+    }
+    if (!gameState) {
+        return failure('undoLastNumberForClaim', COULD_NOT_READ_GAME_ERROR, 'void_last_number returned no row');
+    }
+
+    logActionLatency('undoLastNumberForClaim', startedAtMs);
+    return { success: true, data: { gameState } };
+}
+
+/**
+ * Resumes calling after a claim check.
+ *
+ * Refuses with code 'stage_already_won' when a live (non-void) winner is
+ * already recorded at the current stage (X4). "Close and stay paused" then
+ * "Resume calling" used to carry on calling for a stage that had been won, so
+ * the next claim at that stage was a second prize. The host screen offers
+ * Continue to the next stage instead.
+ */
 export async function resumeGame(gameId: string): Promise<ActionResult<{ gameState: GameStateRow }>> {
     const supabase = await createClient()
     const controlResult = await requireController(supabase, gameId)
     if (!controlResult.authorized) return failure('resumeGame', controlResult.error)
+
+    const { data: gameState, error: stateError } = await supabase
+        .from('game_states')
+        .select('current_stage_index, status')
+        .eq('game_id', gameId)
+        .single<Pick<GameStateRow, 'current_stage_index' | 'status'>>();
+
+    if (stateError || !gameState) {
+        return failure('resumeGame', COULD_NOT_READ_GAME_ERROR, stateError ?? 'game state not found');
+    }
+    if (gameState.status !== 'in_progress') {
+        return conflictFailure('resumeGame', 'This game is not in progress.');
+    }
+
+    const { data: gameRow, error: gameError } = await supabase
+        .from('games')
+        .select('stage_sequence')
+        .eq('id', gameId)
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'stage_sequence'>>();
+
+    if (gameError || !gameRow) {
+        return failure('resumeGame', COULD_NOT_READ_GAME_ERROR, gameError ?? 'game not found');
+    }
+
+    const stageName = (gameRow.stage_sequence as string[] | null)?.[gameState.current_stage_index];
+    if (stageName) {
+        // is_void is nullable, so "not void" is null or false. A plain
+        // eq('is_void', false) would skip the null rows.
+        const { data: stageWinners, error: winnersError } = await supabase
+            .from('winners')
+            .select('id')
+            .eq('game_id', gameId)
+            .eq('stage', stageName as WinStage)
+            .or('is_void.is.null,is_void.eq.false')
+            .limit(1);
+
+        if (winnersError) {
+            return failure('resumeGame', COULD_NOT_READ_GAME_ERROR, winnersError);
+        }
+        if (stageWinners && stageWinners.length > 0) {
+            logActionFailure('resumeGame', 'refused: stage_already_won');
+            return {
+                success: false,
+                error: `${stageName} has already been won. Continue to the next stage instead of resuming.`,
+                code: 'stage_already_won',
+            };
+        }
+    }
 
     const resumeUpdate: Database['public']['Tables']['game_states']['Update'] = {
         paused_for_validation: false,
@@ -865,12 +1123,15 @@ export async function resumeGame(gameId: string): Promise<ActionResult<{ gameSta
         display_win_text: null,
         display_winner_name: null,
     };
+    // Bound to the stage the winner check read, so a resume cannot land on a
+    // stage that moved on in between.
     const { data: rows, error } = await supabase
         .from('game_states')
         .update(resumeUpdate)
         .eq('game_id', gameId)
         .eq('controlling_host_id', controlResult.user!.id)
         .eq('status', 'in_progress')
+        .eq('current_stage_index', gameState.current_stage_index)
         .select('*');
 
     if (error) {
@@ -883,104 +1144,44 @@ export async function resumeGame(gameId: string): Promise<ActionResult<{ gameSta
     return { success: true, data: { gameState: rows[0] } };
 }
 
+/**
+ * Ends the game with no further winner, through finish_game (X9), then settles
+ * the snowball pot. Completes the session too when this was the last game to
+ * finish. A pot that did not move is reported with `snowballPotDidNotSettle`,
+ * never as a failure: the game has ended.
+ */
 export async function endGame(
     gameId: string,
     sessionId: string
-): Promise<ActionResult<{ gameState: GameStateRow; snowballPotDidNotSettle?: boolean }>> {
+): Promise<ActionResult<FinishedGameData>> {
+    const startedAtMs = Date.now();
+    // Cookie-based client, never the service role: finish_game reads auth.uid()
+    // and checks the controller under its lock.
     const supabase = await createClient()
-    const controlResult = await requireController(supabase, gameId)
-    if (!controlResult.authorized) return failure('endGame', controlResult.error)
 
-    const { data: gameState, error: fetchError } = await supabase
-        .from('game_states')
-        .select('status')
-        .eq('game_id', gameId)
-        .single<Pick<GameStateRow, 'status'>>();
+    const finished = await finishGameAndSettle(supabase, 'endGame', gameId, startedAtMs);
+    if (!finished.success) return finished;
 
-    if (fetchError || !gameState) {
-        return failure('endGame', COULD_NOT_READ_GAME_ERROR, fetchError ?? 'game state not found');
-    }
+    revalidatePath(`/host/${sessionId}/${gameId}`);
+    revalidatePath(`/host`);
+    return finished;
+}
 
-    if (gameState.status !== 'in_progress') {
-        return conflictFailure('endGame', "This game is not in progress.");
-    }
-
-    const endUpdate: Database['public']['Tables']['game_states']['Update'] = {
-        status: 'completed',
-        ended_at: new Date().toISOString(),
-        on_break: false,
-        paused_for_validation: false,
-        display_win_type: null,
-        display_win_text: null,
-        display_winner_name: null,
-    };
-    const { data: rows, error: updateError } = await supabase
-        .from('game_states')
-        .update(endUpdate)
-        .eq('game_id', gameId)
-        .eq('controlling_host_id', controlResult.user!.id)
-        .eq('status', 'in_progress')
-        .select('*');
-
-    if (updateError) {
-        return failure('endGame', GENERIC_ACTION_ERROR, updateError);
-    }
-    // Zero rows means the game was already ended or taken over, so the snowball
-    // pot must not be settled a second time.
-    if (!rows || rows.length === 0) {
-        return conflictFailure('endGame', STATE_MOVED_ERROR);
-    }
-
-    // The game HAS ended: rows[0] proves the write landed, and that must not be
-    // undone by a pot problem. But telling the host it all worked when the pot
-    // demonstrably did not move is how a jackpot silently advertises last week's
-    // figure the following Friday. The game end stands; the answer says so.
-    const potResult = await handleSnowballPotUpdate(supabase, gameId);
-    const potDidNotMove = !potResult.success;
-    if (potDidNotMove) {
-        logActionFailure('endGame', potResult.error ?? 'snowball pot update failed');
-    }
-    await maybeCompleteSession(supabase, sessionId);
-
-    const { data: sessionAfterEnd, error: sessionAfterEndError } = await supabase
-        .from('sessions')
-        .select('status')
-        .eq('id', sessionId)
-        .single<Pick<Database['public']['Tables']['sessions']['Row'], 'status'>>();
-
-    if (!sessionAfterEndError && sessionAfterEnd && sessionAfterEnd.status !== 'completed') {
-        const clearActiveGameUpdate: Database['public']['Tables']['sessions']['Update'] = {
-            active_game_id: null,
-            status: 'running',
-        };
-        const { error: clearActiveError } = await supabase
-            .from('sessions')
-            .update(clearActiveGameUpdate)
-            .eq('id', sessionId);
-
-        if (clearActiveError) {
-            return failure('endGame', 'The game ended but the session did not update. Please reload.', clearActiveError);
-        }
-    }
-
-    revalidatePath(`/host/${sessionId}/${gameId}`); // Revalidate the specific game page
-    revalidatePath(`/host`); // Revalidate the host dashboard
-
-    if (potDidNotMove) {
-        // Not a failure: the game ended and the client must apply the new state.
-        // The flag is what lets the host screen offer the retry rather than
-        // leaving a stranded pot for somebody to notice next week.
-        return { success: true, data: { gameState: rows[0], snowballPotDidNotSettle: true } };
-    }
-
-    return { success: true, data: { gameState: rows[0] } };
+/** What a move to the next game reports. The current game has finished whenever this succeeds. */
+interface NextGameData {
+    redirectTo?: string
+    requiresCashJackpotAmount?: boolean
+    gameName?: string
+    /** The finished game's snowball pot did not move: offer the retry before navigating (X6). */
+    snowballPotDidNotSettle?: true
 }
 
 export async function moveToNextGameOnBreak(
     currentGameId: string,
     sessionId: string,
     cashJackpotAmountInput?: string
-): Promise<ActionResult<{ redirectTo?: string; requiresCashJackpotAmount?: boolean; gameName?: string }>> {
+): Promise<ActionResult<NextGameData>> {
+    const startedAtMs = Date.now();
     const supabase = await createClient();
     const controlResult = await requireController(supabase, currentGameId);
     if (!controlResult.authorized) return failure('moveToNextGameOnBreak', controlResult.error);
@@ -1003,24 +1204,18 @@ export async function moveToNextGameOnBreak(
 
     const nextGameId = sessionGames[currentGamePosition + 1]?.id;
 
-    const { data: currentGameState, error: currentStateError } = await supabase
-        .from('game_states')
-        .select('status')
-        .eq('game_id', currentGameId)
-        .single<Pick<GameStateRow, 'status'>>();
-
-    if (currentStateError || !currentGameState) {
-        return failure('moveToNextGameOnBreak', COULD_NOT_READ_GAME_ERROR, currentStateError ?? 'game state not found');
+    // Every time, not only when the game still looks unfinished: finish_game is
+    // idempotent, and the settlement after it is what retries a pot that did not
+    // move on an earlier attempt (X6).
+    const finished = await finishGameAndSettle(supabase, 'moveToNextGameOnBreak', currentGameId, startedAtMs);
+    if (!finished.success) {
+        return relayFailure('moveToNextGameOnBreak', finished, "Could not finish the current game.");
     }
+    const potFlag = finished.data?.snowballPotDidNotSettle ? { snowballPotDidNotSettle: true as const } : {};
 
-    if (currentGameState.status !== 'completed') {
-        const endResult = await endGame(currentGameId, sessionId);
-        if (!endResult.success) {
-            return relayFailure('moveToNextGameOnBreak', endResult, "Could not finish the current game.");
-        }
-    }
     if (!nextGameId) {
-        return { success: true, data: { redirectTo: '/host' } };
+        revalidatePath(`/host`);
+        return { success: true, data: { redirectTo: '/host', ...potFlag } };
     }
 
     const startResult = await startGame(sessionId, nextGameId, cashJackpotAmountInput);
@@ -1033,6 +1228,7 @@ export async function moveToNextGameOnBreak(
             data: {
                 requiresCashJackpotAmount: true,
                 gameName: startResult.data.gameName,
+                ...potFlag,
             },
         };
     }
@@ -1045,14 +1241,21 @@ export async function moveToNextGameOnBreak(
     revalidatePath(`/host/${sessionId}/${nextGameId}`);
     revalidatePath(`/host`);
 
-    return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}` } };
+    return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}`, ...potFlag } };
 }
 
+/**
+ * Finishes the current game and starts the next one. On the last game of the
+ * session this is "End Game & Finish Session" (spec 5.1): finish_game, then
+ * end_night if the session is still open (it is when a game was left unplayed,
+ * because finish_game only completes the session once every game has).
+ */
 export async function moveToNextGameAfterWin(
     currentGameId: string,
     sessionId: string,
     cashJackpotAmountInput?: string
-): Promise<ActionResult<{ redirectTo?: string; requiresCashJackpotAmount?: boolean; gameName?: string }>> {
+): Promise<ActionResult<NextGameData>> {
+    const startedAtMs = Date.now();
     const supabase = await createClient();
     const controlResult = await requireController(supabase, currentGameId);
     if (!controlResult.authorized) return failure('moveToNextGameAfterWin', controlResult.error);
@@ -1075,25 +1278,23 @@ export async function moveToNextGameAfterWin(
 
     const nextGameId = sessionGames[currentGamePosition + 1]?.id;
 
-    const { data: currentGameState, error: currentStateError } = await supabase
-        .from('game_states')
-        .select('status')
-        .eq('game_id', currentGameId)
-        .single<Pick<GameStateRow, 'status'>>();
-
-    if (currentStateError || !currentGameState) {
-        return failure('moveToNextGameAfterWin', COULD_NOT_READ_GAME_ERROR, currentStateError ?? 'game state not found');
+    // Every time, as in moveToNextGameOnBreak: idempotent, and it retries the
+    // settlement of a pot that did not move before.
+    const finished = await finishGameAndSettle(supabase, 'moveToNextGameAfterWin', currentGameId, startedAtMs);
+    if (!finished.success) {
+        return relayFailure('moveToNextGameAfterWin', finished, "Could not finish the current game.");
     }
-
-    if (currentGameState.status !== 'completed') {
-        const endResult = await endGame(currentGameId, sessionId);
-        if (!endResult.success) {
-            return relayFailure('moveToNextGameAfterWin', endResult, "Could not finish the current game.");
-        }
-    }
+    const potFlag = finished.data?.snowballPotDidNotSettle ? { snowballPotDidNotSettle: true as const } : {};
 
     if (!nextGameId) {
-        return { success: true, data: { redirectTo: '/host' } };
+        if (!finished.data?.sessionCompleted) {
+            const nightResult = await endNight(sessionId);
+            if (!nightResult.success) {
+                return relayFailure('moveToNextGameAfterWin', nightResult, 'The game finished but the night did not end. End the night from the host console.');
+            }
+        }
+        revalidatePath(`/host`);
+        return { success: true, data: { redirectTo: '/host', ...potFlag } };
     }
 
     const startResult = await startGame(sessionId, nextGameId, cashJackpotAmountInput);
@@ -1106,6 +1307,7 @@ export async function moveToNextGameAfterWin(
             data: {
                 requiresCashJackpotAmount: true,
                 gameName: startResult.data.gameName,
+                ...potFlag,
             },
         };
     }
@@ -1113,177 +1315,7 @@ export async function moveToNextGameAfterWin(
     revalidatePath(`/host/${sessionId}/${nextGameId}`);
     revalidatePath(`/host`);
 
-    return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}` } };
-}
-
-export async function validateClaim(gameId: string, claimedNumbers: number[]): Promise<ActionResult<{ valid: boolean; invalidNumbers?: number[] }>> {
-    // Input validation
-    if (!gameId) {
-        return failure('validateClaim', 'Invalid game ID.');
-    }
-    if (!Array.isArray(claimedNumbers)) {
-        return failure('validateClaim', 'Claimed numbers must be an array.');
-    }
-    if (claimedNumbers.some(n => !Number.isInteger(n) || n < 1 || n > 90)) {
-        return failure('validateClaim', 'Each claimed number must be an integer between 1 and 90.');
-    }
-
-    const supabase = await createClient()
-    const controlResult = await requireController(supabase, gameId)
-    if (!controlResult.authorized) return failure('validateClaim', controlResult.error)
-
-    const { data: gameState, error: fetchError } = await supabase
-        .from('game_states')
-        .select('called_numbers, current_stage_index, numbers_called_count')
-        .eq('game_id', gameId)
-        .single<Pick<GameStateRow, 'called_numbers' | 'current_stage_index' | 'numbers_called_count'>>();
-
-    if (fetchError || !gameState) {
-        return failure('validateClaim', COULD_NOT_READ_GAME_ERROR, fetchError ?? 'game state not found');
-    }
-
-    const { data: gameDetails, error: gameDetailsError } = await supabase
-        .from('games')
-        .select('stage_sequence')
-        .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'stage_sequence'>>();
-
-    if (gameDetailsError || !gameDetails) {
-        return failure('validateClaim', COULD_NOT_READ_GAME_ERROR, gameDetailsError ?? 'game not found');
-    }
-
-    const stageSequence = (gameDetails.stage_sequence as string[]) || [];
-    const fallbackStageName = stageSequence[stageSequence.length - 1];
-    const currentStageName = stageSequence[gameState.current_stage_index] || fallbackStageName;
-    const requiredSelectionCount = currentStageName
-        ? getRequiredSelectionCountForStage(currentStageName)
-        : null;
-
-    if (requiredSelectionCount === null) {
-        return failure('validateClaim', 'This stage is not valid for claim checking.');
-    }
-
-    if (claimedNumbers.length !== requiredSelectionCount) {
-        return failure('validateClaim', `Select exactly ${requiredSelectionCount} numbers for ${currentStageName}.`);
-    }
-
-    const calledNumbers = gameState.called_numbers as number[];
-    const calledNumbersSet = new Set(calledNumbers);
-    const invalidNumbers: number[] = [];
-
-    if (!gameState.numbers_called_count || calledNumbers.length === 0) {
-        return failure('validateClaim', "No numbers have been called yet.");
-    }
-
-    const lastCalledNumber = calledNumbers[gameState.numbers_called_count - 1];
-    if (!claimedNumbers.includes(lastCalledNumber)) {
-        return failure('validateClaim', `Claim must include the last called number (${lastCalledNumber}).`);
-    }
-
-    for (const num of claimedNumbers) {
-        if (!calledNumbersSet.has(num)) {
-            invalidNumbers.push(num);
-        }
-    }
-
-    if (invalidNumbers.length > 0) {
-        return { success: true, data: { valid: false, invalidNumbers } };
-    } else {
-        return { success: true, data: { valid: true } };
-    }
-}
-
-export async function announceWin(gameId: string, stage: WinStage | 'snowball'): Promise<ActionResult<{ gameState: GameStateRow }>> {
-    const supabase = await createClient();
-    const controlResult = await requireController(supabase, gameId)
-    if (!controlResult.authorized) return failure('announceWin', controlResult.error)
-
-    const { data: gameState, error: gameStateError } = await supabase
-        .from('game_states')
-        .select('current_stage_index, status')
-        .eq('game_id', gameId)
-        .single<Pick<GameStateRow, 'current_stage_index' | 'status'>>();
-    if (gameStateError || !gameState) {
-        return failure('announceWin', COULD_NOT_READ_GAME_ERROR, gameStateError ?? 'game state not found');
-    }
-    if (gameState.status !== 'in_progress') {
-        return conflictFailure('announceWin', "This game is not in progress.");
-    }
-
-    const { data: gameRow, error: gameRowError } = await supabase
-        .from('games')
-        .select('type, stage_sequence')
-        .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'type' | 'stage_sequence'>>();
-    if (gameRowError || !gameRow) {
-        return failure('announceWin', COULD_NOT_READ_GAME_ERROR, gameRowError ?? 'game not found');
-    }
-
-    const expectedStage = (gameRow.stage_sequence as string[] | null)?.[gameState.current_stage_index];
-    if (!expectedStage) {
-        return failure('announceWin', "This stage is not set up for this game.");
-    }
-
-    if (stage === 'snowball') {
-        if (gameRow.type !== 'snowball' || expectedStage !== 'Full House') {
-            return failure('announceWin', "A snowball announcement only works during Full House of a snowball game.");
-        }
-    } else if (stage !== expectedStage) {
-        return conflictFailure('announceWin', 'The live stage has moved on. Refreshing now.');
-    }
-
-    let displayWinText: string;
-    let displayWinType: string;
-
-    if (stage === 'snowball') {
-        displayWinType = 'snowball';
-        displayWinText = 'SNOWBALL JACKPOT WIN!';
-    } else {
-        switch (stage) {
-            case 'Line':
-                displayWinType = 'line';
-                displayWinText = 'LINE WINNER!';
-                break;
-            case 'Two Lines':
-                displayWinType = 'two_lines';
-                displayWinText = 'TWO LINES WINNER!';
-                break;
-            case 'Full House':
-                displayWinType = 'full_house';
-                displayWinText = 'FULL HOUSE WINNER!';
-                break;
-            default:
-                displayWinType = 'win';
-                displayWinText = 'WINNER!';
-        }
-    }
-
-    const winUpdate: Database['public']['Tables']['game_states']['Update'] = {
-        display_win_type: displayWinType,
-        display_win_text: displayWinText,
-        display_winner_name: null,
-        // Keep paused_for_validation true or ensure it is treated as such
-        paused_for_validation: true
-    };
-    // Bind the stage that was checked above as well as the status, so an
-    // announcement cannot land on a stage that has since advanced.
-    const { data: rows, error } = await supabase
-        .from('game_states')
-        .update(winUpdate)
-        .eq('game_id', gameId)
-        .eq('controlling_host_id', controlResult.user!.id)
-        .eq('status', 'in_progress')
-        .eq('current_stage_index', gameState.current_stage_index)
-        .select('*');
-
-    if (error) {
-        return failure('announceWin', GENERIC_ACTION_ERROR, error);
-    }
-    if (!rows || rows.length === 0) {
-        return conflictFailure('announceWin', STATE_MOVED_ERROR);
-    }
-
-    return { success: true, data: { gameState: rows[0] } };
+    return { success: true, data: { redirectTo: `/host/${sessionId}/${nextGameId}`, ...potFlag } };
 }
 
 /**
@@ -1315,7 +1347,8 @@ export async function advanceToNextStage(
     gameId: string,
     expectedStageIndex: number,
     putOnBreak: boolean = false
-): Promise<ActionResult<{ gameState: GameStateRow }>> {
+): Promise<ActionResult<{ gameState: GameStateRow; sessionCompleted?: boolean; snowballPotDidNotSettle?: true }>> {
+    const startedAtMs = Date.now();
     if (!Number.isInteger(expectedStageIndex) || expectedStageIndex < 0) {
         return failure('advanceToNextStage', GENERIC_ACTION_ERROR, `invalid expectedStageIndex: ${expectedStageIndex}`);
     }
@@ -1336,9 +1369,9 @@ export async function advanceToNextStage(
 
     const { data: gameDetails, error: gameDetailsError } = await supabase
         .from('games')
-        .select('session_id, type, snowball_pot_id, stage_sequence')
+        .select('stage_sequence')
         .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'type' | 'snowball_pot_id' | 'stage_sequence'>>();
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'stage_sequence'>>();
 
     if (!gameDetails) {
         return failure('advanceToNextStage', COULD_NOT_READ_GAME_ERROR, gameDetailsError ?? 'game not found');
@@ -1349,20 +1382,34 @@ export async function advanceToNextStage(
         return failure('advanceToNextStage', 'This game has no stages set up.');
     }
 
+    // The last stage: moving on finishes the game, through finish_game (X9).
+    // It used to write status 'completed' here and then settle and complete the
+    // session in separate calls, so a failure between them left the game half
+    // finished. finish_game is idempotent, so a retry after a lost response
+    // finds the game completed and simply reports it.
+    if (expectedStageIndex + 1 >= totalStages) {
+        if (currentGameState.current_stage_index !== expectedStageIndex) {
+            return conflictFailure(
+                'advanceToNextStage',
+                STATE_MOVED_ERROR,
+                `expected stage ${expectedStageIndex}, found ${currentGameState.current_stage_index}`
+            );
+        }
+        return finishGameAndSettle(supabase, 'advanceToNextStage', gameId, startedAtMs);
+    }
+
     // Where the requested advance was always going to land.
-    const intendedStageIndex = Math.min(expectedStageIndex + 1, totalStages - 1);
-    const intendedStatus: GameStatus = expectedStageIndex + 1 >= totalStages ? 'completed' : 'in_progress';
+    const intendedStageIndex = expectedStageIndex + 1;
 
     if (currentGameState.current_stage_index !== expectedStageIndex) {
         // Already where this call was trying to get to: this is a retry of a
         // request that committed and lost its answer. Report the truth rather
         // than advancing a second time.
-        if (currentGameState.current_stage_index === intendedStageIndex
-            && (intendedStatus !== 'completed' || currentGameState.status === 'completed')) {
+        if (currentGameState.current_stage_index === intendedStageIndex) {
             // A retry of a request that committed and lost its answer. Nothing
             // is advanced. The break is still applied if it was asked for and
             // did not land, because toggling a break on is idempotent.
-            if (putOnBreak && intendedStatus !== 'completed') {
+            if (putOnBreak) {
                 await supabase
                     .from('game_states')
                     .update({ on_break: true } satisfies Database['public']['Tables']['game_states']['Update'])
@@ -1400,16 +1447,14 @@ export async function advanceToNextStage(
 
     const stageUpdate: Database['public']['Tables']['game_states']['Update'] = {
         current_stage_index: intendedStageIndex,
-        status: intendedStatus,
         paused_for_validation: false,
         display_win_type: null,
         display_win_text: null,
         display_winner_name: null,
         // A break requested alongside the advance is applied in the same write,
         // so there is no window in which the stage has moved and the break has
-        // not. Completing the game clears the break instead: a finished game is
-        // never on a break.
-        ...(intendedStatus === 'completed' ? { on_break: false } : (putOnBreak ? { on_break: true } : {})),
+        // not.
+        ...(putOnBreak ? { on_break: true } : {}),
     };
     // Bound to the index the CLIENT named, not to a freshly read one. That is
     // what makes a retry inert rather than a second advance.
@@ -1419,7 +1464,7 @@ export async function advanceToNextStage(
         .eq('game_id', gameId)
         .eq('controlling_host_id', controlResult.user!.id)
         .eq('current_stage_index', expectedStageIndex)
-        .neq('status', 'completed')
+        .eq('status', 'in_progress')
         .select('*');
 
     if (updateError) {
@@ -1427,17 +1472,6 @@ export async function advanceToNextStage(
     }
     if (!rows || rows.length === 0) {
         return conflictFailure('advanceToNextStage', STATE_MOVED_ERROR);
-    }
-
-    // If the game is now completed, check Snowball logic (Rollover vs Reset).
-    // This only fires when the pot itself did not move. A missing audit row is
-    // logged inside the helper and never reported to the host as a pot failure.
-    if (intendedStatus === 'completed') {
-        const potResult = await handleSnowballPotUpdate(supabase, gameId);
-        if (!potResult.success) {
-            return failure('advanceToNextStage', SNOWBALL_POT_NOT_MOVED_ERROR, potResult.error);
-        }
-        await maybeCompleteSession(supabase, gameDetails.session_id);
     }
 
     return { success: true, data: { gameState: rows[0] } };
@@ -1452,13 +1486,17 @@ export async function advanceToNextStage(
  * announcement wording are all derived in the function from locked rows, never
  * from the client.
  *
- * `clientRequestId` is the idempotency key for one claim attempt, minted by the
- * host client when the Record Winner modal opens. It is what makes a retry safe:
- * a call that committed but lost its response can be repeated with the same key
- * and the function inserts nothing and returns the state as it stands. Without
- * it, the second attempt records a second winner at the same stage and the same
- * ball, and the host is shown the same prize owed twice. A tie is a separate
- * claim with a separate key, so both of those still save.
+ * `clientRequestId` is the claim ATTEMPT id: the one the host's phone minted
+ * for begin_claim_check and that check_claim gave a 'valid' verdict (spec 5.2).
+ * It is the winner's idempotency key, so a call that committed but lost its
+ * response can be repeated with the same attempt, after a reload, the next
+ * stage or a takeover, and the function inserts nothing and returns the state
+ * as it stands. A tie is a separate attempt (Check another claimant), so both
+ * winners still save. From 20261001000400_claim_enforcement.sql a new winner
+ * without that checked, valid attempt is refused (claim_not_checked,
+ * attempt_mismatch, stale_attempt, claim_not_valid). The one exemption is
+ * Manual Snowball Win (`forceSnowballJackpot`), which keeps its own key and is
+ * only accepted for a snowball Full House inside the open jackpot window.
  *
  * `snowballEligible` carries the host's explicit Eligible / Not eligible choice.
  * It can only award the jackpot while the call window is genuinely open.
@@ -1628,7 +1666,8 @@ export async function voidWinnerFromHost(
 export async function skipStage(
     gameId: string,
     expectedStageIndex: number
-): Promise<ActionResult<{ gameState: GameStateRow }>> {
+): Promise<ActionResult<{ gameState: GameStateRow; sessionCompleted?: boolean; snowballPotDidNotSettle?: true }>> {
+    const startedAtMs = Date.now();
     // Same retry contract as advanceToNextStage, for the same reason: a lost
     // response used to turn a second tap into a second skipped stage, and
     // skipping a stage means a prize goes unawarded with nothing recording it.
@@ -1652,9 +1691,9 @@ export async function skipStage(
 
     const { data: gameDetails, error: gameDetailsError } = await supabase
         .from('games')
-        .select('session_id, stage_sequence')
+        .select('stage_sequence')
         .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'stage_sequence'>>();
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'stage_sequence'>>();
 
     if (gameDetailsError || !gameDetails) {
         return failure('skipStage', COULD_NOT_READ_GAME_ERROR, gameDetailsError ?? 'game not found');
@@ -1665,14 +1704,24 @@ export async function skipStage(
         return failure('skipStage', 'This game has no stages set up.');
     }
 
-    // Cap at the last stage: totalStages is a count, so the highest index is
-    // count - 1. Skipping the last stage ends the game.
-    const intendedStageIndex = Math.min(expectedStageIndex + 1, totalStages - 1);
-    const intendedStatus: GameStatus = expectedStageIndex + 1 >= totalStages ? 'completed' : 'in_progress';
+    // Skipping the last stage ends the game, through finish_game, exactly as a
+    // final-stage advance does (X9). finish_game is idempotent, so a retry
+    // after a lost response reports the finished game rather than failing.
+    if (expectedStageIndex + 1 >= totalStages) {
+        if (currentGameState.current_stage_index !== expectedStageIndex) {
+            return conflictFailure(
+                'skipStage',
+                STATE_MOVED_ERROR,
+                `expected stage ${expectedStageIndex}, found ${currentGameState.current_stage_index}`
+            );
+        }
+        return finishGameAndSettle(supabase, 'skipStage', gameId, startedAtMs);
+    }
+
+    const intendedStageIndex = expectedStageIndex + 1;
 
     if (currentGameState.current_stage_index !== expectedStageIndex) {
-        if (currentGameState.current_stage_index === intendedStageIndex
-            && (intendedStatus !== 'completed' || currentGameState.status === 'completed')) {
+        if (currentGameState.current_stage_index === intendedStageIndex) {
             const { data: settledState, error: settledError } = await supabase
                 .from('game_states')
                 .select('*')
@@ -1702,17 +1751,15 @@ export async function skipStage(
         .from('game_states')
         .update({
             current_stage_index: intendedStageIndex,
-            status: intendedStatus,
             paused_for_validation: false, // Clear validation pause
             display_win_type: null, // Clear any win display
             display_win_text: null,
             display_winner_name: null,
-            ...(intendedStatus === 'completed' ? { on_break: false } : {}),
         } satisfies Database['public']['Tables']['game_states']['Update'])
         .eq('game_id', gameId)
         .eq('controlling_host_id', controlResult.user!.id)
         .eq('current_stage_index', expectedStageIndex)
-        .neq('status', 'completed')
+        .eq('status', 'in_progress')
         .select('*');
 
     if (error) {
@@ -1720,15 +1767,6 @@ export async function skipStage(
     }
     if (!rows || rows.length === 0) {
         return conflictFailure('skipStage', STATE_MOVED_ERROR);
-    }
-
-    if (intendedStatus === 'completed') {
-        // As in advanceToNextStage: only a genuine pot failure reaches the host.
-        const potResult = await handleSnowballPotUpdate(supabase, gameId);
-        if (!potResult.success) {
-            return failure('skipStage', SNOWBALL_POT_NOT_MOVED_ERROR, potResult.error);
-        }
-        await maybeCompleteSession(supabase, gameDetails.session_id);
     }
 
     return { success: true, data: { gameState: rows[0] } };

@@ -114,9 +114,10 @@ export default async function GameControlPage({ params }: PageProps) {
     return <LoadErrorScreen retryHref={retryHref} />;
   }
 
-  // Fetch initial game state. Read here with the same cookie client rather than
-  // through getCurrentGameState, because only the raw error code can tell "this
-  // game has not been started" (no row) from a failed read.
+  // Fetch initial game state, with the same cookie client, keeping the raw
+  // error code: only that can tell "this game has not been started" (no row)
+  // from a failed read. The claim fields come with it, which is how the host
+  // screen reopens a claim in progress after a reload or a takeover.
   const { data: initialGameState, error: gameStateError } = await supabase
     .from('game_states')
     .select('*')

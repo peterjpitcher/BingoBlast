@@ -306,13 +306,21 @@ export async function updateSessionStatus(sessionId: string, status: 'ready' | '
   const authResult = await authorizeAdmin(supabase)
   if (!authResult.authorized) return { success: false, error: authResult.error }
 
-  const { error } = await supabase
+  // X11: .select() so a write that matched nothing (a stale id, or RLS) is an
+  // error rather than a success that never landed. The sessions_lifecycle_stamp
+  // trigger stamps completed_at on the move to completed and clears it on the
+  // move away, so "Night ended by mistake" is this same call back to running.
+  const { data: rows, error } = await supabase
     .from('sessions')
     .update({ status })
     .eq('id', sessionId)
+    .select('id')
 
   if (error) {
     return { success: false, error: error.message }
+  }
+  if (!rows || rows.length === 0) {
+    return { success: false, error: 'The session status did not change. Reload the page and try again.' }
   }
 
   revalidatePath(`/admin/sessions/${sessionId}`)

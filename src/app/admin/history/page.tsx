@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { Database } from '@/types/database';
 import { formatShortDateTimeInLondon } from '@/lib/dates';
-import { formatPence, totalPaidOutPence } from '@/lib/money';
+import { describeWinnerTotal, formatPence, JACKPOT_NOT_RECORDED, totalPaidOutPence, winnerTotalPence } from '@/lib/money';
 
 type WinnerWithRelations = Database['public']['Tables']['winners']['Row'] & {
   session: Pick<Database['public']['Tables']['sessions']['Row'], 'name' | 'start_date'> | null;
@@ -50,6 +50,8 @@ export default async function HistoryPage() {
   // prize as £20. Ten ties already exist in the data, two of them cash
   // jackpots, so this is the difference between a real figure and one that
   // overstates what the pub paid. Voided wins carry no share and drop out.
+  // Each winner's share is the ordinary share plus the snowball jackpot share
+  // (X22): the jackpot used to be missing from this total altogether.
   const payout = totalPaidOutPence(winners.filter((w) => w.is_void !== true));
 
   if (error) {
@@ -92,10 +94,18 @@ export default async function HistoryPage() {
                 <span className="block text-xs uppercase tracking-wider text-slate-500">Prizes that are not cash</span>
                 <span className="text-lg text-slate-300 font-mono tabular-nums">{payout.uncountedRows}</span>
               </div>
+              {payout.jackpotNotRecordedRows > 0 && (
+                <div>
+                  <span className="block text-xs uppercase tracking-wider text-slate-500">Jackpots missing from the total</span>
+                  <span className="text-lg text-slate-300 font-mono tabular-nums">{payout.jackpotNotRecordedRows}</span>
+                </div>
+              )}
               <p className="text-xs text-slate-500 max-w-md">
                 Voided wins are excluded. A shared prize counts once: each winner&rsquo;s share is
-                added, not the whole prize per winner. Shares on wins recorded before 25 August 2026
-                are the current sharing rule applied to older records.
+                added, not the whole prize per winner, and a snowball jackpot share is added to the
+                stage prize. Shares on wins recorded before 25 August 2026 are the current sharing
+                rule applied to older records. Where a jackpot win says &ldquo;{JACKPOT_NOT_RECORDED}&rdquo;,
+                the jackpot is not in the total.
               </p>
             </CardContent>
           </Card>
@@ -131,6 +141,14 @@ export default async function HistoryPage() {
                                   // reconciling a night against the till was
                                   // reading a number that was never handed over.
                                   const isVoid = winner.is_void === true;
+                                  const total = winnerTotalPence(winner);
+                                  const totalLine = describeWinnerTotal(total);
+                                  // A share differs from its pool on a tie. Only
+                                  // the ordinary share can be compared here: a
+                                  // jackpot winner's total adds the jackpot.
+                                  const showShareOf = winner.prize_amount_pence !== null
+                                    && winner.prize_amount_pence !== winner.prize_share_pence
+                                    && winner.prize_share_pence !== null;
                                   return (
                                   <tr key={winner.id} className={cn("transition-colors", isVoid ? "bg-red-950/20 text-slate-500" : "hover:bg-slate-800/30")}>
                                       <td className="px-4 py-3 text-slate-400">{formatShortDateTimeInLondon(winner.created_at)}</td>
@@ -150,13 +168,12 @@ export default async function HistoryPage() {
                                       <td className="px-4 py-3 text-right font-mono whitespace-nowrap">
                                           {isVoid ? (
                                               <span className="text-slate-600">-</span>
-                                          ) : winner.prize_share_pence !== null && winner.prize_share_pence !== undefined ? (
-                                              <span className="text-white">
-                                                  {formatPence(winner.prize_share_pence)}
-                                                  {winner.prize_amount_pence !== null
-                                                    && winner.prize_amount_pence !== winner.prize_share_pence && (
+                                          ) : totalLine !== null ? (
+                                              <span className={total.totalPence === null ? "text-slate-500 text-xs" : "text-white"}>
+                                                  {totalLine}
+                                                  {showShareOf && (
                                                       <span className="block text-xs text-slate-500">
-                                                          share of {formatPence(winner.prize_amount_pence)}
+                                                          prize share of {formatPence(winner.prize_amount_pence)}
                                                       </span>
                                                   )}
                                               </span>
