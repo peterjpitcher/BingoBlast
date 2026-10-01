@@ -43,6 +43,7 @@ const BINGO_PATH = `/events?category_id=${BINGO_CATEGORY.id}&status=scheduled&fr
 
 const QUIZ_LINKS = {
   pre_event_screen: 'https://l.the-anchor.pub/ps7q1z',
+  in_game_screen: 'https://l.the-anchor.pub/sc7q1z',
   post_event_screen: 'https://l.the-anchor.pub/ns7q1z',
 };
 
@@ -104,14 +105,19 @@ test('a refresh builds the general list, the bingo nights and each QR target', a
       square: false,
     },
     qrPre: QUIZ_LINKS.pre_event_screen,
+    qrInGame: QUIZ_LINKS.in_game_screen,
     qrPost: QUIZ_LINKS.post_event_screen,
   });
 
   // No short links on the others: the id link, never the API's url or offers.url.
   for (const event of [...projection.events.slice(1), ...projection.bingoNights]) {
     assert.equal(event.qrPre, eventIdLink(event.id, 'pre_event_screen'));
+    assert.equal(
+      event.qrInGame,
+      `https://www.the-anchor.pub/events/${event.id}?utm_source=in_game_screen&utm_medium=screen`,
+    );
     assert.equal(event.qrPost, eventIdLink(event.id, 'post_event_screen'));
-    assert.doesNotMatch(event.qrPre + event.qrPost, /orangejelly/);
+    assert.doesNotMatch(event.qrPre + event.qrInGame + event.qrPost, /orangejelly/);
   }
 
   assert.deepEqual(seen, []);
@@ -137,10 +143,12 @@ test('a failed detail falls back to the id link for that event only', async () =
 
   const quizFailed = await buildEventsProjection({ fetchJson: api.fetchJson, todayIso: TODAY, now: () => NOW, report });
   assert.equal(quizFailed.events[0].qrPre, eventIdLink(id(QUIZ_OCT_7), 'pre_event_screen'));
+  assert.equal(quizFailed.events[0].qrInGame, eventIdLink(id(QUIZ_OCT_7), 'in_game_screen'));
   assert.equal(quizFailed.events.length, 3, 'the event still shows');
 
   const musicFailed = await buildEventsProjection({ fetchJson: second.fetchJson, todayIso: TODAY, now: () => NOW, report });
   assert.equal(musicFailed.events[0].qrPre, QUIZ_LINKS.pre_event_screen, 'the other events keep their short links');
+  assert.equal(musicFailed.events[0].qrInGame, QUIZ_LINKS.in_game_screen);
   assert.equal(musicFailed.events[1].qrPost, eventIdLink(id(MUSIC_BINGO_OCT_16), 'post_event_screen'));
 
   assert.deepEqual(seen.map((r) => r.scope), ['events-feed:details', 'events-feed:details']);
@@ -358,6 +366,7 @@ function screenEvent(eventId: string, startsAt: string): ScreenEvent {
     category: null,
     image: null,
     qrPre: eventIdLink(eventId, 'pre_event_screen'),
+    qrInGame: eventIdLink(eventId, 'in_game_screen'),
     qrPost: eventIdLink(eventId, 'post_event_screen'),
   };
 }

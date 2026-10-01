@@ -469,3 +469,23 @@ The local stack is in `scratchpad/localstack` and can be stopped with `supabase 
 - **Events key:** the first value stored in Vercel as `ANCHOR_API_KEY` was not an API key (40 characters with spaces, no `anch_` prefix), so the management API answered 401 and the TV showed its fallback slides. The owner stored the real key, and the redeploy that came with PR #19 (deployment `dpl_7mpm39g5HQnYdmRkTsHMKEB6dHpb`, commit `04481f0`) picked it up. `/api/screen/events` then answered `ok` with 6 events and 2 bingo nights, every one with an image and a management short link. The live idle TV rotated the event slides with no text under 32px and a 432px QR, and `/play` listed the events with the next bingo night first. The build now refuses a value that is set but not shaped like a management key.
 - The migration files were renamed to the applied versions afterwards (PR #19), contents unchanged.
 
+
+## Events during breaks (1 October 2026)
+
+Asked for after the release: "We should also show the events during breaks".
+
+- [x] `ScreenEvent.qrInGame`: the management app's `in_game_screen` short link, with the same id-link fallback as the other two. A cached response from before the field existed falls back to the pre-event link; the cache key moved to `v2`.
+- [x] `eventLinkForPhase(event, phase, inGameSubState)` is the one place that picks the link: pre-event before the night, in-game on a break, post-event after it and on the idle screen.
+- [x] TV break loop: break screen (20 s), next bingo night (12 s), events two at a time (12 s each) with the break screen back after every two, rules (20 s) once a loop. With no usable events it is the break screen and the rules, exactly as before.
+- [x] Event slides on a break carry the "Break time" label, and the corner follow-along QR goes while a slide with its own QR is up, so there is never more than one code to scan.
+- [x] Phone: the events list sits under the "On Break" card with the in-game links.
+- [x] Between games is unchanged (next game, then the rules). Showing events there is one argument in `buildPlaylist`; waiting on the owner.
+
+**Found in the browser, not by the tests:** the event slides are white text drawn for the green screen before and after the night. On a break the screen is the game's book colour, so on a white book the title, eyebrow and "Scan for details" were white on white. They now sit on the rules slide's dark panel whenever the night is paused. `scripts/check-render.js` gained a `lowContrast` result (ratio under 3 against the background colours behind the text) so the render check catches this next time. The phone header was an 80 percent tint, and the list's text showed through it while scrolling; it is solid now.
+
+**Verified locally** (local Supabase, a stand-in for the management API fed from the public website's events, the real host flow: start game 1, call a ball, Take Break):
+- 1920x1080 and 1280x720, one whole loop each (208 s): the order above, one QR on screen at a time (432 px and 288 px on event slides), no text under 32 px and 22 px, no overlaps, no low contrast, nothing clipped (509 px of 545 px used by a two-line title at 720p). The QR on the next bingo slide encoded the `in_game_screen` short link.
+- 375x812 phone: nine events under the break card, each "View event" on the in-game link (short link where one exists, the id link otherwise), 44 px targets, no sideways scroll.
+- Resume Session mid-slide: the TV went straight back to the ball with the corner QR.
+
+**Assumptions:** break screen first and again after every two events, so a late look at the TV still says the game is paused within about 24 seconds; the same 12 s per event as before the night.

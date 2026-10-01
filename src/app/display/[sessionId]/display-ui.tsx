@@ -26,7 +26,7 @@ import {
 import { getInGameSubState, getNightPhase, pickNextGame } from '@/lib/night-phase';
 import { getClaimPanelState } from '@/lib/claim-panel';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
-import { buildPlaylist, type EventsProjection, type Slide } from '@/lib/playlist';
+import { buildPlaylist, slideCarriesQr, type EventsProjection, type Slide, type SlideKind } from '@/lib/playlist';
 import { buildFollowUrl } from '@/lib/follow-link';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
@@ -774,7 +774,9 @@ export default function DisplayUI({
   const followUrl = qrOrigin ? buildFollowUrl({ origin: qrOrigin, sessionId: session.id, isUniqueSession }) : '';
 
   // Upcoming events (spec 5.5): the server's first read, then every 10
-  // minutes and on each change of phase. Never shown as an error.
+  // minutes and on each change of phase. Never shown as an error. It runs in
+  // every phase, a game in progress included, so the list is already here and
+  // no more than 10 minutes old when a break starts.
   const events = useEventsProjection(initialEvents, { refreshKey: nightPhase, logScope: LOG_SCOPE });
 
   // The TV's clock, corrected like the reveal delay, to the minute: enough to
@@ -787,6 +789,9 @@ export default function DisplayUI({
     () => buildPlaylist(nightPhase, events, new Date(slideNowMs), sessionDate, { inGameSubState, reviewEnabled }),
     [nightPhase, events, slideNowMs, sessionDate, inGameSubState, reviewEnabled]
   );
+  // Which kind of slide the loop is showing (null with no loop), reported by
+  // SlideLoop before the browser paints. Decides the corner QR below.
+  const [activeSlideKind, setActiveSlideKind] = useState<SlideKind | null>(null);
 
   // Rule 8 uses the live pot during a snowball game, else the night's first snowball pot.
   const houseRules = getHouseRules(currentSnowballPot ?? overview?.rulesPot ?? null);
@@ -838,7 +843,12 @@ export default function DisplayUI({
   // The corner QR has a column of its own, so it can never cover the ball or a
   // slide at 1280x720. It stays in place under the claim and win overlays, so
   // the ball does not jump sideways when a claim starts. None at night_over.
-  const showCornerQr = !!followUrl && (hasRenderableGame || nightPhase === 'between_games');
+  // Never two QR codes at once: while a slide with a code of its own is up (an
+  // event or the next bingo night, on a break), the corner QR and its column
+  // go, which also gives the event slide the full width it is laid out for.
+  const slideHasOwnQr = playlist.length > 0 && activeSlideKind !== null && slideCarriesQr(activeSlideKind);
+  const showCornerQr =
+    !!followUrl && (hasRenderableGame || nightPhase === 'between_games') && !slideHasOwnQr;
 
   const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
@@ -864,6 +874,10 @@ export default function DisplayUI({
   const serviceColumnClass = "mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-4 2xl:gap-6 text-center";
   const serviceCardPadClass = "p-4 2xl:p-5";
   const serviceHeadlinePanelClass = "rounded-3xl border border-[#1f7c58] bg-[#003f27]/85 backdrop-blur-md";
+  // The backing panel for a slide that is drawn straight on the screen colour
+  // elsewhere (events, the next bingo night): the rules slide's panel.
+  const pauseSlidePanelClass =
+    "mx-auto h-full w-full max-w-[1800px] overflow-hidden rounded-3xl border border-[#1f7c58] bg-[#003f27]/90 px-[2.5vh] py-[2vh]";
   const serviceEyebrowClass = tvText('xs', 'uppercase tracking-[0.2em] text-white/85 font-semibold');
   const serviceHeadlineClass = tvText('xl', 'font-black uppercase tracking-[0.07em] text-white mt-1');
   const serviceSubheadClass = tvText('sm', 'text-white/90 mt-2');
@@ -937,7 +951,9 @@ export default function DisplayUI({
     </div>
   );
 
-  const rulesStatusLabel =
+  // Keeps the part of the night in view on the slides that are about something
+  // else: the rules, and the events and next bingo night shown on a break.
+  const pauseStatusLabel =
     nightPhase === 'between_games' ? 'Next game coming up' : inGameSubState === 'break' ? 'Break time' : null;
 
   const renderSlideContent = (slide: Slide) => {
@@ -945,14 +961,21 @@ export default function DisplayUI({
       case 'follow_along':
         return followUrl ? <FollowAlongSlide url={followUrl} /> : null;
       case 'rules':
-        return <RulesSlide rules={houseRules} statusLabel={rulesStatusLabel} />;
+        return <RulesSlide rules={houseRules} statusLabel={pauseStatusLabel} />;
       case 'break':
         return renderBreakSlide();
       case 'next_game':
         return renderNextGameSlide();
-      default:
+      default: {
         // Events, next bingo, thanks, review: shared with the idle /display.
-        return <PromoSlide slide={slide} nowMs={slideNowMs} />;
+        // On a break the event slides carry the "Break time" label too.
+        const promo = <PromoSlide slide={slide} nowMs={slideNowMs} statusLabel={pauseStatusLabel} />;
+        // Those slides are white text, drawn for the green screen before and
+        // after the night. While the night is paused the screen is the game's
+        // book colour, which can be white or a pale yellow, so there they sit
+        // on the same backing panel as the rules.
+        return pauseStatusLabel ? <div className={pauseSlidePanelClass}>{promo}</div> : promo;
+      }
     }
   };
 
@@ -1049,7 +1072,12 @@ export default function DisplayUI({
             data-check-overlap={playlist.length > 0 ? 'slides' : undefined}
           >
             {playlist.length > 0 && (
-              <SlideLoop className="h-full w-full" slides={playlist} renderSlide={renderSlide} />
+              <SlideLoop
+                className="h-full w-full"
+                slides={playlist}
+                renderSlide={renderSlide}
+                onSlideChange={setActiveSlideKind}
+              />
             )}
 
             {showActiveGame && (

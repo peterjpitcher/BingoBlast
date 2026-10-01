@@ -1,7 +1,7 @@
 // src/components/display/rules-slide.tsx
 //
-// The house rules as a full TV slide (spec 5.3): the before_start loop, and
-// alternating with the break and between-games screens. All eight rules, how
+// The house rules as a full TV slide (spec 5.3): the before_start loop, once
+// a loop on a break, and alternating with the between-games screen. All eight rules, how
 // to win, and the call-and-response prompts when the screen is tall enough.
 //
 // Sized against the TV's height: at 1280x720 the main area is 576px once the
@@ -9,7 +9,7 @@
 // rules and how to win always fit.
 import React from 'react';
 import { CALL_RESPONSES, HOW_TO_WIN } from '@/lib/house-rules';
-import { tvText } from './tv-text';
+import { TV_STATUS_LABEL_CLASS, tvText } from './tv-text';
 
 interface RulesSlideProps {
   /** From getHouseRules(pot): seven rules, or eight with a known snowball pot. */
@@ -27,7 +27,7 @@ export function RulesSlide({ rules, statusLabel }: RulesSlideProps) {
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-[#1f7c58] pb-[1vh]">
         <h2 className={tvText('base', 'font-black uppercase tracking-[0.06em]')}>House rules</h2>
         {statusLabel && (
-          <p className={tvText('xs', 'font-bold uppercase tracking-[0.12em] text-[#f3d59d]')}>{statusLabel}</p>
+          <p className={TV_STATUS_LABEL_CLASS}>{statusLabel}</p>
         )}
       </div>
 

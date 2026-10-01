@@ -827,8 +827,10 @@ export default function PlayerUI({
     >
       <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Header. The Rules button is here in every part of the night, during
-          play included (spec 5.3). */}
-      <div className="bg-[#003f27]/80 p-4 border-b border-[#1f7c58] flex items-center justify-between gap-3 sticky top-0 z-20 shadow-md">
+          play included (spec 5.3). Solid, not see-through: it stays put while
+          the events list scrolls under it, and the list's text showed through
+          an 80 percent tint. */}
+      <div className="bg-[#003f27] p-4 border-b border-[#1f7c58] flex items-center justify-between gap-3 sticky top-0 z-20 shadow-md">
         <div className="min-w-0">
           <h1 className="font-bold text-lg leading-tight text-white">{currentSession.name}</h1>
           {hasRenderableGame && currentActiveGame && (
@@ -934,15 +936,26 @@ export default function PlayerUI({
         )}
 
         {isOnBreak && (
-          // The solid card background, not a 20 percent tint over the game
-          // colour, which left white text at about 1.4:1 on a pale book colour.
-          <Card className="bg-[#003f27] border-yellow-600">
-            <CardContent className="p-6 text-center">
-              <div className="text-4xl mb-2 animate-bounce">☕️</div>
-              <h2 className="text-2xl font-bold text-white">On Break</h2>
-              <p className="text-white">We will resume shortly</p>
-            </CardContent>
-          </Card>
+          <>
+            {/* The solid card background, not a 20 percent tint over the game
+                colour, which left white text at about 1.4:1 on a pale book colour. */}
+            <Card className="bg-[#003f27] border-yellow-600">
+              <CardContent className="p-6 text-center">
+                <div className="text-4xl mb-2 animate-bounce">☕️</div>
+                <h2 className="text-2xl font-bold text-white">On Break</h2>
+                <p className="text-white">We will resume shortly</p>
+              </CardContent>
+            </Card>
+            {/* What else is on, under the break card and next bingo night
+                first: the same list as the TV's break loop, with the in-game
+                links. Nothing shows when there are no events. */}
+            <PhoneEvents
+              projection={initialEvents}
+              sessionDate={currentSession.start_date ?? null}
+              phase="in_game"
+              inGameSubState="break"
+            />
+          </>
         )}
 
         {/* The live claim (spec 5.2), replacing the old "Checking Claim" card. */}

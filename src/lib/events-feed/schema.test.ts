@@ -153,24 +153,47 @@ test('screen short links are read from qr_short_links, then marketing_short_link
   const id = QUIZ_OCT_7.id as string;
   assert.deepEqual(
     parseScreenShortLinks(
-      detailResponse(id, { pre_event_screen: 'https://l.the-anchor.pub/ps1a2b', post_event_screen: 'https://l.the-anchor.pub/ns3c4d', beer_mat: 'https://l.the-anchor.pub/bm' }),
+      detailResponse(id, {
+        pre_event_screen: 'https://l.the-anchor.pub/ps1a2b',
+        in_game_screen: 'https://l.the-anchor.pub/sc5e6f',
+        post_event_screen: 'https://l.the-anchor.pub/ns3c4d',
+        beer_mat: 'https://l.the-anchor.pub/bm',
+      }),
     ),
-    { pre_event_screen: 'https://l.the-anchor.pub/ps1a2b', post_event_screen: 'https://l.the-anchor.pub/ns3c4d' },
+    {
+      pre_event_screen: 'https://l.the-anchor.pub/ps1a2b',
+      in_game_screen: 'https://l.the-anchor.pub/sc5e6f',
+      post_event_screen: 'https://l.the-anchor.pub/ns3c4d',
+    },
   );
 
   const marketingOnly = {
     success: true,
-    data: { id, marketing_short_links: { post_event_screen: 'https://l.the-anchor.pub/ns3c4d' } },
+    data: {
+      id,
+      marketing_short_links: {
+        in_game_screen: 'https://l.the-anchor.pub/sc5e6f',
+        post_event_screen: 'https://l.the-anchor.pub/ns3c4d',
+      },
+    },
   };
   assert.deepEqual(parseScreenShortLinks(marketingOnly), {
     pre_event_screen: null,
+    in_game_screen: 'https://l.the-anchor.pub/sc5e6f',
     post_event_screen: 'https://l.the-anchor.pub/ns3c4d',
   });
 
-  assert.deepEqual(parseScreenShortLinks(detailResponse(id)), { pre_event_screen: null, post_event_screen: null });
+  const none = { pre_event_screen: null, in_game_screen: null, post_event_screen: null };
+  assert.deepEqual(parseScreenShortLinks(detailResponse(id)), none);
 
-  const untrusted = { success: true, data: { qr_short_links: { pre_event_screen: 'https://evil.example/x' }, marketing_short_links: 'oops' } };
-  assert.deepEqual(parseScreenShortLinks(untrusted), { pre_event_screen: null, post_event_screen: null });
+  const untrusted = {
+    success: true,
+    data: {
+      qr_short_links: { pre_event_screen: 'https://evil.example/x', in_game_screen: 'http://l.the-anchor.pub/sc5e6f' },
+      marketing_short_links: 'oops',
+    },
+  };
+  assert.deepEqual(parseScreenShortLinks(untrusted), none);
 
   assert.throws(() => parseScreenShortLinks({ success: false, error: { code: 'NOT_FOUND' } }), EventsFeedError);
 });

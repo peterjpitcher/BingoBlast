@@ -14,8 +14,10 @@ interface NextBingoSlideProps {
   event: ScreenEvent;
   qrUrl: string;
   nowMs: number;
+  /** Keeps the phase visible while the slide is up, for example "Break time". */
+  statusLabel?: string | null;
 }
 
-export function NextBingoSlide({ event, qrUrl, nowMs }: NextBingoSlideProps) {
-  return <EventSlide event={event} qrUrl={qrUrl} nowMs={nowMs} eyebrow="Next bingo night" />;
+export function NextBingoSlide({ event, qrUrl, nowMs, statusLabel }: NextBingoSlideProps) {
+  return <EventSlide event={event} qrUrl={qrUrl} nowMs={nowMs} eyebrow="Next bingo night" statusLabel={statusLabel} />;
 }

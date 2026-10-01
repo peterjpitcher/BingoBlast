@@ -9,6 +9,7 @@ import {
   getUsableEvents,
   playlistSignature,
   readEventsProjection,
+  slideCarriesQr,
   type Slide,
 } from './playlist';
 import type { EventsProjection, ScreenEvent } from './events-feed/types';
@@ -23,6 +24,7 @@ const event = (id: string, startsAt: string, category: string | null = 'music'):
   category,
   image: null,
   qrPre: `https://www.the-anchor.pub/events/${id}?utm_source=pre&utm_medium=screen`,
+  qrInGame: `https://www.the-anchor.pub/events/${id}?utm_source=in_game&utm_medium=screen`,
   qrPost: `https://www.the-anchor.pub/events/${id}?utm_source=post&utm_medium=screen`,
 });
 
@@ -286,6 +288,147 @@ test('the review slide appears in no loop unless it is switched on', () => {
   }
 });
 
+// ---- a break in a game: events while the game is paused -------------------------
+
+const onBreak = { inGameSubState: 'break' } as const;
+const breakLoop = (proj: EventsProjection | null) => buildPlaylist('in_game', proj, NOW, SESSION_DATE, onBreak);
+
+/** Exactly what a break looped through before events were added to it. */
+const BREAK_FALLBACK = [
+  { key: 'break-0', kind: 'break', durationMs: 20_000 },
+  { key: 'rules-0', kind: 'rules', durationMs: 20_000 },
+];
+
+test('a break with nothing to show is exactly the break screen and the rules, as before', () => {
+  for (const proj of [
+    null,
+    projection(),
+    projection({ status: 'error', events: upcomingEvents(2), bingoNights: [NEXT_BINGO] }),
+    projection({ status: 'missing_config', events: upcomingEvents(2), bingoNights: [NEXT_BINGO] }),
+    projection({ status: 'no_events', events: upcomingEvents(2), bingoNights: [NEXT_BINGO] }),
+    // Only events that have started, and only tonight's own bingo night.
+    projection({ events: [event('past', '2026-11-18T18:00:00Z')], bingoNights: [TONIGHTS_BINGO] }),
+  ]) {
+    assert.deepEqual(breakLoop(proj), BREAK_FALLBACK, proj?.status ?? 'null');
+  }
+});
+
+test('a break with one event: break, next bingo, the event, then the rules', () => {
+  assert.deepEqual(outline(breakLoop(fullProjection(1))), ['break', 'next_bingo:bingo-next', 'event:e1', 'rules']);
+  assert.deepEqual(durations(breakLoop(fullProjection(1))), [20_000, 12_000, 12_000, 20_000]);
+  const withoutBingo = breakLoop(projection({ events: upcomingEvents(1) }));
+  assert.deepEqual(outline(withoutBingo), ['break', 'event:e1', 'rules']);
+  assert.deepEqual(durations(withoutBingo), [20_000, 12_000, 20_000]);
+});
+
+test('a break with three events: the break screen comes back after every two', () => {
+  assert.deepEqual(outline(breakLoop(fullProjection(3))), [
+    'break', 'next_bingo:bingo-next', 'event:e1', 'event:e2',
+    'break', 'event:e3',
+    'rules',
+  ]);
+  assert.deepEqual(durations(breakLoop(fullProjection(3))), [20_000, 12_000, 12_000, 12_000, 20_000, 12_000, 20_000]);
+  assert.deepEqual(outline(breakLoop(projection({ events: upcomingEvents(3) }))), [
+    'break', 'event:e1', 'event:e2',
+    'break', 'event:e3',
+    'rules',
+  ]);
+});
+
+test('a break with six events: break, next bingo, two events, break, two more, and the rules once a loop', () => {
+  const slides = breakLoop(fullProjection(6));
+  assert.deepEqual(outline(slides), [
+    'break', 'next_bingo:bingo-next', 'event:e1', 'event:e2',
+    'break', 'event:e3', 'event:e4',
+    'break', 'event:e5', 'event:e6',
+    'rules',
+  ]);
+  assert.deepEqual(durations(slides), [
+    20_000, 12_000, 12_000, 12_000,
+    20_000, 12_000, 12_000,
+    20_000, 12_000, 12_000,
+    20_000,
+  ]);
+  assert.equal(kinds(slides).filter((kind) => kind === 'rules').length, 1);
+  assert.deepEqual(outline(breakLoop(projection({ events: upcomingEvents(6) }))), [
+    'break', 'event:e1', 'event:e2',
+    'break', 'event:e3', 'event:e4',
+    'break', 'event:e5', 'event:e6',
+    'rules',
+  ]);
+});
+
+test('a break with only a next bingo night: break, next bingo, rules', () => {
+  const slides = breakLoop(projection({ bingoNights: [TONIGHTS_BINGO, NEXT_BINGO] }));
+  assert.deepEqual(outline(slides), ['break', 'next_bingo:bingo-next', 'rules']);
+  assert.deepEqual(durations(slides), [20_000, 12_000, 20_000]);
+});
+
+test('on a break the event QR codes are the in-game links', () => {
+  const eventSlides = breakLoop(fullProjection(3)).filter((slide) => 'event' in slide);
+  assert.equal(eventSlides.length, 4);
+  for (const slide of eventSlides) {
+    if ('event' in slide) assert.equal(slide.qrUrl, slide.event.qrInGame);
+  }
+});
+
+test('the break loop has unique keys and preloads the next image, wrapping to the break screen', () => {
+  const slides = breakLoop(fullProjection(6));
+  assert.equal(new Set(slides.map((slide) => slide.key)).size, slides.length);
+  // break -> next bingo (square) -> e1 -> e2 -> break.
+  assert.equal(slides[0].preloadImage?.url, NEXT_BINGO.image?.url);
+  assert.equal(slides[1].preloadImage?.url, `${BUCKET}/e1/landscape.png`);
+  assert.equal(slides[3].preloadImage, null);
+  // The rules wrap round to the break screen, which has no image.
+  assert.equal(slides[slides.length - 1].preloadImage, null);
+});
+
+test('an event that starts during a break drops out of the loop', () => {
+  const proj = fullProjection(3);
+  const later = buildPlaylist('in_game', proj, new Date('2026-11-20T19:01:00Z'), SESSION_DATE, onBreak);
+  assert.deepEqual(outline(later), ['break', 'next_bingo:bingo-next', 'event:e2', 'event:e3', 'rules']);
+  assert.notEqual(playlistSignature(breakLoop(proj)), playlistSignature(later));
+});
+
+test('events are for a break only: a game being called, a claim or a win still has no loop', () => {
+  for (const sub of ['calling', 'claim_check', 'win'] as const) {
+    assert.deepEqual(buildPlaylist('in_game', fullProjection(), NOW, SESSION_DATE, { inGameSubState: sub }), []);
+  }
+  assert.deepEqual(buildPlaylist('in_game', fullProjection(), NOW, SESSION_DATE), []);
+});
+
+test('between games is unchanged by events: the next game, then the rules', () => {
+  const expected = [
+    { key: 'next_game-0', kind: 'next_game', durationMs: 20_000 },
+    { key: 'rules-0', kind: 'rules', durationMs: 20_000 },
+  ];
+  assert.deepEqual(buildPlaylist('between_games', null, NOW, SESSION_DATE), expected);
+  assert.deepEqual(buildPlaylist('between_games', fullProjection(), NOW, SESSION_DATE), expected);
+  assert.deepEqual(buildPlaylist('between_games', fullProjection(), NOW, SESSION_DATE, onBreak), expected);
+});
+
+test('the break option changes nothing before the start, after the night or when idle', () => {
+  const full = fullProjection();
+  for (const phase of ['before_start', 'night_over', 'idle'] as const) {
+    const date = phase === 'idle' ? null : SESSION_DATE;
+    assert.deepEqual(buildPlaylist(phase, full, NOW, date, onBreak), buildPlaylist(phase, full, NOW, date), phase);
+    const slides = buildPlaylist(phase, full, NOW, date, onBreak);
+    assert.equal(slides.some((slide) => slide.kind === 'break'), false, phase);
+    for (const slide of slides) {
+      if ('event' in slide) assert.notEqual(slide.qrUrl, slide.event.qrInGame, phase);
+    }
+  }
+});
+
+test('only one QR code at a time: which slides carry their own', () => {
+  for (const kind of ['event', 'next_bingo', 'follow_along', 'review', 'idle_bingo'] as const) {
+    assert.equal(slideCarriesQr(kind), true, kind);
+  }
+  for (const kind of ['break', 'rules', 'next_game', 'thanks'] as const) {
+    assert.equal(slideCarriesQr(kind), false, kind);
+  }
+});
+
 // ---- idle /display (spec 5.5) --------------------------------------------------
 
 test('the idle screen: "Bingo nights at The Anchor", the next bingo night, then the events', () => {
@@ -346,6 +489,30 @@ test('the link for a phase: pre-event before the start, post-event after it and 
   assert.equal(eventLinkForPhase(e, 'idle'), e.qrPost);
 });
 
+test('the link on a break in a game is the in-game one', () => {
+  const e = event('x', '2026-11-20T19:00:00Z');
+  assert.equal(eventLinkForPhase(e, 'in_game', 'break'), e.qrInGame);
+});
+
+test('the link for every phase and sub-state', () => {
+  const e = event('x', '2026-11-20T19:00:00Z');
+  const subStates = [null, 'calling', 'claim_check', 'win', 'break'] as const;
+  // The sub-state only matters inside a game: the other phases ignore it.
+  for (const sub of subStates) {
+    assert.equal(eventLinkForPhase(e, 'before_start', sub), e.qrPre, `before_start ${sub}`);
+    assert.equal(eventLinkForPhase(e, 'night_over', sub), e.qrPost, `night_over ${sub}`);
+    assert.equal(eventLinkForPhase(e, 'idle', sub), e.qrPost, `idle ${sub}`);
+    // Not shown today; the in-game link is ready for when events show between games.
+    assert.equal(eventLinkForPhase(e, 'between_games', sub), e.qrInGame, `between_games ${sub}`);
+  }
+  // In a game, only a break shows events; anything else keeps the old answer.
+  assert.equal(eventLinkForPhase(e, 'in_game', 'break'), e.qrInGame);
+  for (const sub of [null, 'calling', 'claim_check', 'win'] as const) {
+    assert.equal(eventLinkForPhase(e, 'in_game', sub), e.qrPost, `in_game ${sub}`);
+  }
+  assert.equal(eventLinkForPhase(e, 'in_game'), e.qrPost);
+});
+
 test('the phone list puts the next bingo night first and leaves out tonight and started events', () => {
   const proj = projection({
     events: [event('past', '2026-11-18T18:00:00Z'), ...upcomingEvents(2)],
@@ -374,6 +541,33 @@ test('the route body is read back into a projection, dropping a malformed event 
     bingoNights: 'not a list',
   });
   assert.deepEqual(read, { status: 'ok', fetchedAt: '2026-11-18T18:00:00Z', events: [good], bingoNights: [] });
+});
+
+test('a response from before qrInGame existed is still read: the in-game link falls back to qrPre', () => {
+  const current = upcomingEvents(2);
+  const { qrInGame: _dropped, ...older } = current[0];
+  void _dropped;
+  const { qrInGame: _droppedBingo, ...olderBingo } = NEXT_BINGO;
+  void _droppedBingo;
+  const read = readEventsProjection({
+    status: 'ok',
+    fetchedAt: '2026-11-18T18:00:00Z',
+    // An older event, a current one, and one whose qrInGame is not a string.
+    events: [older, current[1], { ...current[1], id: 'odd', qrInGame: 42 }],
+    bingoNights: [olderBingo],
+  });
+  assert.equal(read?.status, 'ok');
+  assert.deepEqual(read?.events.map((e) => e.id), ['e1', 'e2', 'odd'], 'no event is dropped');
+  assert.equal(read?.events[0].qrInGame, current[0].qrPre);
+  assert.equal(read?.events[1].qrInGame, current[1].qrInGame);
+  assert.equal(read?.events[2].qrInGame, current[1].qrPre);
+  assert.equal(read?.bingoNights[0].qrInGame, NEXT_BINGO.qrPre);
+  // So a break still gets its events from an older response.
+  assert.deepEqual(outline(buildPlaylist('in_game', read ?? null, NOW, SESSION_DATE, { inGameSubState: 'break' })), [
+    'break', 'next_bingo:bingo-next', 'event:e1', 'event:e2',
+    'break', 'event:odd',
+    'rules',
+  ]);
 });
 
 test('a body that is not a projection reads as nothing', () => {

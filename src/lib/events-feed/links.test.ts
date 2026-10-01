@@ -30,6 +30,30 @@ test('without a short link for the channel, the id link is used, exactly', () =>
   assert.equal(eventQr({ id: ID }, 'pre_event_screen'), eventIdLink(ID, 'pre_event_screen'));
 });
 
+test('the in-game link (qrInGame) is the in_game_screen short link when the event has one', () => {
+  const event = {
+    id: ID,
+    shortLinks: {
+      pre_event_screen: 'https://l.the-anchor.pub/ps1a2b',
+      in_game_screen: 'https://l.the-anchor.pub/sc5e6f',
+      post_event_screen: 'https://l.the-anchor.pub/ns3c4d',
+    },
+  };
+  assert.equal(eventQr(event, 'in_game_screen'), 'https://l.the-anchor.pub/sc5e6f');
+});
+
+test('without an in_game_screen short link, the in-game link is the id link, exactly', () => {
+  const expected =
+    'https://www.the-anchor.pub/events/76ec328b-48f8-47c0-b041-cc405e085deb?utm_source=in_game_screen&utm_medium=screen';
+  // The other channels having a short link does not lend one to this channel.
+  const event = { id: ID, shortLinks: { pre_event_screen: 'https://l.the-anchor.pub/ps1a2b', in_game_screen: null } };
+  assert.equal(eventQr(event, 'in_game_screen'), expected);
+  assert.equal(eventQr({ id: ID, shortLinks: null }, 'in_game_screen'), expected);
+  assert.equal(eventQr({ id: ID }, 'in_game_screen'), expected);
+  // An untrusted link is ignored for this channel as for the others.
+  assert.equal(eventQr({ id: ID, shortLinks: { in_game_screen: 'https://evil.example/sc5e6f' } }, 'in_game_screen'), expected);
+});
+
 test('a short link that is not an https the-anchor.pub link is ignored', () => {
   for (const bad of [
     'http://l.the-anchor.pub/ps1a2b',

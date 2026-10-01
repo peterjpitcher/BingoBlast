@@ -4,7 +4,7 @@
 // one shared, cached view of upcoming events that the TV and phones use
 // (spec 5.5). It does not depend on the phase, the session, the time of day or
 // the viewer, so a single cache entry serves everybody; clients work out
-// "Tonight" and pick qrPre or qrPost themselves.
+// "Tonight" and pick qrPre, qrInGame or qrPost themselves.
 //
 // HOW THE CACHING WORKS
 //   The refresh (buildEventsProjection) is wrapped in Next's `unstable_cache`
@@ -185,6 +185,7 @@ export function toScreenEvent(event: ManagementEvent, shortLinks: ScreenShortLin
     category: event.category,
     image: pickEventImage(event),
     qrPre: eventQr(source, 'pre_event_screen'),
+    qrInGame: eventQr(source, 'in_game_screen'),
     qrPost: eventQr(source, 'post_event_screen'),
   };
 }
@@ -500,8 +501,9 @@ const refreshProjection = createProjectionRefresher({
 const loadCachedProjection = unstable_cache(
   (): Promise<CachedEventsProjection> => refreshProjection(),
   // Bump the version when CachedEventsProjection changes shape, so a new
-  // release never reads an entry written by an old one.
-  ['events-feed', 'projection', 'v1'],
+  // release never reads an entry written by an old one. v2: ScreenEvent
+  // gained qrInGame (events during a break).
+  ['events-feed', 'projection', 'v2'],
   { revalidate: EVENTS_REVALIDATE_SECONDS, tags: [EVENTS_PROJECTION_TAG] },
 );
 

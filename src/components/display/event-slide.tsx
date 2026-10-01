@@ -8,7 +8,9 @@
 //   - "Tonight" and "7pm" are worked out here, at render time, from the
 //     screen's clock (src/lib/dates.ts), never sent by the server (R10).
 //   - The QR is level M and at least 40% of the screen height; the playlist
-//     has already picked the pre- or post-event link for the phase.
+//     has already picked the pre-event, in-game or post-event link.
+//   - On a break in a game it carries a "Break time" label, the same one as
+//     the rules slide, so the room can always see the game is paused.
 'use client';
 
 import React, { useState } from 'react';
@@ -19,7 +21,7 @@ import { cn } from '@/lib/utils';
 import { formatEventWhenAndTime } from '@/lib/dates';
 import type { ScreenEvent, ScreenEventImage } from '@/lib/playlist';
 import { eventImageLoader, eventImageSizes } from './event-image';
-import { tvText } from './tv-text';
+import { TV_STATUS_LABEL_CLASS, tvText } from './tv-text';
 
 // At least 40% of the screen height: 432px at 1080p, 288px at 720p.
 const EVENT_QR_SIZE = 'max(40vh, 288px)';
@@ -44,9 +46,11 @@ export interface EventSlideProps {
   nowMs: number;
   /** The line above the title, for example "Coming up at The Anchor". */
   eyebrow: string;
+  /** Keeps the phase visible while the event is up, for example "Break time". */
+  statusLabel?: string | null;
 }
 
-export function EventSlide({ event, qrUrl, nowMs, eyebrow }: EventSlideProps) {
+export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventSlideProps) {
   // Remembered by URL, so a failure never carries over to another event's image.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const image =
@@ -80,6 +84,9 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow }: EventSlideProps) {
       {image?.square && renderImage(image, 'aspect-square h-[40vh]')}
 
       <div className="flex min-w-0 flex-1 flex-col gap-[1.6vh] text-left">
+        {/* First in the column, above the artwork: one more line fits both
+            layouts at 1280x720 (about 510px of the 576px the slides get). */}
+        {statusLabel && <p className={TV_STATUS_LABEL_CLASS}>{statusLabel}</p>}
         {image && !image.square && renderImage(image, 'aspect-video h-[40vh] max-w-full self-start')}
         <p className={tvText('xs', 'font-semibold uppercase tracking-[0.2em] text-white/85')}>{eyebrow}</p>
         {/* leading-[1.15]: the clamp hides overflow, and the title size's
