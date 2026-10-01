@@ -5,7 +5,8 @@ Workspace standards live in `/Users/peterpitcher/Cursor/CLAUDE.md`: read that fi
 ## Stack (deviations from the workspace default)
 
 - **Next.js 16.3**, React 19.2. Middleware is the Next 16 `proxy()` export in `src/proxy.ts`, not `middleware.ts`.
-- **Tailwind v4** (`@import "tailwindcss"` plus `@config` pointing at `tailwind.config.ts`, where the `bingo.*` tokens live).
+- **Tailwind v4** (`@import "tailwindcss"` plus `@config` pointing at `tailwind.config.ts`). The Anchor brand tokens are CSS variables in `src/app/globals.css` (`:root`), named as utilities in `tailwind.config.ts` (`anchor.*` colours, `line.*` hairlines, `rounded-card`, `rounded-input`, `shadow-gold`, `font-display`, `font-script`, the `animate-*` rises and fades). See "Design system" below.
+- Fonts through `next/font/google`: DM Serif Display (`--font-display`), Outfit (`--font-body`), Clicker Script (`--font-script`). Icons are `lucide-react`.
 - **Tests use Node's native runner** (`node --test --import tsx`), not Jest or Vitest: `src/lib/*.test.ts`, pure helpers only. Mock Supabase; never hit a real database.
 - Supabase via `@supabase/ssr`; `zod`, `qrcode.react`, `nosleep.js`. Vercel. Linked Supabase project ref `bcmorqsgeumtmhvctvgu`.
 - Server actions return `ActionResult<T>` (`src/types/actions.ts`): `conflict: true` means the state moved under the caller, so refresh rather than fail. Branch on `code`, never on `error` text.
@@ -33,6 +34,17 @@ A **90-ball pub bingo control system** for The Anchor. Players use paper books: 
 **Auth.** `src/proxy.ts` runs `updateSession()` (`src/utils/supabase/middleware.ts`) only on `/admin/:path*`, `/host/:path*` and `/login`. It refreshes the session and routes by role: anonymous to `/login`, `pending` or no profile row to `/pending`, a host on `/admin` to `/host`. Every redirect must go through `redirectPreservingSession()`: a bare `NextResponse.redirect` drops the rotated refresh cookies, which logged a host out mid-shift. Protected pages also call `getUser()` themselves.
 
 **Data.** Tables: `sessions`, `games`, `game_states`, `game_states_public` (trigger-synced public mirror), `winners`, `snowball_pots`, `snowball_pot_history`, `profiles`. Both state tables carry `state_version`, bumped by trigger on every write. Public pages subscribe to `game_states_public` over Realtime with a polling fallback and drop stale payloads with `isFreshGameState()`. Order by `state_version`, never `updated_at`. Action contract: `docs/architecture/server-actions.md`.
+
+## Design system (The Anchor brand, 1 Oct 2026)
+
+The app is dark everywhere: deep green surfaces, cream text, gold accents. Components use the token names, never a hex or a Tailwind palette colour. The plan and the token table are in `tasks/todo.md`.
+
+- **Primitives** in `src/components/ui`: `Button` (`primary`, `outline`, `ghost`; `tone="quiet"` for Void, Delete, Sign out; one `primary` per view), `Card` (`accent`, `hover`), `Badge`, `Kicker`, `Input` (`fieldClass` for selects and textareas), `Modal` (centred dialog), `Sheet` (bottom sheet), `BingoBall` and `NumberChip` (sized by any CSS length), `AnchorLogo`, `Grain`. The host's phone header is `src/components/host/host-header.tsx`; the admin shell is `src/app/admin/layout.tsx`.
+- **Type:** every `h1` to `h6` is DM Serif Display through the base layer and is never bolded (it has one weight). Ball numerals are Outfit 700. Kickers are the only ALL-CAPS text, through CSS: write them in sentence case.
+- **Radii:** `rounded-card` (3px), `rounded-input` (6px), `rounded-full`. New radius or shadow names must also be registered with tailwind-merge in `src/lib/utils.ts` (a test checks the lists match).
+- **Motion:** fades and short rises of 150 to 400ms. No pulse or bounce on content. Hover lifts are `motion-safe:`.
+- **TV text** stays on the `text-tv-*` sizes through `tvText()`; off-scale sizes are `text-[length:clamp(...)]` in vh so 720p holds the floors.
+- **Danger text on a dark surface** is `text-anchor-danger-text`. The brand danger (`anchor-danger`) is for fills and borders only: as text on a dark card it is about 2.4:1.
 
 ## Environment variables
 
@@ -63,7 +75,7 @@ A **90-ball pub bingo control system** for The Anchor. Players use paper books: 
 
 - **Don't broaden the proxy matcher** to `/display/*` or `/player/*`: that adds a Supabase round trip to every TV and phone refresh.
 - **Never put the object from `useConnectionHealth()` in a dependency array.** It is new on every render and re-renders once a second, so dependent effects were torn down every second: the 3 s poll never fired, the Realtime channel never subscribed, and live updates on the host screen died silently. Destructure `markPollSuccess`, `markPollFailure` and `markRealtimeStatus`; read `shouldShowBanner` and `shouldAutoRefresh` inline in JSX.
-- **The TV and phone take the game's book colour during a game, break included**, and it can be white or pale yellow. Slides drawn for the green screen (events, next bingo night) are white text: anything shown mid-game must sit on a dark panel, as the break, rules and event slides do. White event titles on a white book got as far as the browser test on 1 Oct 2026; `checkRender()` in `scripts/check-render.js` now reports `lowContrast`.
+- **The book colour is a band, never a background.** The TV shows it as a strip under the top bar plus a labelled chip, the phone as a strip under its header and a dot, with the colour's name beside it. Text never sits on the book colour, which can be white or pale yellow: white event titles on a white book got as far as the browser test on 1 Oct 2026, when the screens still flooded with the colour. Do not bring the flood back; `checkRender()` in `scripts/check-render.js` reports `lowContrast` if anything unreadable slips through.
 - **Don't mint a fresh claim attempt for a retry.** The attempt id is minted once, when the host taps Check Claim or Check another claimant, and every draft, the check, the bound undo and Confirm Winner reuse it, retries included. On `attempt_mismatch` the phone must ADOPT the returned attempt and continue its draft sequence from `claim_draft_seq`, not mint another. Minting per tap or per save, or clearing it in `catch`, silently removes duplicate-winner protection. Only Manual Snowball Win keeps a separate key.
 - **Never report success on an update you have not proved landed.** A `.update()` without `.select()` that RLS filters out returns no error and no rows, so the action reported success while nothing was written (the "prize given" tick, and earlier the snowball pot). Every direct `.update()` must `.select()` and treat zero rows as an error, or use an RPC that returns the persisted value.
 - **Don't split snowball settlement into two round trips.** The audit claim and pot move share one transaction under one `for update` lock in `settle_snowball_pot`; when they did not, a stranded claim blocked every retry and the pot was fixed by hand.

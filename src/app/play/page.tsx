@@ -1,6 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { ChevronRight } from 'lucide-react';
 import { createClient } from '@/utils/supabase/server';
 import { formatDateInLondon, getTodayIsoDateInLondon } from '@/lib/dates';
 import { isUuid } from '@/lib/utils';
@@ -15,6 +16,10 @@ import { logError } from '@/lib/log-error';
 import { getEventsProjection } from '@/lib/events-feed/projection';
 import type { EventsProjection } from '@/lib/playlist';
 import { PhoneEvents } from '@/components/display/phone-events';
+import { buttonClass } from '@/components/ui/button';
+import { cardClass } from '@/components/ui/card';
+import { Kicker } from '@/components/ui/kicker';
+import { AnchorLogo } from '@/components/ui/logo';
 
 interface PlayPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -89,17 +94,20 @@ export default async function PlayPage({ searchParams }: PlayPageProps) {
         body="More than one game is on. Tap yours to follow it."
         events={await eventsPromise}
       >
-        <ul className="mt-4 space-y-2 text-left">
+        <ul className="mt-2 flex w-full flex-col gap-2 text-left">
           {choices.map((session) => (
             <li key={session.id}>
               <Link
                 href={`/play?s=${encodeURIComponent(session.id)}`}
-                className="flex min-h-[44px] flex-col justify-center rounded-md border border-[var(--anchor-border)] px-4 py-2 text-white hover:bg-[var(--anchor-green-soft)]"
+                className="flex min-h-14 items-center gap-3 rounded-card border border-line bg-anchor-green-raised px-4 py-2.5 transition-colors duration-150 hover:border-line-strong"
               >
-                <span className="text-base font-semibold">{session.name}</span>
-                {session.start_date && (
-                  <span className="text-sm text-white/85">{formatDateInLondon(session.start_date)}</span>
-                )}
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="font-display text-[20px] leading-[1.1] text-anchor-cream-text">{session.name}</span>
+                  {session.start_date && (
+                    <span className="text-sm text-anchor-sage">{formatDateInLondon(session.start_date)}</span>
+                  )}
+                </span>
+                <ChevronRight aria-hidden="true" size={20} strokeWidth={2} className="shrink-0 text-anchor-gold-bright" />
               </Link>
             </li>
           ))}
@@ -108,7 +116,13 @@ export default async function PlayPage({ searchParams }: PlayPageProps) {
     );
   }
 
-  return <PlayMessage title="No bingo running right now" events={await eventsPromise} />;
+  return (
+    <PlayMessage
+      title="No bingo running right now"
+      body="Come back on the night and this page follows the numbers live."
+      events={await eventsPromise}
+    />
+  );
 }
 
 interface PlayMessageProps {
@@ -121,29 +135,31 @@ interface PlayMessageProps {
   children?: React.ReactNode;
 }
 
+/**
+ * The /play page when it does not redirect: the wordmark, one accent card with
+ * the message, then what is coming up. Top aligned in a phone-width column.
+ */
 function PlayMessage({ title, body, retry = false, events = null, children }: PlayMessageProps) {
   return (
-    <main
-      className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-white"
-      style={{ backgroundColor: '#005131' }}
-    >
+    <main className="mx-auto flex min-h-screen-safe w-full max-w-md flex-col gap-4 bg-anchor-green-deep px-4 pb-10 pt-[calc(env(safe-area-inset-top)+16px)] text-anchor-cream-text">
+      <div className="flex justify-center">
+        <AnchorLogo height={64} priority />
+      </div>
       <div
-        className="w-full max-w-sm rounded-xl border border-[#1f7c58] bg-[#003f27] p-6 text-center"
+        className={cardClass({ accent: true, className: 'flex flex-col items-center gap-2 px-5 py-6 text-center' })}
         role={retry ? 'alert' : undefined}
       >
-        <h1 className="text-xl font-bold text-white">{title}</h1>
-        {body && <p className="mt-2 text-base text-white">{body}</p>}
+        <Kicker>Anchor Bingo</Kicker>
+        <h1 className="text-[30px] leading-[1.05] text-anchor-cream-text">{title}</h1>
+        {body && <p className="text-[15px] leading-normal text-anchor-sage">{body}</p>}
         {children}
         {retry && (
-          <Link
-            href="/play"
-            className="mt-4 inline-flex min-h-[44px] items-center justify-center rounded-md border border-[#a57626] px-5 text-base font-semibold text-white hover:bg-[#0f6846]"
-          >
+          <Link href="/play" className={buttonClass({ variant: 'outline', size: 'md', className: 'mt-2' })}>
             Try again
           </Link>
         )}
       </div>
-      {events && <PhoneEvents projection={events} sessionDate={null} phase="idle" className="w-full max-w-sm" />}
+      {events && <PhoneEvents projection={events} sessionDate={null} phase="idle" className="w-full" />}
     </main>
   );
 }

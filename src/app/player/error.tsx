@@ -4,6 +4,8 @@
 // never be left on Next's error page: this shows a calm holding card and gets
 // itself back (src/hooks/use-error-recovery.ts).
 
+import { RefreshCw } from 'lucide-react';
+import { cardClass } from '@/components/ui/card';
 import { useErrorRecovery } from '@/hooks/use-error-recovery';
 
 interface PlayerErrorProps {
@@ -15,15 +17,17 @@ export default function PlayerError({ error, retry }: PlayerErrorProps) {
   useErrorRecovery('player-error', error, retry);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--anchor-green)] p-6 text-white">
+    <div className="flex min-h-screen-safe items-center justify-center bg-anchor-green-deep p-4 text-anchor-cream-text">
       <div
         role="status"
         aria-live="polite"
-        className="w-full max-w-sm rounded-xl border border-[var(--anchor-border)] bg-[var(--anchor-green-dark)] p-6 text-center"
+        className={cardClass({ className: 'flex w-full max-w-md flex-col items-center gap-2 px-5 py-6 text-center' })}
       >
-        <h1 className="text-xl font-bold text-white">Reconnecting to the game…</h1>
-        <p className="mt-1 text-base text-white">Hold on to your tickets, this screen will be back in a moment.</p>
-        <span className="mt-4 inline-block h-2 w-2 animate-pulse rounded-full bg-white" />
+        <RefreshCw aria-hidden="true" size={36} strokeWidth={2} className="text-anchor-gold-bright" />
+        <h1 className="text-[28px] leading-[1.05] text-anchor-cream-text">Reconnecting to the game…</h1>
+        <p className="text-[15px] leading-normal text-anchor-sage">
+          Hold on to your tickets, this screen will be back in a moment.
+        </p>
       </div>
     </div>
   );

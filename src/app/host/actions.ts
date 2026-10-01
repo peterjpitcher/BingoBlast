@@ -167,7 +167,7 @@ const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
   no_more_numbers: { error: 'All 90 balls have been called.' },
   nothing_to_void: { error: 'There is no ball to undo.' },
   winner_on_ball: {
-    error: 'Cannot undo because a winner was recorded on this ball. Void that winner in the Winners and Prizes list, with a reason, then undo.',
+    error: 'Cannot undo because a winner was recorded on this ball. Void that winner in the Winners & prizes list, with a reason, then undo.',
     code: 'winner_on_ball',
   },
   wrong_session: { error: COULD_NOT_READ_GAME_ERROR },
@@ -179,7 +179,7 @@ const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
   // The wording sends the host to the winners list first, because the one thing
   // that must not happen next is a blind second attempt at the same prize.
   request_id_reused: {
-    error: 'Could not record that winner. Reload the page, then check the Winners and Prizes list before recording again.',
+    error: 'Could not record that winner. Reload the page, then check the Winners & prizes list before recording again.',
   },
 }
 

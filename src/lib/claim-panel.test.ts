@@ -28,7 +28,7 @@ test('paused with an empty draft is waiting, with the exact copy', () => {
   assert.equal(state.kind, 'waiting');
   assert.equal(state.headline, 'Checking a Line claim');
   assert.equal(state.detail, 'Numbers appear as the caller reads them');
-  assert.equal(state.lastNumberLine, 'Last number called: 45');
+  assert.equal(state.lastNumberLine, 'Last number called · 45');
   assert.equal(state.lastNumber, 45);
   assert.deepEqual(state.balls, []);
 });
@@ -54,7 +54,7 @@ test('a live draft shows the balls in tap order, ticked or crossed, and the coun
   ]);
   assert.equal(state.headline, 'Checking a Line claim');
   assert.equal(state.detail, '3 of 5 numbers read out');
-  assert.equal(state.lastNumberLine, 'Last number called: 45');
+  assert.equal(state.lastNumberLine, 'Last number called · 45');
   assert.deepEqual(state.invalidNumbers, [80]);
 });
 

@@ -14,7 +14,9 @@
 import React, { useState } from 'react';
 import Image from 'next/image';
 import { useMinuteClock } from './screen-hooks';
-import { Card, CardContent } from '@/components/ui/card';
+import { buttonClass } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Kicker } from '@/components/ui/kicker';
 import { cn } from '@/lib/utils';
 import {
   eventLinkForPhase,
@@ -27,8 +29,8 @@ import { formatEventWhenAndTime } from '@/lib/dates';
 import type { InGameSubState } from '@/lib/night-phase';
 import { REVIEW_URL, isReviewInviteEnabled } from '@/lib/venue-links';
 
-const LINK_CLASS =
-  'inline-flex min-h-[44px] items-center justify-center rounded-md border border-[#a57626] px-4 text-base font-semibold text-white hover:bg-[#0f6846]';
+// The 72px photo tile: a gold hairline and the card's 3px corners.
+const THUMBNAIL_CLASS = 'h-[72px] w-[72px] shrink-0 rounded-card border border-line bg-anchor-green-raised';
 
 function EventThumbnail({ image }: { image: ScreenEventImage | null }) {
   const [failed, setFailed] = useState(false);
@@ -37,9 +39,9 @@ function EventThumbnail({ image }: { image: ScreenEventImage | null }) {
     <Image
       src={image.url}
       alt={image.alt}
-      width={64}
-      height={64}
-      className={image.square ? 'h-16 w-16 shrink-0 rounded-md object-contain' : 'h-16 w-16 shrink-0 rounded-md object-cover'}
+      width={72}
+      height={72}
+      className={cn(THUMBNAIL_CLASS, image.square ? 'object-contain' : 'object-cover')}
       onError={() => setFailed(true)}
     />
   );
@@ -67,41 +69,43 @@ export function PhoneEvents({ projection, sessionDate, phase, inGameSubState = n
   if (items.length === 0) return null;
 
   return (
-    <Card className={cn('bg-[#003f27] border-[#1f7c58]', className)}>
-      <CardContent className="p-5 text-left">
-        <h2 className="mb-3 text-xl font-bold text-white">Coming up at The Anchor</h2>
-        <ul className="space-y-3">
-          {items.map(({ event, isNextBingo }) => {
-            const whenLine = formatEventWhenAndTime(event.startsAt, minuteMs);
-            return (
-              <li key={event.id} className="flex gap-3 rounded-lg border border-[#1f7c58] bg-[#005131] p-3">
-                <EventThumbnail key={event.image?.url ?? 'none'} image={event.image} />
-                <div className="min-w-0 flex-1">
-                  {isNextBingo && (
-                    <p className="text-sm font-bold uppercase tracking-wide text-[#f3d59d]">Next bingo night</p>
-                  )}
-                  <p className="text-base font-bold leading-snug text-white">{event.title}</p>
-                  {whenLine && <p className="text-base text-white">{whenLine}</p>}
-                  <a
-                    href={eventLinkForPhase(event, phase, inGameSubState)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={`View event: ${event.title} (opens in a new tab)`}
-                    className={`mt-2 ${LINK_CLASS}`}
-                  >
-                    View event
-                  </a>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </CardContent>
+    <Card className={cn('flex flex-col gap-3.5 p-5 text-left', className)}>
+      <h2 className="text-2xl leading-[1.1] text-anchor-cream-text">Coming up at The Anchor</h2>
+      <ul className="flex flex-col gap-3.5">
+        {items.map(({ event, isNextBingo }) => {
+          const whenLine = formatEventWhenAndTime(event.startsAt, minuteMs);
+          return (
+            <li key={event.id} className="flex gap-3.5 border-t border-line pt-3.5">
+              <EventThumbnail key={event.image?.url ?? 'none'} image={event.image} />
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                {isNextBingo && (
+                  <Kicker as="p" className="text-[11px]">Next bingo night</Kicker>
+                )}
+                <p className="font-display text-[22px] leading-[1.1] text-anchor-cream-text">{event.title}</p>
+                {whenLine && <p className="text-[15px] leading-normal text-anchor-sage">{whenLine}</p>}
+                <a
+                  href={eventLinkForPhase(event, phase, inGameSubState)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`View event: ${event.title} (opens in a new tab)`}
+                  className={buttonClass({ variant: 'outline', size: 'sm', className: 'mt-1.5 self-start px-[18px]' })}
+                >
+                  View event
+                </a>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </Card>
   );
 }
 
-/** "Tell us how we did", to the feedback page (spec 5.6). Renders nothing while switched off. */
+/**
+ * "Tell us how we did", to the feedback page (spec 5.6). Renders nothing while
+ * switched off. It is the one primary action on the end-of-night view, the
+ * only place it is shown.
+ */
 export function PhoneReviewButton() {
   if (!isReviewInviteEnabled()) return null;
   return (
@@ -110,7 +114,7 @@ export function PhoneReviewButton() {
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Tell us how we did (opens in a new tab)"
-      className="flex min-h-[48px] w-full items-center justify-center rounded-xl border border-[#a57626] bg-[#003f27] px-5 text-lg font-bold text-white hover:bg-[#0f6846]"
+      className={buttonClass({ variant: 'primary', size: 'md', block: true })}
     >
       Tell us how we did
     </a>

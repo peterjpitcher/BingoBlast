@@ -1,16 +1,31 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Clicker_Script, DM_Serif_Display, Outfit } from "next/font/google";
 import "./globals.css";
 import { LayoutContent } from "@/components/layout-content";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// The Anchor brand type. DM Serif Display carries headlines, prize figures and
+// large counts; it has one weight and is never faux-bolded. Outfit is the body
+// and every numeral on a ball. Clicker Script is the brand line and the warm
+// asides, used sparingly.
+const displayFont = DM_Serif_Display({
+  variable: "--font-display",
+  weight: "400",
   subsets: ["latin"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const bodyFont = Outfit({
+  variable: "--font-body",
+  weight: ["400", "500", "600", "700"],
   subsets: ["latin"],
+  display: "swap",
+});
+
+const scriptFont = Clicker_Script({
+  variable: "--font-script",
+  weight: "400",
+  subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -24,8 +39,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={`${displayFont.variable} ${bodyFont.variable} ${scriptFont.variable}`}>
+      <body>
         <LayoutContent>
           {children}
         </LayoutContent>

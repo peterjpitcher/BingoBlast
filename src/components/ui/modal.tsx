@@ -1,126 +1,111 @@
-import React, { useEffect, useId, useRef } from "react";
+import React, { useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Kicker } from "@/components/ui/kicker";
+import { useDialog } from "@/components/ui/use-dialog";
 
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   title: string;
+  /** The gold label above the title ("Game 2 · Early Doors"). */
+  kicker?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
   showCloseButton?: boolean;
+  /** The gold rule along the top edge, for a dialog that announces something. */
+  accent?: boolean;
+  /**
+   * A mark above the title (the gold tick disc on "Winner recorded"). With an
+   * icon the heading is centred and the close cross sits in the corner.
+   */
+  icon?: React.ReactNode;
+  className?: string;
+}
+
+/** The round 44px close button shared by dialogs and sheets. */
+export function DialogCloseButton({ onClose, className }: { onClose: () => void; className?: string }): React.ReactElement {
+  return (
+    <button
+      type="button"
+      data-modal-close
+      aria-label="Close"
+      onClick={onClose}
+      className={cn(
+        "-mr-2 -mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-anchor-cream-text transition-colors duration-150 hover:bg-white/[0.06]",
+        className,
+      )}
+    >
+      <X aria-hidden="true" size={20} strokeWidth={2} />
+    </button>
+  );
 }
 
 /**
- * Trap keyboard focus inside the modal while open and return focus to the
- * previously-focused element when it closes. Forwards Escape to the modal's
- * close button so consumers don't have to wire it twice.
+ * A centred dialog card over the scrim. It fades up over 400ms. Keyboard focus
+ * is trapped while it is open and Escape presses the close button; a dialog
+ * with `showCloseButton={false}` must be answered with one of its own buttons.
  */
-function useFocusTrap(open: boolean, container: React.RefObject<HTMLDivElement | null>) {
-  useEffect(() => {
-    if (!open || !container.current) return;
-    const root = container.current;
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-
-    const focusable = () =>
-      Array.from(
-        root.querySelectorAll<HTMLElement>(
-          'a[href], area[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-
-    // Move focus inside the dialog. Prefer the close button so screen readers
-    // announce the dialog title without trapping users on a destructive action.
-    const initial =
-      root.querySelector<HTMLButtonElement>('[data-modal-close]') ?? focusable()[0];
-    initial?.focus();
-
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        root.querySelector<HTMLButtonElement>('[data-modal-close]')?.click();
-        return;
-      }
-      if (e.key !== 'Tab') return;
-      const list = focusable();
-      if (list.length === 0) return;
-      const first = list[0];
-      const last = list[list.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener('keydown', handler);
-    return () => {
-      document.removeEventListener('keydown', handler);
-      // Return focus to the element that opened the modal.
-      previouslyFocused?.focus?.();
-    };
-  }, [open, container]);
-}
-
 export function Modal({
   isOpen,
   onClose,
   title,
+  kicker,
   children,
   footer,
   className,
+  accent = false,
+  icon,
   showCloseButton = true,
-}: ModalProps & { className?: string }) {
+}: ModalProps): React.ReactElement | null {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
 
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = "hidden";
-    }
-    return () => {
-      document.body.style.overflow = "unset";
-    };
-  }, [isOpen]);
-
-  useFocusTrap(isOpen, containerRef);
+  useDialog(isOpen, containerRef);
 
   if (!isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-5 backdrop-blur-[4px] animate-fade-in">
       <div
         ref={containerRef}
         className={cn(
-          "relative w-full max-w-lg bg-[#003f27] border border-[#1f7c58] rounded-xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col text-white",
+          "relative flex max-h-[90dvh] w-full max-w-lg flex-col rounded-card border border-line-strong bg-anchor-green-card text-anchor-cream-text shadow-sheet animate-fade-up",
+          accent && "border-t-[3px] border-t-anchor-gold-bright",
           className
         )}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
       >
-        <div className="flex items-center justify-between p-4 border-b border-[#1f7c58] shrink-0">
-          <h2 id={titleId} className="text-lg font-bold text-white">{title}</h2>
-          {showCloseButton ? (
-            <button
-              type="button"
-              data-modal-close
-              aria-label="Close"
-              onClick={onClose}
-              className="flex min-h-11 min-w-11 items-center justify-center p-2.5 rounded-md text-white/70 hover:text-white hover:bg-[#0f6846] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a57626]"
-            >
-              ✕
-            </button>
-          ) : null}
-        </div>
+        {icon ? (
+          <div className="flex shrink-0 flex-col items-center gap-[18px] px-5 pb-3 pt-7 text-center">
+            {icon}
+            <div className="flex flex-col gap-1.5">
+              {kicker ? <Kicker>{kicker}</Kicker> : null}
+              <h2 id={titleId} className="text-[30px] leading-none text-anchor-cream-text">{title}</h2>
+            </div>
+            {showCloseButton ? (
+              <DialogCloseButton onClose={onClose} className="absolute right-1 top-1 m-0 text-anchor-sage" />
+            ) : null}
+          </div>
+        ) : (
+          <div className="flex shrink-0 items-start justify-between gap-3 px-5 pb-3 pt-6">
+            <div className="flex min-w-0 flex-col gap-1.5">
+              {kicker ? <Kicker>{kicker}</Kicker> : null}
+              <h2 id={titleId} className="text-[28px] leading-[1.05] text-anchor-cream-text">{title}</h2>
+            </div>
+            {showCloseButton ? <DialogCloseButton onClose={onClose} /> : null}
+          </div>
+        )}
 
-        <div className="p-4 overflow-y-auto">
+        <div className="overflow-y-auto px-5 pb-5 text-[15px] leading-normal">
           {children}
         </div>
 
         {footer && (
-          <div className="flex items-center justify-end gap-2 p-4 border-t border-[#1f7c58] shrink-0 bg-[#003f27] rounded-b-xl">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-5 pb-5">
             {footer}
           </div>
         )}

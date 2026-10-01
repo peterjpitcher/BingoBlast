@@ -10,8 +10,21 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 export const TV_FONT_SIZES = ['tv-xs', 'tv-sm', 'tv-base', 'tv-lg', 'tv-xl', 'tv-2xl', 'tv-3xl', 'tv-4xl'] as const;
 
+/**
+ * The brand's own radius and shadow names (tailwind.config.ts). Unregistered,
+ * tailwind-merge does not see `rounded-card` as a radius or `shadow-gold` as a
+ * shadow, so cn('rounded-card', 'rounded-full') would keep both and leave the
+ * winner to stylesheet order.
+ */
+export const BRAND_RADII = ['card', 'input'] as const;
+export const BRAND_SHADOWS = ['gold', 'lift', 'sheet'] as const;
+
 const twMerge = extendTailwindMerge({
   extend: {
+    theme: {
+      radius: [...BRAND_RADII],
+      shadow: [...BRAND_SHADOWS],
+    },
     classGroups: {
       'font-size': [{ text: [...TV_FONT_SIZES] }],
     },

@@ -9,6 +9,7 @@
 // so it can never render while the switch is off.
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { QR_BACKGROUND, QR_FOREGROUND } from '@/lib/brand';
 import { REVIEW_URL, isReviewInviteEnabled } from '@/lib/venue-links';
 import { tvText } from './tv-text';
 
@@ -20,23 +21,23 @@ export function ReviewSlide() {
   return (
     <section
       aria-label="Tell us how we did"
-      className="mx-auto flex h-full w-full max-w-[1700px] items-center justify-center gap-[4vw] text-white"
+      className="mx-auto flex h-full w-full max-w-[1700px] items-center justify-center gap-[4.6vw] text-anchor-cream-text"
     >
-      <div className="shrink-0 rounded-3xl bg-white p-[1.5vh]">
+      <div className="shrink-0 rounded-card border border-line-gold bg-white p-[clamp(14px,2.2vh,24px)]">
         <QRCodeSVG
           value={REVIEW_URL}
           level="M"
           marginSize={2}
           size={540}
           title="QR code: leave feedback"
-          fgColor="#005131"
-          bgColor="#FFFFFF"
+          fgColor={QR_FOREGROUND}
+          bgColor={QR_BACKGROUND}
           style={{ display: 'block', width: REVIEW_QR_SIZE, height: REVIEW_QR_SIZE }}
         />
       </div>
-      <div className="flex min-w-0 flex-col gap-[2.4vh] text-left">
-        <h1 className={tvText('lg', 'font-black')}>Enjoyed tonight? Tell us how we did</h1>
-        <p className={tvText('base', 'font-semibold text-[#f3d59d]')}>Scan to leave feedback</p>
+      <div className="flex min-w-0 flex-col gap-[clamp(14px,2.6vh,28px)] text-left">
+        <h1 className={tvText('2xl', 'max-w-[14ch] leading-[0.98]')}>Enjoyed tonight? Tell us how we did</h1>
+        <p className={tvText('base', 'font-semibold text-anchor-gold-bright')}>Scan to leave feedback</p>
       </div>
     </section>
   );

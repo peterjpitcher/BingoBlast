@@ -47,15 +47,15 @@ Tap it again. Since 25 August 2026 this is safe: the second tap carries the same
 key as the first, so if the first one did come out you get the same board back
 rather than a second ball. The error message says so at the time.
 
-The same is true of **Check Claim**, **Check Win**, **Confirm Winner**,
-**Continue Playing** and **Skip Stage**. It is **not** true of **Undo Last
-Call**: undoing twice takes two balls off. If an undo fails, reload and look at
+The same is true of **Check claim**, **Check win**, **Confirm winner**,
+**Continue playing** and **Skip stage**. It is **not** true of **Undo last
+call**: undoing twice takes two balls off. If an undo fails, reload and look at
 the board before trying again. (The one undo inside a claim check is the
 exception: it is tied to that claim and can only ever take one ball off.)
 
 ### You called a ball too early, or the room did not hear it
 
-**Undo Last Call**. It goes back in the bag and the next call draws it again.
+**Undo last call**. It goes back in the bag and the next call draws it again.
 
 If a winner has already been recorded on that ball, the undo is refused. Void
 that winner first, with a reason, then undo. The refusal message has a button
@@ -63,19 +63,19 @@ that takes you straight there.
 
 ### Somebody shouts bingo
 
-**Check Claim**, then tap their numbers **in the order the caller reads them
+**Check claim**, then tap their numbers **in the order the caller reads them
 out**. The TV and the phones show each number as you tap it, ticked if it has
 been called and crossed if it has not, so the room can follow the check. The
 screen also lists what you have tapped underneath the grid, in that same order,
 and calls out in red anything that has not actually been called. Check that list
-against their book, then press **Check Win**. The server gives the verdict, and
+against their book, then press **Check win**. The server gives the verdict, and
 the TV shows it.
 
-- **Valid:** Record Winner opens. The win only goes up on the TV once you
+- **Valid:** the Winner dialog opens. The win only goes up on the TV once you
   confirm it, not before.
-- **Not a winner** (a number that has not been called): **Reject & Resume**.
+- **Not a winner** (a number that has not been called): **Carry on calling**.
 - If a tap does not reach the TV, the screen says **"TV not updated, retrying"**
-  and keeps trying by itself. Carry on: Check Win sends the full list anyway.
+  and keeps trying by itself. Carry on: Check win sends the full list anyway.
 
 ### The claim does not include the last number called
 
@@ -128,7 +128,7 @@ pot has not settled, with a **Settle** button.
 
 ### A game needs to end with nobody winning
 
-**End Game** on the host screen. On the snowball game this is important: it is
+**End game** on the host screen. On the snowball game this is important: it is
 what makes the pot roll over. Walking away instead leaves the pot frozen and next
 week's TV advertises this week's figure.
 
@@ -140,14 +140,14 @@ week's TV advertises this week's figure.
 3. When the connection comes back, the app is still on the ball it last recorded.
    You cannot type the missed balls in, and you should not try to catch it up by
    calling them quickly: the display would show numbers the room already has.
-4. Finish the game on paper, then use **End Game** so the session and the pot
+4. Finish the game on paper, then use **End game** so the session and the pot
    settle properly. Record the winners in the app afterwards if you can, or note
    them on paper and add them via `/admin` the next day.
 
 ### Ending the night
 
-Finishing the last game ends the night by itself: the last game's "End Game &
-Finish Session" does both. If you stop early with games left unplayed, press
+Finishing the last game ends the night by itself: the last game's "End game and
+finish session" does both. If you stop early with games left unplayed, press
 **End the night** on the host console (open the session). It lists the games that
 will stay unplayed, and a snowball pot on an unplayed game does not move. It is
 refused while a game is still in progress: end that game first.
@@ -178,7 +178,7 @@ Reload it. It follows the session automatically once it is back.
       the session shows Completed.
 - [ ] The snowball pot shows the figure you expect for next time. Check it on
       `/admin/snowball`; the history table underneath explains every movement.
-- [ ] Prizes handed over are ticked off in Winners and Prizes.
+- [ ] Prizes handed over are ticked off in Winners & prizes.
 - [ ] The payout total on `/admin/history` matches the till.
 
 ## What to do about a mistake the next day

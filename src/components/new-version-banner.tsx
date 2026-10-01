@@ -19,10 +19,10 @@ export function NewVersionBanner({ visible, onReload }: NewVersionBannerProps) {
     <div
       role="status"
       aria-live="polite"
-      className="mb-4 rounded-xl border border-[#a57626] bg-[#005131]/90 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+      className="flex flex-col gap-3 rounded-card border border-line-strong bg-anchor-green-card p-4 sm:flex-row sm:items-center sm:justify-between"
     >
-      <p className="font-bold text-white">A new version is ready</p>
-      <Button variant="primary" size="lg" className="min-h-[48px] shrink-0" onClick={onReload}>
+      <p className="font-semibold text-anchor-cream-text">A new version is ready</p>
+      <Button variant="outline" size="sm" className="shrink-0" onClick={onReload}>
         Reload
       </Button>
     </div>

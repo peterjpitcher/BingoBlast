@@ -1,16 +1,22 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
+import { ChevronLeft } from 'lucide-react';
 import { Database, GameType, WinStage, GameStatus } from '@/types/database';
 import { createGame, deleteGame, duplicateGame, updateSessionStatus, updateGame, resetSession, voidWinner } from './actions';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Kicker } from '@/components/ui/kicker';
 import { Modal } from '@/components/ui/modal';
-import { Input } from '@/components/ui/input';
+import { Input, fieldClass, fieldLabelClass } from '@/components/ui/input';
 import { useRouter } from 'next/navigation';
 import { validateGamePrizes } from '@/lib/prize-validation';
 import { formatDateInLondon, formatDateTimeInLondon } from '@/lib/dates';
 import { describeWinnerTotal, formatPence, formatPoundsAmount, totalPaidOutPence, winnerTotalPence } from '@/lib/money';
+import { getColourName } from '@/lib/colour-name';
+import { cn } from '@/lib/utils';
 
 type Session = Database['public']['Tables']['sessions']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -38,6 +44,32 @@ function readGameStatus(game: Game): GameStatus | null {
 }
 
 const STANDARD_STAGES: WinStage[] = ['Line', 'Two Lines', 'Full House'];
+
+// The admin table (design handoff, section 6): small sage column heads over a
+// gold hairline, 15px cream cells, a hairline between rows and a faint gold
+// wash on hover. A voided winner's row is dimmed instead.
+const TH = "whitespace-nowrap border-b border-line-gold px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-[0.1em] text-anchor-sage";
+const TD = "px-5 py-4 align-middle text-[15px]";
+const ROW_BASE = "border-b border-line transition-colors duration-150 last:border-b-0";
+const ROW = `${ROW_BASE} hover:bg-anchor-gold-bright/[0.05]`;
+const ROW_VOID = `${ROW_BASE} opacity-[0.55]`;
+
+// Form and dialog pieces shared by the modals below.
+const LABEL = cn(fieldLabelClass, "mb-1.5 block");
+const ERROR_PANEL = "rounded-card border border-anchor-danger bg-anchor-danger/[0.12] px-4 py-3 text-sm text-anchor-danger-text";
+const NOTE_PANEL = "rounded-card border border-line-gold bg-anchor-green-raised px-4 py-3 text-sm text-anchor-gold-bright";
+const LOCKED_NOTE = "mt-1.5 text-[13px] text-anchor-gold-bright";
+const CHECKBOX = "h-5 w-5 shrink-0 accent-anchor-gold-bright";
+const STAT_CARD = "flex flex-col gap-1.5 px-5 py-[18px]";
+const STAT_VALUE = "font-display text-[34px] leading-none";
+const STAT_HINT = "text-[13px] text-anchor-sage";
+
+const SESSION_STATUS_LABELS: Record<string, string> = {
+  draft: 'Draft',
+  ready: 'Ready',
+  running: 'Running',
+  completed: 'Completed',
+};
 
 export default function SessionDetail({ session, initialGames, snowballPots, winners }: SessionDetailProps) {
   const [games, setGames] = useState<Game[]>(initialGames);
@@ -316,308 +348,394 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
 
   const isResetConfirmed = resetTyped === 'RESET' || resetTyped === session.name;
 
+  // Read-only figures for the stat cards, worked out from the props already
+  // on the page. Nothing here is stored or sent anywhere.
+  const completedGamesCount = games.filter((g) => readGameStatus(g) === 'completed').length;
+  const gameInProgress = games.find((g) => readGameStatus(g) === 'in_progress') ?? null;
+  const liveWinners = winners.filter((w) => w.is_void !== true);
+  const outstandingPrizeCount = liveWinners.filter((w) => !w.prize_given).length;
+  const voidedWinnerCount = winners.length - liveWinners.length;
+  const snowballGame = games.find((g) => g.type === 'snowball') ?? null;
+  const snowballPot = snowballGame
+    ? snowballPots.find((p) => p.id === snowballGame.snowball_pot_id) ?? null
+    : null;
+
   return (
     <>
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Link
+            href="/admin"
+            className="inline-flex items-center gap-1.5 self-start text-sm font-semibold text-anchor-gold-bright transition-colors duration-150 hover:text-anchor-cream-text"
+          >
+            <ChevronLeft aria-hidden="true" size={16} strokeWidth={2} />
+            All sessions
+          </Link>
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+            <h1 className="text-[44px] leading-none text-anchor-cream-text">{session.name}</h1>
+            {session.status === 'running' ? (
+              <Badge variant="success" dot className="text-[13px]">Running</Badge>
+            ) : (
+              <Badge variant="outline" className="text-[13px]">
+                {SESSION_STATUS_LABELS[session.status] ?? session.status}
+              </Badge>
+            )}
+            {session.is_test_session && <Badge variant="outline" className="text-[13px]">Test</Badge>}
+          </div>
+          <p className="text-base text-anchor-sage">
+            {formatDateInLondon(session.start_date)} · {games.length} {games.length === 1 ? 'game' : 'games'}
+            {session.notes ? ` · ${session.notes}` : ''}
+          </p>
+        </div>
+
+        <div className="flex flex-col items-start gap-2 sm:items-end">
+          <div className="flex flex-wrap gap-2">
+            {session.status === 'draft' && (
+              <Button variant="outline" size="md" onClick={handleMarkAsReady}>
+                Mark as ready
+              </Button>
+            )}
+            {isSessionLocked && (
+              <Button variant="outline" size="md" onClick={handleShowReset}>
+                Reset to ready
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="md"
+              disabled={isSessionLocked || session.status === 'draft'}
+              onClick={handleStartSession}
+            >
+              Start session
+            </Button>
+          </div>
+          <p className={STAT_HINT}>
+            {session.status === 'running' && 'Session is live.'}
+            {session.status === 'ready' && 'Session is ready for hosts.'}
+            {session.status === 'draft' && 'Draft mode.'}
+            {session.status === 'completed' && 'Session completed.'}
+          </p>
+        </div>
+      </div>
+
       {actionError && !showGameModal && (
-        <div className="mb-6 rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+        <div className={ERROR_PANEL}>
           {actionError}
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-          <div className="md:col-span-2">
-            <Card className="bg-slate-900 border-slate-800 h-full">
-                <CardHeader>
-                    <CardTitle>Session Details</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <dl className="grid grid-cols-3 gap-4 text-sm">
-                        <dt className="text-slate-400">Date</dt>
-                        <dd className="col-span-2 text-white font-medium">{formatDateInLondon(session.start_date)}</dd>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card className={STAT_CARD}>
+          <Kicker className="text-[11px]">Games played</Kicker>
+          <span className={STAT_VALUE}>{completedGamesCount} of {games.length}</span>
+          <span className={STAT_HINT}>
+            {gameInProgress ? `${gameInProgress.name} now calling` : 'No game in progress'}
+          </span>
+        </Card>
 
-                        <dt className="text-slate-400">Status</dt>
-                        <dd className="col-span-2 text-white uppercase font-bold tracking-wider">{session.status}</dd>
+        <Card className={STAT_CARD}>
+          <Kicker className="text-[11px]">Winners</Kicker>
+          <span className={STAT_VALUE}>{liveWinners.length}</span>
+          <span className={STAT_HINT}>
+            {liveWinners.length === 0
+              ? 'None recorded yet'
+              : outstandingPrizeCount === 0
+                ? 'All prizes given'
+                : `${outstandingPrizeCount} outstanding`}
+            {voidedWinnerCount > 0 && `, ${voidedWinnerCount} voided`}
+          </span>
+        </Card>
 
-                        <dt className="text-slate-400">Notes</dt>
-                        <dd className="col-span-2 text-slate-300">{session.notes || '-'}</dd>
+        {/* Sums the shares, never the amounts: on a tied stage the amount is
+            the whole prize and sits on every tied row, so totalling it would
+            count one £10 prize as £20. Voided wins are excluded. */}
+        <Card className={STAT_CARD}>
+          <Kicker className="text-[11px]">Paid out</Kicker>
+          <span className={cn(STAT_VALUE, "text-anchor-gold-bright")}>
+            {formatPence(sessionPayout.totalPence)}
+          </span>
+          <span className={STAT_HINT}>Voided wins are not counted</span>
+          {sessionPayout.uncountedRows > 0 && (
+            <span className={STAT_HINT}>
+              plus {sessionPayout.uncountedRows} non-cash
+            </span>
+          )}
+          {sessionPayout.jackpotNotRecordedRows > 0 && (
+            <span className={STAT_HINT}>
+              {sessionPayout.jackpotNotRecordedRows === 1
+                ? '1 jackpot amount not recorded, so not in this total'
+                : `${sessionPayout.jackpotNotRecordedRows} jackpot amounts not recorded, so not in this total`}
+            </span>
+          )}
+        </Card>
 
-                        <dt className="text-slate-400">Test Mode</dt>
-                        <dd className="col-span-2 text-white">{session.is_test_session ? 'Yes' : 'No'}</dd>
-                    </dl>
-                </CardContent>
-            </Card>
-          </div>
-          <div className="md:col-span-1">
-              <Card className="bg-slate-900 border-slate-800 h-full">
-                  <CardContent className="flex flex-col justify-center h-full p-6 space-y-3">
-                        {session.status === 'draft' && (
-                            <Button variant="secondary" className="w-full border-blue-500 text-blue-400 hover:bg-blue-950" onClick={handleMarkAsReady}>
-                                Mark as Ready
-                            </Button>
-                        )}
-                        <Button
-                            variant="primary"
-                            size="lg"
-                            className="w-full"
-                            disabled={isSessionLocked || session.status === 'draft'}
-                            onClick={handleStartSession}
-                        >
-                            Start Session
-                        </Button>
-
-                        {isSessionLocked && (
-                            <Button variant="secondary" size="sm" className="w-full border-yellow-600 text-yellow-500 hover:bg-yellow-950" onClick={handleShowReset}>
-                                Reset to Ready (Unlock)
-                            </Button>
-                        )}
-
-                        <p className="text-xs text-slate-500 text-center mt-2">
-                            {session.status === 'running' && 'Session is live!'}
-                            {session.status === 'ready' && 'Session is ready for hosts.'}
-                            {session.status === 'draft' && 'Draft mode.'}
-                            {session.status === 'completed' && 'Session completed.'}
-                        </p>
-                  </CardContent>
-              </Card>
-          </div>
+        {/* The pot as it stands now, read from the live pot row. On a finished
+            night that is no longer the figure that was played for, so the hint
+            says so rather than implying it. */}
+        <Card className={STAT_CARD}>
+          <Kicker className="text-[11px]">Snowball</Kicker>
+          {snowballGame === null ? (
+            <>
+              <span className={STAT_VALUE}>None</span>
+              <span className={STAT_HINT}>No snowball game in this session</span>
+            </>
+          ) : snowballPot === null ? (
+            <>
+              <span className={STAT_VALUE}>Not shown</span>
+              <span className={STAT_HINT}>
+                Game {snowballGame.game_index} · its pot is not in the live list
+              </span>
+            </>
+          ) : (
+            <>
+              <span className={cn(STAT_VALUE, "text-anchor-gold-bright")}>
+                {formatPoundsAmount(Number(snowballPot.current_jackpot_amount))}
+              </span>
+              <span className={STAT_HINT}>
+                {session.status === 'completed'
+                  ? `Game ${snowballGame.game_index} · the pot as it stands now`
+                  : `Game ${snowballGame.game_index} · within ${snowballPot.current_max_calls} calls`}
+              </span>
+            </>
+          )}
+        </Card>
       </div>
 
-      <Card className="bg-slate-900 border-slate-800 mb-6">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Winners ({winners.length})</CardTitle>
-          {/* Sums the shares, never the amounts: on a tied stage the amount is
-              the whole prize and sits on every tied row, so totalling it would
-              count one £10 prize as £20. Voided wins are excluded. */}
-          <div className="text-right">
-            <span className="block text-xs uppercase tracking-wider text-slate-500">Paid out</span>
-            <span className="text-xl font-bold text-white font-mono tabular-nums">
-              {formatPence(sessionPayout.totalPence)}
-            </span>
-            {sessionPayout.uncountedRows > 0 && (
-              <span className="block text-xs text-slate-500">
-                plus {sessionPayout.uncountedRows} non-cash
-              </span>
-            )}
-            {sessionPayout.jackpotNotRecordedRows > 0 && (
-              <span className="block text-xs text-slate-500">
-                {sessionPayout.jackpotNotRecordedRows === 1
-                  ? '1 jackpot amount not recorded, so not in this total'
-                  : `${sessionPayout.jackpotNotRecordedRows} jackpot amounts not recorded, so not in this total`}
-              </span>
-            )}
+      <Card accent className="overflow-hidden">
+        <div className="flex items-center justify-between gap-4 border-b border-line-gold px-5 py-[18px]">
+          <h2 className="text-[26px] leading-none text-anchor-cream-text">Games</h2>
+          <Button variant="outline" size="sm" onClick={handleShowAdd} disabled={isSessionLocked}>
+            Add game
+          </Button>
+        </div>
+        {games.length === 0 ? (
+          <div className="flex flex-col items-start gap-4 px-5 py-8">
+            <p className="text-[15px] text-anchor-sage">No games configured for this session yet.</p>
+            <Button variant="outline" size="sm" onClick={handleShowAdd} disabled={isSessionLocked}>Add your first game</Button>
           </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {winners.length === 0 ? (
-            <div className="p-6 text-sm text-slate-500">No winners recorded for this session yet.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-800/50 text-slate-400">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">Time</th>
-                    <th className="px-4 py-3 font-medium">Game</th>
-                    <th className="px-4 py-3 font-medium">Winner</th>
-                    <th className="px-4 py-3 font-medium">Stage</th>
-                    <th className="px-4 py-3 font-medium">Prize</th>
-                    <th className="px-4 py-3 font-medium text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/50">
-                  {winners.map((winner) => (
-                    <tr key={winner.id} className="hover:bg-slate-800/30 transition-colors">
-                      <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
-                        {formatDateTimeInLondon(winner.created_at)}
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] border-collapse text-left">
+              <thead>
+                <tr>
+                  <th className={cn(TH, "w-16")}>#</th>
+                  <th className={TH}>Game</th>
+                  <th className={TH}>Type</th>
+                  <th className={TH}>Book</th>
+                  <th className={TH}>Prizes</th>
+                  <th className={TH}>Status</th>
+                  <th className={cn(TH, "text-right")}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {games.map((game) => {
+                  const status = readGameStatus(game);
+                  const gameLocked = status === 'in_progress' || status === 'completed';
+                  const deleteDisabled = gameLocked;
+                  const deleteTitle = gameLocked
+                    ? `Cannot delete a ${status} game`
+                    : undefined;
+                  return (
+                    <tr key={game.id} className={ROW}>
+                      <td className={TD}>
+                        <span className="font-display text-[22px] leading-none text-anchor-gold-bright">{game.game_index}</span>
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-white">
-                          {winner.game ? `Game ${winner.game.game_index}: ${winner.game.name}` : 'Unknown game'}
-                        </div>
+                      <td className={TD}>
+                          <div className="text-base font-semibold">{game.name}</div>
+                          {game.notes && <div className="text-[13px] text-anchor-sage">{game.notes}</div>}
                       </td>
-                      <td className="px-4 py-3 font-bold text-white">{winner.winner_name}</td>
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs border border-slate-700">
-                          {winner.stage}
-                        </span>
+                      <td className={TD}>
+                          {game.type === 'snowball' ? (
+                              <Badge variant="gold">Snowball</Badge>
+                          ) : game.type === 'jackpot' ? (
+                              <Badge variant="gold">Jackpot</Badge>
+                          ) : (
+                              <Badge variant="outline">Standard</Badge>
+                          )}
                       </td>
-                      <td className="px-4 py-3 text-slate-300">
-                        {winner.prize_description || '-'}
-                        {winner.is_snowball_jackpot && (
-                          <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-bold bg-yellow-900/30 text-yellow-500 border border-yellow-800">
-                            JACKPOT
-                          </span>
-                        )}
-                        {(() => {
-                          // X22: the ordinary share plus the jackpot share, or
-                          // "jackpot amount not recorded" where it is unknown.
-                          const totalLine = describeWinnerTotal(winnerTotalPence(winner));
-                          if (totalLine === null) return null;
-                          const showShareOf = winner.prize_amount_pence !== null
-                            && winner.prize_share_pence !== null
-                            && winner.prize_amount_pence !== winner.prize_share_pence;
-                          return (
-                            <span className="block text-xs font-mono text-slate-400">
-                              {totalLine}
-                              {showShareOf && ` (prize share of ${formatPence(winner.prize_amount_pence)})`}
-                            </span>
-                          );
-                        })()}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {winner.is_void ? (
-                          <div className="inline-flex flex-col items-end gap-1">
-                            <span className="px-2 py-0.5 rounded-full border border-red-700 text-red-300 bg-red-900/20 text-xs font-semibold">
-                              VOID
-                            </span>
-                            {winner.void_reason && (
-                              <span className="text-xs text-slate-500 max-w-[14rem] text-right">{winner.void_reason}</span>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="inline-flex items-center gap-2">
-                            {winner.prize_given ? (
-                              <span className="px-2 py-0.5 rounded-full border border-green-700 text-green-300 bg-green-900/20 text-xs font-semibold">
-                                Prize Given
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full border border-yellow-700 text-yellow-300 bg-yellow-900/20 text-xs font-semibold">
-                                Outstanding
-                              </span>
-                            )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-red-400 hover:text-red-300 hover:bg-red-900/20 min-h-[44px]"
-                              onClick={() => { setVoidTarget(winner); setVoidReason(''); setVoidError(null); }}
-                            >
-                              Void
-                            </Button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="bg-slate-900 border-slate-800">
-        <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Games ({games.length})</CardTitle>
-            <Button variant="primary" onClick={handleShowAdd} disabled={isSessionLocked}>
-              + Add Game
-            </Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          {games.length === 0 ? (
-            <div className="text-center py-12 text-slate-500">
-                <p className="mb-4">No games configured for this session yet.</p>
-                <Button variant="secondary" onClick={handleShowAdd} disabled={isSessionLocked}>Add Your First Game</Button>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-800/50 text-slate-400">
-                  <tr>
-                    <th className="px-4 py-3 w-16 text-center">#</th>
-                    <th className="px-4 py-3">Name</th>
-                    <th className="px-4 py-3">Type</th>
-                    <th className="px-4 py-3">Stages</th>
-                    <th className="px-4 py-3">Prizes</th>
-                    <th className="px-4 py-3">Colour</th>
-                    <th className="px-4 py-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/50">
-                  {games.map((game) => {
-                    const status = readGameStatus(game);
-                    const gameLocked = status === 'in_progress' || status === 'completed';
-                    const deleteDisabled = gameLocked;
-                    const deleteTitle = gameLocked
-                      ? `Cannot delete a ${status} game`
-                      : undefined;
-                    return (
-                      <tr key={game.id} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="px-4 py-3 text-center font-bold text-white">{game.game_index}</td>
-                        <td className="px-4 py-3">
-                            <div className="font-medium text-white">{game.name}</div>
-                            {game.notes && <div className="text-xs text-slate-500">{game.notes}</div>}
-                        </td>
-                        <td className="px-4 py-3">
-                            {game.type === 'snowball' ? (
-                                <span className="px-2 py-0.5 bg-indigo-900/50 text-indigo-300 rounded border border-indigo-800 text-xs font-bold">Snowball</span>
-                            ) : game.type === 'jackpot' ? (
-                                <span className="px-2 py-0.5 bg-amber-900/40 text-amber-300 rounded border border-amber-700 text-xs font-bold">Jackpot</span>
-                            ) : (
-                                <span className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded border border-slate-700 text-xs">Standard</span>
-                            )}
-                        </td>
-                        <td className="px-4 py-3">
-                            <div className="flex gap-1">
-                              {game.stage_sequence.map((stage) => (
-                                  <span key={stage} className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-xs border border-slate-700">{stage}</span>
-                              ))}
-                            </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-col items-start gap-1">
-                            {game.stage_sequence.map((stage) => {
-                              const prize = game.prizes?.[stage]?.trim();
-                              return (
-                                <span key={stage} className="text-xs whitespace-nowrap">
-                                  <span className="text-slate-400">{stage}:</span>{' '}
-                                  <span className={prize ? 'font-semibold text-white' : 'text-amber-300'}>
-                                    {prize || (game.type === 'jackpot' ? 'Set by host at start' : 'Not set')}
-                                  </span>
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                            <div
-                                className="w-6 h-6 rounded border border-white/10 shadow-sm"
+                      <td className={TD}>
+                          {/* The book colour is the one data colour on the page. */}
+                          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                            <span
+                                className="inline-block h-[18px] w-[18px] shrink-0 rounded-full border border-anchor-cream-text"
                                 style={{ backgroundColor: game.background_colour }}
                                 title={game.background_colour}
                             />
-                        </td>
-                        <td className="px-4 py-3 text-right space-x-2">
-                          <Button variant="ghost" size="sm" className="px-2 text-slate-400 hover:text-white" onClick={() => handleDuplicateGame(game.id)}>Clone</Button>
-                          <Button variant="ghost" size="sm" className="px-2 text-slate-400 hover:text-white" onClick={() => handleShowEdit(game)}>Edit</Button>
-                          <Button variant="ghost" size="sm" className="px-2 text-red-500 hover:text-red-400 hover:bg-red-900/20" onClick={() => handleShowDeleteGame(game)} disabled={deleteDisabled} title={deleteTitle}>Delete</Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
+                            {getColourName(game.background_colour)}
+                          </span>
+                      </td>
+                      <td className={TD}>
+                        <div className="flex flex-wrap gap-x-3.5 gap-y-2">
+                          {game.stage_sequence.map((stage) => {
+                            const prize = game.prizes?.[stage]?.trim();
+                            return (
+                              <span key={stage} className="inline-flex flex-col gap-px">
+                                <span className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.1em] text-anchor-sage">{stage}</span>
+                                <span
+                                  className={
+                                    prize
+                                      ? 'whitespace-nowrap font-display text-lg leading-tight text-anchor-gold-bright'
+                                      : game.type === 'jackpot'
+                                        ? 'whitespace-nowrap text-sm text-anchor-sage'
+                                        : 'whitespace-nowrap text-sm text-anchor-danger-text'
+                                  }
+                                >
+                                  {prize || (game.type === 'jackpot' ? 'Set at start' : 'Not set')}
+                                </span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td className={TD}>
+                        {status === 'in_progress' ? (
+                          <Badge variant="success">In progress</Badge>
+                        ) : (
+                          <Badge variant="outline">{status === 'completed' ? 'Completed' : 'Not started'}</Badge>
+                        )}
+                      </td>
+                      <td className={cn(TD, "text-right")}>
+                        <div className="inline-flex items-center gap-1">
+                          <Button variant="ghost" size="sm" className="px-3" onClick={() => handleDuplicateGame(game.id)}>Clone</Button>
+                          <Button variant="ghost" size="sm" className="px-3" onClick={() => handleShowEdit(game)}>Edit</Button>
+                          <Button variant="ghost" tone="quiet" size="sm" className="px-3" onClick={() => handleShowDeleteGame(game)} disabled={deleteDisabled} title={deleteTitle}>Delete</Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line-gold px-5 py-[18px]">
+          <h2 className="text-[26px] leading-none text-anchor-cream-text">Winners</h2>
+          <span className="text-sm text-anchor-sage">Winners are recorded anonymously</span>
+        </div>
+        {winners.length === 0 ? (
+          <p className="px-5 py-8 text-[15px] text-anchor-sage">No winners recorded for this session yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[860px] border-collapse text-left">
+              <thead>
+                <tr>
+                  <th className={TH}>Time</th>
+                  <th className={TH}>Game</th>
+                  <th className={TH}>Stage</th>
+                  <th className={TH}>Prize</th>
+                  <th className={TH}>Paid</th>
+                  <th className={cn(TH, "text-right")}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {winners.map((winner) => (
+                  <tr key={winner.id} className={winner.is_void ? ROW_VOID : ROW}>
+                    <td className={cn(TD, "whitespace-nowrap text-anchor-sage")}>
+                      {formatDateTimeInLondon(winner.created_at)}
+                    </td>
+                    <td className={cn(TD, "font-semibold")}>
+                      {winner.game ? `Game ${winner.game.game_index} · ${winner.game.name}` : 'Unknown game'}
+                    </td>
+                    <td className={TD}>
+                      <Badge variant="outline">{winner.stage}</Badge>
+                    </td>
+                    <td className={TD}>
+                      <span className={cn(winner.is_void && "line-through")}>
+                        {winner.prize_description || '-'}
+                      </span>
+                      {winner.is_snowball_jackpot && (
+                        <Badge variant="gold" className="ml-2">Jackpot</Badge>
+                      )}
+                    </td>
+                    <td className={cn(TD, "whitespace-nowrap")}>
+                      {(() => {
+                        // X22: the ordinary share plus the jackpot share, or
+                        // "jackpot amount not recorded" where it is unknown.
+                        const total = winnerTotalPence(winner);
+                        const totalLine = describeWinnerTotal(total);
+                        if (totalLine === null) {
+                          return <span className="text-anchor-sage">{winner.is_void ? '-' : 'Not cash'}</span>;
+                        }
+                        const showShareOf = winner.prize_amount_pence !== null
+                          && winner.prize_share_pence !== null
+                          && winner.prize_amount_pence !== winner.prize_share_pence;
+                        return (
+                          <>
+                            <span
+                              className={
+                                total.totalPence !== null && !total.jackpotNotRecorded
+                                  ? 'font-display text-xl leading-tight text-anchor-gold-bright'
+                                  : 'text-sm'
+                              }
+                            >
+                              {totalLine}
+                            </span>
+                            {showShareOf && (
+                              <span className="block text-[13px] text-anchor-sage">
+                                prize share of {formatPence(winner.prize_amount_pence)}
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </td>
+                    <td className={cn(TD, "text-right")}>
+                      {winner.is_void ? (
+                        <div className="inline-flex flex-col items-end gap-1">
+                          <Badge variant="danger">Void</Badge>
+                          {winner.void_reason && (
+                            <span className="max-w-[14rem] text-right text-[13px]">{winner.void_reason}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="inline-flex items-center gap-2">
+                          {winner.prize_given ? (
+                            <Badge variant="success">Given</Badge>
+                          ) : (
+                            <Badge variant="gold">Outstanding</Badge>
+                          )}
+                          <Button
+                            variant="ghost"
+                            tone="quiet"
+                            size="sm"
+                            className="px-3"
+                            onClick={() => { setVoidTarget(winner); setVoidReason(''); setVoidError(null); }}
+                          >
+                            Void
+                          </Button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       {/* Add/Edit Game Modal */}
       <Modal
         isOpen={showGameModal}
         onClose={handleClose}
-        title={editingGame ? 'Edit Game' : 'Add Game'}
+        title={editingGame ? 'Edit game' : 'Add game'}
         className="max-w-2xl"
       >
-        <form key={editingGame?.id || 'new-game'} onSubmit={handleGameSubmit} className="space-y-4">
-            {actionError && <div className="p-3 bg-red-900/50 text-red-200 rounded border border-red-800 text-sm">{actionError}</div>}
+        <form key={editingGame?.id || 'new-game'} onSubmit={handleGameSubmit} className="flex flex-col gap-4">
+            {actionError && <div className={ERROR_PANEL}>{actionError}</div>}
 
             {isGameLocked && (
-              <div className="p-3 rounded border border-yellow-800 bg-yellow-900/30 text-sm text-yellow-200">
+              <div className={NOTE_PANEL}>
                 This game has already started. Prize, type, snowball pot, and stage configuration are locked.
               </div>
             )}
 
             <div className="flex gap-4">
                 <div className="w-1/4">
-                    <label className="text-sm font-medium text-slate-300 mb-1 block">Order</label>
+                    <label className={LABEL}>Order</label>
                     <Input
                         type="number"
                         name="game_index"
@@ -626,7 +744,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                     />
                 </div>
                 <div className="w-3/4">
-                    <label className="text-sm font-medium text-slate-300 mb-1 block">Game Name</label>
+                    <label className={LABEL}>Game name</label>
                     <Input
                         type="text"
                         name="name"
@@ -640,11 +758,12 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
 
             {/* Structural fields (type, stages, snowball pot, prizes) are
                 locked once the game has started. We render them inside a
-                fieldset so the entire group is disabled in one place. */}
-            <fieldset disabled={isGameLocked} aria-disabled={isGameLocked} className="space-y-4 disabled:opacity-70">
+                fieldset so the entire group is disabled in one place. Each
+                field dims itself when disabled. */}
+            <fieldset disabled={isGameLocked} aria-disabled={isGameLocked} className="flex min-w-0 flex-col gap-4">
 
               <div>
-                <label className="text-sm font-medium text-slate-300 mb-1 block">Game Type</label>
+                <label className={LABEL}>Game type</label>
                 <select
                   name="type"
                   value={selectedGameType}
@@ -662,53 +781,53 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                       }
                       setMissingPrizeStages([]);
                   }}
-                  className="flex h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bingo-primary disabled:cursor-not-allowed disabled:opacity-50"
+                  className={fieldClass}
                 >
-                    <option value="standard">Standard Game</option>
-                    <option value="jackpot">Jackpot Game</option>
-                    <option value="snowball">Snowball Game</option>
+                    <option value="standard">Standard game</option>
+                    <option value="jackpot">Jackpot game</option>
+                    <option value="snowball">Snowball game</option>
                 </select>
                 {isGameLocked && (
-                  <p className="text-xs text-muted-foreground mt-1 text-yellow-200/80">Locked: game already started</p>
+                  <p className={LOCKED_NOTE}>Locked: game already started</p>
                 )}
               </div>
 
               {selectedGameType === 'standard' && (
                   <div>
-                      <label className="text-sm font-medium text-slate-300 mb-2 block">Stages (Winners)</label>
-                      <div className="flex gap-4 p-3 bg-slate-950/50 rounded-lg border border-slate-800">
+                      <label className={LABEL}>Stages (winners)</label>
+                      <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-card border border-line bg-anchor-green-raised px-4 py-1.5">
                           {STANDARD_STAGES.map(stage => (
-                              <label key={stage} className="flex items-center gap-2 cursor-pointer">
+                              <label key={stage} className="flex min-h-11 cursor-pointer items-center gap-2.5">
                                   <input
                                       type="checkbox"
                                       name="stages"
                                       value={stage}
                                       checked={selectedStages.includes(stage)}
                                       onChange={() => handleStageChange(stage)}
-                                      className="rounded border-slate-700 bg-slate-900 text-bingo-primary focus:ring-bingo-primary"
+                                      className={CHECKBOX}
                                   />
-                                  <span className="text-sm text-slate-300">{stage}</span>
+                                  <span className="text-[15px]">{stage}</span>
                               </label>
                           ))}
                       </div>
-                      {selectedStages.length === 0 && <p className="text-xs text-red-400 mt-1">Select at least one stage.</p>}
+                      {selectedStages.length === 0 && <p className="mt-1.5 text-sm text-anchor-danger-text">Select at least one stage.</p>}
                       {isGameLocked && (
-                        <p className="text-xs text-muted-foreground mt-1 text-yellow-200/80">Locked: game already started</p>
+                        <p className={LOCKED_NOTE}>Locked: game already started</p>
                       )}
                   </div>
               )}
 
               {selectedGameType === 'snowball' && (
-                  <div className="p-4 bg-indigo-900/20 border border-indigo-900 rounded-lg space-y-3">
+                  <div className="flex flex-col gap-3 rounded-card border border-line-gold bg-anchor-green-raised p-4">
                       <div>
-                          <label className="text-sm font-medium text-indigo-200 mb-1 block">Link Snowball Pot</label>
+                          <label className={LABEL}>Link snowball pot</label>
                           <select
                               name="snowball_pot_id"
                               defaultValue={editingGame?.snowball_pot_id || ""}
                               required
-                              className="flex h-10 w-full rounded-md border border-indigo-700 bg-slate-900 px-3 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                              className={fieldClass}
                           >
-                              <option value="">Select a Pot...</option>
+                              <option value="">Select a pot...</option>
                               {snowballPots.map(pot => (
                                   <option key={pot.id} value={pot.id}>
                                       {pot.name} (Jackpot: {formatPoundsAmount(Number(pot.current_jackpot_amount))} / Calls: {pot.current_max_calls})
@@ -716,38 +835,38 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                               ))}
                           </select>
                           {snowballPots.length === 0 && (
-                              <p className="text-xs text-red-400 mt-1">
-                                  No Snowball Pots found. Create one in the Snowball menu first.
+                              <p className="mt-1.5 text-sm text-anchor-danger-text">
+                                  No snowball pots found. Create one on the Snowball page first.
                               </p>
                           )}
                           {isGameLocked && (
-                            <p className="text-xs text-muted-foreground mt-1 text-yellow-200/80">Locked: game already started</p>
+                            <p className={LOCKED_NOTE}>Locked: game already started</p>
                           )}
                       </div>
                       <input type="hidden" name="stages" value="Full House" />
-                      <p className="text-xs text-indigo-300 flex items-center gap-2">Snowball games are Full House only.</p>
+                      <p className="text-sm text-anchor-sage">Snowball games are Full House only.</p>
                   </div>
               )}
 
               {selectedGameType === 'jackpot' && (
-                  <div className="p-4 bg-amber-900/20 border border-amber-800 rounded-lg space-y-3">
+                  <div className="flex flex-col gap-3 rounded-card border border-line-gold bg-anchor-green-raised p-4">
                       <input type="hidden" name="stages" value="Full House" />
-                      <p className="text-xs text-amber-200">
-                          Jackpot games are configured as Full House only. The cash jackpot amount is entered by host when starting this game.
+                      <p className="text-sm text-anchor-sage">
+                          Jackpot games are configured as Full House only. The cash jackpot amount is entered by the host when starting this game.
                       </p>
                   </div>
               )}
 
               <div>
-                  <label className="text-sm font-medium text-slate-300 mb-2 block">Prizes</label>
-                  <div className="space-y-2">
+                  <label className={LABEL}>Prizes</label>
+                  <div className="flex flex-col gap-2">
                       {selectedStages.map(stage => {
                           const isMissing = missingPrizeStages.includes(stage);
                           const isRequired = requiredStages.includes(stage);
                           return (
                             <div key={stage}>
                               <div className="flex items-center gap-3">
-                                <label className="text-xs text-slate-400 w-24 uppercase tracking-wide font-bold text-right" htmlFor={`prize_${stage}`}>{stage}{isRequired ? '' : ' (optional)'}:</label>
+                                <label className="w-28 shrink-0 text-right text-xs font-semibold uppercase tracking-[0.1em] text-anchor-sage" htmlFor={`prize_${stage}`}>{stage}{isRequired ? '' : ' (optional)'}:</label>
                                 <Input
                                     id={`prize_${stage}`}
                                     type="text"
@@ -755,13 +874,12 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                                     value={prizeDraft[stage] ?? ''}
                                     onChange={(e) => handlePrizeChange(stage, e.target.value)}
                                     placeholder={selectedGameType === 'snowball' ? "e.g. £20" : selectedGameType === 'jackpot' ? "Set at game start" : "e.g. £10"}
-                                    className={isMissing ? 'h-9 border-destructive border-red-500' : 'h-9'}
                                     aria-invalid={isMissing}
                                     aria-describedby={isMissing ? `prize_${stage}_error` : undefined}
                                 />
                               </div>
                               {isMissing && (
-                                <p id={`prize_${stage}_error`} className="text-xs text-red-400 mt-1 ml-[6.5rem]">
+                                <p id={`prize_${stage}_error`} className="ml-[7.75rem] mt-1.5 text-sm text-anchor-danger-text">
                                   Prize required for {stage}.
                                 </p>
                               )}
@@ -770,20 +888,20 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                       })}
                   </div>
                   {isGameLocked && (
-                    <p className="text-xs text-muted-foreground mt-1 text-yellow-200/80">Locked: game already started</p>
+                    <p className={LOCKED_NOTE}>Locked: game already started</p>
                   )}
               </div>
 
             </fieldset>
 
             <div>
-              <label className="text-sm font-medium text-slate-300 mb-1 block">Background Colour</label>
+              <label className={LABEL}>Book colour</label>
               <div className="flex gap-2">
                 <input
                     type="color"
                     value={backgroundColor}
                     onChange={(e) => setBackgroundColor(e.target.value)}
-                    className="h-10 w-16 p-1 bg-slate-900 border border-slate-700 rounded cursor-pointer"
+                    className="h-[52px] w-16 shrink-0 cursor-pointer rounded-input border border-line-strong bg-anchor-green-deep p-1"
                 />
                 <Input
                     type="text"
@@ -791,28 +909,28 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                     placeholder="#ffffff"
                     value={backgroundColor}
                     pattern="^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
-                    className="w-32 font-mono uppercase"
+                    className="w-36 uppercase tabular-nums"
                     onChange={(e) => setBackgroundColor(e.target.value)}
                 />
               </div>
             </div>
 
             <div>
-              <label className="text-sm font-medium text-slate-300 mb-1 block">Notes</label>
+              <label className={LABEL}>Notes</label>
               <textarea
                 name="notes"
                 defaultValue={editingGame?.notes || ""}
                 rows={2}
-                className="flex w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bingo-primary"
+                className={fieldClass}
               />
             </div>
 
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
-                <Button variant="secondary" type="button" onClick={handleClose} disabled={isSubmitting}>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-line-gold pt-4">
+                <Button variant="ghost" size="sm" type="button" onClick={handleClose} disabled={isSubmitting}>
                 Cancel
                 </Button>
-                <Button variant="primary" type="submit" disabled={isSubmitting || missingPrizeStages.length > 0}>
-                {editingGame ? 'Save Changes' : 'Add Game'}
+                <Button variant="primary" size="sm" type="submit" disabled={isSubmitting || missingPrizeStages.length > 0}>
+                {editingGame ? 'Save changes' : 'Add game'}
                 </Button>
             </div>
         </form>
@@ -825,11 +943,12 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
         title={deleteGameTarget ? `Delete game "${deleteGameTarget.name}"?` : 'Delete game?'}
         footer={
           <>
-            <Button variant="ghost" onClick={handleCloseDeleteGame} disabled={isDeletingGame}>
+            <Button variant="ghost" size="sm" onClick={handleCloseDeleteGame} disabled={isDeletingGame}>
               Cancel
             </Button>
             <Button
-              variant="danger"
+              variant="primary"
+              size="sm"
               onClick={handleConfirmDeleteGame}
               disabled={!isDeleteGameConfirmed || isDeletingGame}
             >
@@ -839,21 +958,21 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
         }
       >
         {deleteGameTarget && (
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             {deleteGameError && (
-              <div className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
+              <div className={ERROR_PANEL}>
                 {deleteGameError}
               </div>
             )}
-            <p className="text-sm text-white/85">
+            <p>
               This will permanently delete the game from this session. This action cannot be undone.
             </p>
-            <p className="text-sm text-white/85">
+            <p className="text-sm text-anchor-sage">
               Started, completed, or already-won games cannot be deleted.
             </p>
-            <div className="space-y-2">
-              <label htmlFor="confirmDeleteGame" className="text-sm font-medium text-white/85">
-                Type the game name <span className="font-mono text-white">{deleteGameTarget.name}</span> to confirm:
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="confirmDeleteGame" className={fieldLabelClass}>
+                Type the game name <span className="text-anchor-gold-bright">{deleteGameTarget.name}</span> to confirm:
               </label>
               <Input
                 id="confirmDeleteGame"
@@ -874,25 +993,25 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
         onClose={() => { if (!isVoiding) { setVoidTarget(null); setVoidReason(''); setVoidError(null); } }}
         title="Void this winner?"
       >
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           {voidTarget && (
-            <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-sm">
-              <p className="text-white font-semibold">
+            <div className="rounded-card border border-line bg-anchor-green-raised px-4 py-3">
+              <p className="font-semibold">
                 {voidTarget.stage} on {voidTarget.game ? `Game ${voidTarget.game.game_index}: ${voidTarget.game.name}` : 'an unknown game'}
               </p>
-              <p className="text-slate-300">{voidTarget.prize_description || 'No prize recorded'}</p>
+              <p className="text-sm text-anchor-sage">{voidTarget.prize_description || 'No prize recorded'}</p>
             </div>
           )}
-          <p className="text-sm text-white/85">
+          <p>
             The win is kept and marked void, with your reason against it. Nothing is deleted, and
-            the row stays visible here and in Winner History so the correction is on the record.
+            the row stays visible here and on the Winners page so the correction is on the record.
           </p>
-          <p className="text-sm text-yellow-200/85">
-            If this was a snowball jackpot that has already settled, voiding it here does NOT move
+          <p className="text-sm text-anchor-gold-bright">
+            If this was a snowball jackpot that has already settled, voiding it here does not move
             the pot back. Correct the pot on the Snowball page as well.
           </p>
-          <div className="space-y-2">
-            <label htmlFor="voidReason" className="text-sm font-medium text-white/85">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="voidReason" className={fieldLabelClass}>
               Reason (required)
             </label>
             <Input
@@ -904,21 +1023,22 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
               autoComplete="off"
               disabled={isVoiding}
             />
-            <p className="text-xs text-slate-500">
+            <p className="text-[13px] text-anchor-sage">
               Do not put a customer&rsquo;s name here. Winners are recorded anonymously on purpose.
             </p>
           </div>
           {voidError && (
-            <div role="alert" className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
+            <div role="alert" className={ERROR_PANEL}>
               {voidError}
             </div>
           )}
-          <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" type="button" onClick={() => setVoidTarget(null)} disabled={isVoiding}>
+          <div className="flex flex-wrap justify-end gap-2 pt-1">
+            <Button variant="ghost" size="sm" type="button" onClick={() => setVoidTarget(null)} disabled={isVoiding}>
               Cancel
             </Button>
             <Button
-              variant="danger"
+              variant="primary"
+              size="sm"
               type="button"
               onClick={handleConfirmVoidWinner}
               disabled={isVoiding || voidReason.trim().length === 0}
@@ -932,52 +1052,53 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
       <Modal
         isOpen={showResetModal}
         onClose={handleCloseReset}
-        title={`Reset session "${session.name}" to Ready?`}
+        title={`Reset session "${session.name}" to ready?`}
         footer={
           <>
-            <Button variant="ghost" onClick={handleCloseReset} disabled={isResetting}>
+            <Button variant="ghost" size="sm" onClick={handleCloseReset} disabled={isResetting}>
               Cancel
             </Button>
             <Button
-              variant="danger"
+              variant="primary"
+              size="sm"
               onClick={handleConfirmReset}
               disabled={!isResetConfirmed || isResetting}
             >
-              {isResetting ? 'Resetting…' : 'Reset Session'}
+              {isResetting ? 'Resetting…' : 'Reset session'}
             </Button>
           </>
         }
       >
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           {resetError && (
-            <div className="p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
+            <div className={ERROR_PANEL}>
               {resetError}
             </div>
           )}
-          <p className="text-sm text-white/85">
+          <p>
             This wipes the live record of this session and puts it back into the Ready state.
             The following are deleted:
           </p>
-          <ul className="list-disc list-inside text-sm text-white/85 space-y-1 pl-2">
+          <ul className="flex list-inside list-disc flex-col gap-1 pl-2">
             <li>All game states (called numbers, current stage, current pattern)</li>
             <li>All recorded winners for this session, including voided ones</li>
           </ul>
-          <p className="text-sm text-white/85">
+          <p className="text-sm text-anchor-sage">
             Snowball pot balances, the pot&rsquo;s own history and the game configuration are not
             touched. The list above used to claim it deleted snowball history; it never did.
           </p>
-          <p className="text-sm text-emerald-200/90">
+          <p className="text-sm text-anchor-success-text">
             A record of exactly what was deleted, including the winners, is kept so this can be
             checked afterwards.
           </p>
-          <p className="text-sm text-yellow-200/85">
+          <p className="text-sm text-anchor-gold-bright">
             If this session&rsquo;s snowball game has already settled the pot, the reset will be
             refused: the pot has moved and cannot be safely rewound. Correct the pot on the
             Snowball page first.
           </p>
-          <div className="space-y-2">
-            <label htmlFor="confirmReset" className="text-sm font-medium text-white/85">
-              Type <span className="font-mono text-white">RESET</span> or the session name <span className="font-mono text-white">{session.name}</span> to confirm:
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="confirmReset" className={fieldLabelClass}>
+              Type <span className="text-anchor-gold-bright">RESET</span> or the session name <span className="text-anchor-gold-bright">{session.name}</span> to confirm:
             </label>
             <Input
               id="confirmReset"

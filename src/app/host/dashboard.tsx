@@ -6,11 +6,14 @@ import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { endNight, settleSnowballPotForGame, startGame } from './actions';
 import type { UnsettledSnowballGame } from './claim-action-types';
-import { Card, CardContent } from '@/components/ui/card';
+import { ChevronDown } from 'lucide-react';
+import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Kicker } from '@/components/ui/kicker';
 import { cn } from '@/lib/utils';
 import { Modal } from '@/components/ui/modal';
-import { Input } from '@/components/ui/input';
+import { Input, fieldLabelClass } from '@/components/ui/input';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {
@@ -216,67 +219,70 @@ export default function HostDashboard({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4">
       {/* X6: a finished snowball game whose pot never moved. The retry banner
           on the game screen is gone once the host leaves or reloads, so the
           dashboard keeps offering it until the pot is settled. */}
       {settlementCheckFailed && (
-        <div role="alert" className="rounded-xl border-2 border-red-500 bg-red-950/80 p-4 text-base text-white">
-          Could not check whether every snowball pot has settled. Reload to try again.
+        <div role="alert" className="flex flex-col gap-1 rounded-card border border-anchor-danger bg-anchor-green-card p-4">
+          <Kicker>Needs attention</Kicker>
+          <p className="text-[15px] leading-normal text-anchor-danger-text">
+            Could not check whether every snowball pot has settled. Reload to try again.
+          </p>
         </div>
       )}
       {visibleUnsettledGames.length > 0 && (
-        <Card className="bg-[#7a5719]/40 border-[#a57626]">
-          <CardContent className="p-4 space-y-3">
-            <div>
-              <h2 className="text-lg font-bold text-white">Snowball pot not settled</h2>
-              <p className="text-base text-white/85">
-                These snowball games have finished but their pot never moved, so the jackpot is
-                still showing its old figure. Settle each one. If a pot was already corrected by
-                hand in Admin, do not settle it here as well.
-              </p>
-            </div>
-            <ul className="space-y-2">
-              {visibleUnsettledGames.map((g) => (
-                <li key={g.gameId} className="flex flex-col gap-2 rounded-lg border border-[#a57626]/70 bg-[#003f27]/70 p-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="font-bold text-white">Game {g.gameIndex}: {g.gameName}</p>
-                    <p className="text-sm text-white/80">
+        <Card accent className="flex flex-col gap-3 p-4">
+          <div className="flex flex-col gap-1">
+            <Kicker>Needs attention</Kicker>
+            <h2 className="text-2xl leading-[1.05] text-anchor-cream-text">Snowball pot not settled</h2>
+            <p className="text-sm leading-[1.45] text-anchor-sage">
+              {visibleUnsettledGames.length === 1
+                ? 'This snowball game finished but its pot never moved, so the jackpot still shows the old figure. Settle it once. If an admin already corrected it by hand, leave it.'
+                : 'These snowball games finished but their pots never moved, so the jackpot still shows the old figure. Settle each one once. If an admin already corrected one by hand, leave it.'}
+            </p>
+          </div>
+          <ul className="flex flex-col gap-3">
+            {visibleUnsettledGames.map((g) => (
+              <li key={g.gameId} className="flex flex-col gap-2 border-t border-line pt-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <p className="text-base font-semibold leading-tight">Game {g.gameIndex} · {g.gameName}</p>
+                    <p className="text-[13px] leading-snug text-anchor-sage">
                       {g.sessionName}{g.sessionStartDate ? `, ${formatDateInLondon(g.sessionStartDate)}` : ''}
                     </p>
-                    {settleError?.gameId === g.gameId && (
-                      <p role="alert" className="mt-1 rounded border-2 border-red-500 bg-red-950/80 px-2 py-1 text-base font-semibold text-white">{settleError.message}</p>
-                    )}
                   </div>
                   <Button
                     variant="primary"
-                    className="min-h-[44px] shrink-0 bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+                    size="sm"
+                    className="shrink-0 px-5"
                     onClick={() => { void handleSettleGame(g.gameId); }}
                     disabled={settlingGameId !== null}
                   >
                     {settlingGameId === g.gameId ? 'Settling…' : 'Settle'}
                   </Button>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
+                </div>
+                {settleError?.gameId === g.gameId && (
+                  <p role="alert" className="text-sm leading-snug text-anchor-danger-text">{settleError.message}</p>
+                )}
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-white">Available Sessions</h2>
-        <p className="text-white/80 text-sm">Tap a session to view games</p>
+      <div className="flex flex-col gap-1">
+        <Kicker>Tonight and upcoming</Kicker>
+        <h2 className="text-[28px] leading-[1.05] text-anchor-cream-text">Sessions</h2>
       </div>
 
       {sessions.length === 0 ? (
-        <Card className="bg-[#003f27]/85 border-[#1f7c58] text-center p-8">
-          <CardContent>
-            <p className="text-white/85 mb-4">No sessions available.</p>
-            <p className="text-sm text-white/75">Please check the Admin page to create or activate sessions.</p>
-          </CardContent>
+        <Card className="flex flex-col gap-1.5 px-5 py-8 text-center">
+          <p className="text-base text-anchor-cream-text">No sessions available.</p>
+          <p className="text-sm leading-normal text-anchor-sage">Please check the Admin page to create or activate sessions.</p>
         </Card>
       ) : (
-        <div className="grid gap-4">
+        <div className="flex flex-col gap-4">
           {sessions.map((session) => {
             // Sort games by index
             const sortedGames = [...session.games].sort((a, b) => a.game_index - b.game_index);
@@ -290,45 +296,55 @@ export default function HostDashboard({
             const gameInProgress = sortedGames.find(g => g.game_states?.status === 'in_progress');
 
             return (
-              <Card 
-                key={session.id} 
-                className={cn(
-                  "bg-[#005131]/88 border-[#1f7c58] transition-all duration-200",
-                  expandedSessionId === session.id ? "ring-2 ring-[#a57626]" : "hover:bg-[#0f6846]/90"
-                )}
+              <Card
+                key={session.id}
+                // The open session carries the gold top rule.
+                accent={expandedSessionId === session.id}
+                className="overflow-hidden"
               >
                 <div
-                  onClick={() => toggleSession(session.id)} 
-                  className="p-4 flex items-center justify-between cursor-pointer"
+                  onClick={() => toggleSession(session.id)}
+                  className="flex min-h-11 cursor-pointer items-center justify-between gap-3 p-4"
                 >
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-lg font-bold text-white">{session.name}</h3>
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-[22px] leading-[1.05] text-anchor-cream-text">{session.name}</h3>
                       {session.is_test_session && (
-                        <span className="px-2 py-0.5 text-sm font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">TEST</span>
+                        <Badge variant="outline">Test</Badge>
                       )}
                     </div>
-                    <p className="text-sm text-white/80">{formatDateInLondon(session.start_date)}</p>
+                    <p className="text-sm text-anchor-sage">
+                      {[
+                        formatDateInLondon(session.start_date),
+                        `${sortedGames.length} ${sortedGames.length === 1 ? 'game' : 'games'}`,
+                      ].filter(Boolean).join(' · ')}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-2.5">
                     {session.status === 'running' && (
-                      <span className="px-2 py-1 text-sm font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">RUNNING</span>
+                      <Badge variant="success" dot>Running</Badge>
                     )}
                     {session.status === 'ready' && (
-                      <span className="px-2 py-1 text-sm font-bold bg-[#0f6846] text-white rounded-full border border-[#1f7c58]">READY</span>
+                      <Badge variant="outline">Ready</Badge>
                     )}
-                    <div className={cn("transform transition-transform text-white/75", expandedSessionId === session.id ? "rotate-180" : "")}>
-                      ▼
-                    </div>
+                    <ChevronDown
+                      aria-hidden="true"
+                      size={20}
+                      strokeWidth={2}
+                      className={cn(
+                        "text-anchor-sage transition-transform duration-200 ease-anchor",
+                        expandedSessionId === session.id ? "rotate-180" : ""
+                      )}
+                    />
                   </div>
                 </div>
-                
+
                 {expandedSessionId === session.id && (
-                  <div className="border-t border-[#1f7c58] bg-[#003f27]/82 p-4">
+                  <div className="flex animate-fade-in flex-col gap-2 border-t border-line-gold bg-anchor-green-raised px-4 pb-4 pt-3">
                     {sortedGames.length === 0 ? (
-                      <p className="text-white/75 text-center py-4">No games configured for this session.</p>
+                      <p className="py-4 text-center text-sm text-anchor-sage">No games configured for this session.</p>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="flex flex-col gap-2">
                         {sortedGames.map((game) => {
                           const status = game.game_states?.status || 'not_started';
                           const isCompleted = status === 'completed';
@@ -343,45 +359,57 @@ export default function HostDashboard({
                           const isLocked = !isPlayable;
 
                           return (
-                            <div 
-                              key={game.id} 
+                            <div
+                              key={game.id}
                               className={cn(
-                                "flex items-center justify-between p-3 rounded-lg border transition-colors",
-                                isInProgress ? "bg-[#a57626]/20 border-[#a57626]/70" : 
-                                isCompleted ? "bg-[#005131]/60 border-[#1f7c58]" : 
-                                isLocked ? "bg-[#005131]/45 border-[#1f7c58]/60 opacity-50" :
-                                "bg-[#0f6846] border-[#1f7c58]"
+                                "flex flex-col gap-2 rounded-card border px-3 py-2.5 transition-colors duration-200 ease-anchor",
+                                isInProgress ? "border-anchor-gold-bright bg-anchor-gold-bright/[0.08]" :
+                                isCompleted ? "border-line bg-anchor-green-card" :
+                                isLocked ? "border-line bg-anchor-green-card opacity-50" :
+                                "border-line bg-anchor-green-card"
                               )}
                             >
-                              <div className="flex items-center gap-3">
-                                <div className={cn(
-                                  "w-2 h-2 rounded-full",
-                                  isInProgress ? "bg-[#a57626] animate-pulse" :
-                                  isCompleted ? "bg-white/70" :
-                                  "bg-white/60"
-                                )}></div>
-                                <div>
-                                  <h4 className={cn("font-bold", isCompleted ? "text-white/80" : "text-white")}>
-                                    Game {game.game_index}: {game.name}
-                                  </h4>
-                                  <div className="flex gap-2 text-sm">
-                                    <span className="text-white/80 uppercase tracking-wider">{game.type}</span>
-                                    {status === 'not_started' && <span className="text-white/70">Not Started</span>}
-                                    {status === 'in_progress' && <span className="text-white font-bold">In Progress</span>}
-                                    {status === 'completed' && <span className="text-white/70">Completed</span>}
+                              <div className="flex items-center justify-between gap-2.5">
+                                <div className="flex min-w-0 items-center gap-3">
+                                  {/* The number disc: gold for the game to play
+                                      next (or the one being played), green for
+                                      a finished game, a hairline for the rest. */}
+                                  <span className={cn(
+                                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-display text-xl leading-none",
+                                    isCompleted
+                                      ? "bg-anchor-green text-white"
+                                      : isPlayable
+                                        ? "bg-anchor-gold-bright text-anchor-charcoal"
+                                        : "border border-line-strong text-anchor-cream-text"
+                                  )}>
+                                    {game.game_index}
+                                  </span>
+                                  <div className="flex min-w-0 flex-col gap-0.5">
+                                    <p className="text-base font-semibold leading-tight text-anchor-cream-text">
+                                      {game.name}
+                                    </p>
+                                    <p className={cn(
+                                      "text-[11px] font-semibold uppercase leading-snug tracking-[0.08em]",
+                                      isInProgress ? "text-anchor-gold-bright" :
+                                      isCompleted ? "text-anchor-success-text" :
+                                      "text-anchor-sage"
+                                    )}>
+                                      {game.type}
+                                      {status === 'not_started' && ' · Not started'}
+                                      {status === 'in_progress' && ' · In progress'}
+                                      {status === 'completed' && ' · Completed'}
+                                    </p>
                                   </div>
                                 </div>
-                              </div>
-                              
-                              <div className="flex flex-col items-end gap-1">
+
                                 {isPlayable ? (
-                                  <Button 
-                                    size="sm" 
-                                    variant={isInProgress ? "primary" : isCompleted ? "outline" : "secondary"}
-                                    className={
-                                      isInProgress ? "bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white" :
-                                      isCompleted ? "border-[#a57626] text-white hover:bg-[#a57626]/20" : ""
-                                    }
+                                  <Button
+                                    size="sm"
+                                    // Resume and Start are the row's call to
+                                    // action. Re-open is the quieter one: it asks
+                                    // first, and re-opens a finished game.
+                                    variant={isCompleted ? "outline" : "primary"}
+                                    className="shrink-0 px-4"
                                     disabled={startingGameId !== null}
                                     onClick={(e) => {
                                         e.preventDefault();
@@ -396,21 +424,25 @@ export default function HostDashboard({
                                     {isStartingThis ? 'Starting…' : isInProgress ? 'Resume' : isCompleted ? 'Re-open' : 'Start'}
                                   </Button>
                                 ) : (
-                                  <Button 
-                                    size="sm" 
-                                    variant="ghost" 
-                                    disabled 
-                                    className="text-white/60"
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    tone="quiet"
+                                    disabled
+                                    // A locked row is already faded to half; the
+                                    // button's own fade on top would make the
+                                    // label unreadable.
+                                    className={cn("shrink-0 px-4", !isInProgress && !isCompleted && "disabled:opacity-100")}
                                   >
                                     {isBlockedByOtherGame && isCompleted ? 'Finished' : 'Locked'}
                                   </Button>
                                 )}
-                                {gameStartError && (
-                                  <p role="alert" className="max-w-[16rem] rounded border-2 border-red-500 bg-red-950/80 px-2 py-1 text-right text-sm font-semibold text-white">
-                                    {gameStartError}
-                                  </p>
-                                )}
                               </div>
+                              {gameStartError && (
+                                <p role="alert" className="text-sm leading-snug text-anchor-danger-text">
+                                  {gameStartError}
+                                </p>
+                              )}
                             </div>
                           );
                         })}
@@ -422,15 +454,16 @@ export default function HostDashboard({
                         the last game only completes the night when every game
                         has been played. */}
                     {session.status === 'running' && (
-                      <div className="mt-4 pt-4 border-t border-[#1f7c58] flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-base text-white/80">
+                      <div className="mt-2 flex items-center justify-between gap-3 border-t border-line pt-3">
+                        <p className="text-[13px] leading-[1.4] text-anchor-sage">
                           {gameInProgress
                             ? `Finish Game ${gameInProgress.game_index} before ending the night.`
                             : 'Finished for tonight? End the night so the TV shows the end-of-night screen.'}
                         </p>
                         <Button
-                          variant="secondary"
-                          className="min-h-[44px] shrink-0 border-[#a57626] text-white hover:bg-[#a57626]/20"
+                          variant="outline"
+                          size="sm"
+                          className="shrink-0 px-4"
                           onClick={() => openEndNight(session)}
                           disabled={!!gameInProgress || startingGameId !== null}
                         >
@@ -450,21 +483,22 @@ export default function HostDashboard({
         isOpen={!!reopenTarget}
         onClose={() => setReopenTarget(null)}
         title="Re-open this finished game?"
-        className="max-w-md bg-[#003f27] border border-[#1f7c58]"
+        kicker={reopenTarget?.gameName}
+        className="max-w-md"
       >
-        <div className="space-y-4">
-          <p className="text-base text-white/90">
-            <span className="font-bold text-white">{reopenTarget?.gameName}</span> has finished.
+        <div className="flex flex-col gap-4">
+          <p>
+            <strong className="font-semibold">{reopenTarget?.gameName}</strong> has finished.
             Re-opening it resumes calling so you can correct a mistake.
           </p>
         </div>
-        <div className="mt-6 flex justify-end gap-3">
-          <Button variant="secondary" className="min-h-[44px]" onClick={() => setReopenTarget(null)}>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" size="sm" className="px-4" onClick={() => setReopenTarget(null)}>
             Keep it finished
           </Button>
           <Button
             variant="primary"
-            className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+            size="sm"
             onClick={() => { void handleConfirmReopen(); }}
             disabled={startingGameId !== null}
           >
@@ -477,40 +511,41 @@ export default function HostDashboard({
         isOpen={!!endNightTarget}
         onClose={closeEndNight}
         title="End the night?"
-        className="max-w-md bg-[#003f27] border border-[#1f7c58]"
+        kicker={endNightTarget?.sessionName}
+        className="max-w-md"
       >
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           {endNightError && (
-            <div role="alert" className="p-3 bg-red-950/80 border-2 border-red-500 text-white rounded">
+            <div role="alert" className="text-sm leading-snug text-anchor-danger-text">
               {endNightError}
             </div>
           )}
-          <p className="text-base text-white/90">
-            <span className="font-bold text-white">{endNightTarget?.sessionName}</span> will be marked as
+          <p>
+            <strong className="font-semibold">{endNightTarget?.sessionName}</strong> will be marked as
             finished. The TV and the phones move to the end-of-night screen.
           </p>
           {endNightTarget && endNightTarget.unplayedGames.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-base font-semibold text-white">These games have not been played and will stay unplayed:</p>
-              <ul className="list-disc pl-5 text-base text-white/90">
+            <div className="flex flex-col gap-2">
+              <p className="font-semibold">These games have not been played and will stay unplayed:</p>
+              <ul className="list-disc pl-5">
                 {endNightTarget.unplayedGames.map((name) => (
                   <li key={name}>{name}</li>
                 ))}
               </ul>
-              <p className="text-base text-white/85">A snowball pot on an unplayed game does not move.</p>
+              <p className="text-anchor-sage">A snowball pot on an unplayed game does not move.</p>
             </div>
           ) : (
-            <p className="text-base text-white/85">Every game has been played.</p>
+            <p className="text-anchor-sage">Every game has been played.</p>
           )}
-          <p className="text-base text-white/75">Only an admin can open the night again once it has ended.</p>
+          <p className="text-sm text-anchor-sage">Only an admin can open the night again once it has ended.</p>
         </div>
-        <div className="mt-6 flex justify-end gap-3">
-          <Button variant="secondary" className="min-h-[44px]" onClick={closeEndNight} disabled={isEndingNight}>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" size="sm" className="px-4" onClick={closeEndNight} disabled={isEndingNight}>
             Keep the night open
           </Button>
           <Button
             variant="primary"
-            className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+            size="sm"
             onClick={() => { void handleConfirmEndNight(); }}
             disabled={isEndingNight}
           >
@@ -522,20 +557,21 @@ export default function HostDashboard({
       <Modal
         isOpen={!!cashJackpotPrompt}
         onClose={closeCashJackpotPrompt}
-        title="Set Cash Jackpot"
-        className="max-w-md bg-[#003f27] border border-[#1f7c58]"
+        title="Set cash jackpot"
+        kicker={cashJackpotPrompt?.gameName}
+        className="max-w-md"
       >
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           {cashJackpotError && (
-            <div role="alert" className="p-3 bg-red-950/80 border-2 border-red-500 text-white rounded">
+            <div role="alert" className="text-sm leading-snug text-anchor-danger-text">
               {cashJackpotError}
             </div>
           )}
-          <p className="text-base text-white/85">
-            Enter tonight&apos;s cash jackpot for <span className="font-bold text-white">{cashJackpotPrompt?.gameName}</span>. This will be shown as the game prize.
+          <p>
+            Enter tonight&apos;s cash jackpot for <strong className="font-semibold">{cashJackpotPrompt?.gameName}</strong>. This will be shown as the game prize.
           </p>
-          <div>
-            <label className="text-base text-white/90 block mb-1">Cash Jackpot Amount</label>
+          <label className="flex flex-col gap-1.5">
+            <span className={fieldLabelClass}>Cash jackpot amount</span>
             <Input
               type="number"
               inputMode="decimal"
@@ -546,11 +582,13 @@ export default function HostDashboard({
               onChange={(event) => setCashJackpotAmount(event.target.value)}
               autoFocus
             />
-          </div>
+          </label>
         </div>
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button
-            variant="secondary"
+            variant="ghost"
+            size="sm"
+            className="px-4"
             onClick={closeCashJackpotPrompt}
             disabled={isSubmittingCashJackpot}
           >
@@ -558,7 +596,7 @@ export default function HostDashboard({
           </Button>
           <Button
             variant="primary"
-            className="bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
+            size="sm"
             onClick={async () => {
               if (!cashJackpotPrompt || isSubmittingCashJackpot) return;
               if (!cashJackpotAmount.trim()) {
@@ -583,7 +621,7 @@ export default function HostDashboard({
             // Disabled on an empty field as well as refused after the tap.
             disabled={isSubmittingCashJackpot || cashJackpotAmount.trim().length === 0}
           >
-            {isSubmittingCashJackpot ? 'Starting...' : 'Set Amount & Start'}
+            {isSubmittingCashJackpot ? 'Starting...' : 'Set amount and start'}
           </Button>
         </div>
       </Modal>

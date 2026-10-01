@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { TV_FONT_SIZES, cn } from './utils';
+import { BRAND_RADII, BRAND_SHADOWS, TV_FONT_SIZES, cn } from './utils';
 
 test('a TV size and a text colour are both kept', () => {
   assert.equal(cn('text-tv-base', 'text-white'), 'text-tv-base text-white');
@@ -33,4 +33,22 @@ test('the list matches the sizes in tailwind.config.ts', () => {
   const config = readFileSync(new URL('../../tailwind.config.ts', import.meta.url), 'utf8');
   const configured = [...config.matchAll(/"(tv-[a-z0-9]+)":\s*\[/g)].map((match) => match[1]);
   assert.deepEqual([...configured].sort(), [...TV_FONT_SIZES].sort());
+});
+
+test('the brand radius and shadow names merge like the built-in ones', () => {
+  assert.equal(cn('rounded-card', 'rounded-full'), 'rounded-full');
+  assert.equal(cn('rounded-full', 'rounded-input'), 'rounded-input');
+  assert.equal(cn('shadow-gold', 'shadow-lift'), 'shadow-lift');
+  // A colour and a brand shadow are different things and both stay.
+  assert.equal(cn('shadow-gold', 'text-anchor-sage'), 'shadow-gold text-anchor-sage');
+});
+
+test('the brand radius and shadow lists match tailwind.config.ts', () => {
+  const config = readFileSync(new URL('../../tailwind.config.ts', import.meta.url), 'utf8');
+  const block = (name: string): string[] => {
+    const body = new RegExp(`${name}:\\s*\\{([^}]*)\\}`).exec(config)?.[1] ?? '';
+    return [...body.matchAll(/^\s*([a-z]+):/gm)].map((match) => match[1]);
+  };
+  assert.deepEqual(block('borderRadius').sort(), [...BRAND_RADII].sort());
+  assert.deepEqual(block('boxShadow').sort(), [...BRAND_SHADOWS].sort());
 });
