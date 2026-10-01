@@ -1093,10 +1093,11 @@ export default function PlayerUI({
               </Card>
             )}
 
-            {/* Recent history. Five chips, allowed to slide sideways rather
-                than shrink: NumberChip carries shrink-0 so the chips stay
-                circular at 320px and at 200 percent text zoom. Keyed on the
-                number, so only the new chip fades in. */}
+            {/* Every number called so far, newest first, wrapping into rows:
+                the newest is top left and the card grows downwards. The chips
+                wrap rather than shrink (NumberChip carries shrink-0), so they
+                stay circular at 320px and at 200 percent text zoom. Keyed on
+                the number, so only the new chip fades in. */}
             {/* "All 90 numbers" is the only route to the full 1 to 90 board,
                 which is the one thing a punter with a paper book actually
                 wants, so it keeps a 44px target and the gold of a link. */}
@@ -1112,8 +1113,10 @@ export default function PlayerUI({
                   All 90 numbers
                 </Button>
               </div>
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 mask-linear-fade-right">
-                {delayedNumbers.slice(-5).reverse().map((num, i) => (
+              {/* As many 56px columns as fit (five on most phones, four at
+                  320px), spread to the card's edges so every row lines up. */}
+              <div className="grid grid-cols-[repeat(auto-fill,56px)] justify-between gap-x-2 gap-y-2.5">
+                {delayedNumbers.slice().reverse().map((num, i) => (
                   <NumberChip
                     key={num}
                     number={num}
@@ -1123,7 +1126,7 @@ export default function PlayerUI({
                     className="animate-fade-in"
                   />
                 ))}
-                {delayedNumbers.length === 0 && <p className="text-[15px] leading-normal text-anchor-sage">No numbers called yet</p>}
+                {delayedNumbers.length === 0 && <p className="col-span-full text-[15px] leading-normal text-anchor-sage">No numbers called yet</p>}
               </div>
             </Card>
           </>
