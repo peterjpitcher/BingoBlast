@@ -1,8 +1,11 @@
 import { redirect } from 'next/navigation';
 
 import { signout } from '@/app/login/actions';
+import { BrandBackdrop } from '@/components/brand-backdrop';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
+import { Kicker } from '@/components/ui/kicker';
+import { AnchorLogo } from '@/components/ui/logo';
 import { createClient } from '@/utils/supabase/server';
 import type { Database } from '@/types/database';
 
@@ -40,27 +43,32 @@ export default async function PendingPage() {
   }
 
   return (
-    <div className="min-h-screen-safe flex flex-col items-center justify-center p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-center">This account is not active yet</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 text-center">
-          <p className="text-white/85">
-            You are signed in as <span className="font-semibold">{user.email}</span>, but the account
+    <div className="relative flex min-h-screen-safe flex-col overflow-hidden bg-anchor-green-deep">
+      <BrandBackdrop />
+
+      <div className="relative mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-7 px-5 pb-10 pt-[calc(env(safe-area-inset-top)+2rem)]">
+        <div className="flex justify-center">
+          <AnchorLogo height={80} priority />
+        </div>
+
+        <Card className="flex flex-col items-center gap-3.5 px-5 py-6 text-center">
+          <Kicker>Nearly there</Kicker>
+          <h1 className="text-[28px] leading-[1.05] text-anchor-cream-text">This account is not active yet</h1>
+          <p className="text-[15px] leading-normal">
+            You are signed in as <strong className="break-all font-semibold">{user.email}</strong>, but the account
             has not been given a role yet, so there is nothing for it to open.
           </p>
-          <p className="text-sm text-white/70">
-            Staff accounts are activated by an administrator. Ask whoever set up your account to
-            turn it on, then sign in again.
+          <p className="text-sm leading-normal text-anchor-sage">
+            Staff accounts are switched on by an administrator. Ask whoever set up your account,
+            then sign in again.
           </p>
-          <form action={signout}>
-            <Button type="submit" variant="outline" className="w-full">
+          <form action={signout} className="mt-1.5 w-full">
+            <Button type="submit" variant="outline" block>
               Sign out
             </Button>
           </form>
-        </CardContent>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }

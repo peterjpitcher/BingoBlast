@@ -1,12 +1,14 @@
 'use client';
 
 import React, { Suspense, useState, useTransition } from 'react';
-import Image from 'next/image';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { login } from './actions';
+import { BrandBackdrop } from '@/components/brand-backdrop';
+import { CopyrightLine } from '@/components/copyright-line';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { Card } from '@/components/ui/card';
+import { Input, fieldLabelClass } from '@/components/ui/input';
+import { AnchorLogo } from '@/components/ui/logo';
 
 function LoginPageContent() {
   const searchParams = useSearchParams();
@@ -17,7 +19,7 @@ function LoginPageContent() {
   const missingSupabaseConfig = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const [error, setError] = useState<string | null>(
     missingSupabaseConfig
-      ? "Configuration Error: Missing Supabase Environment Variables. Please check your .env.local file."
+      ? "Configuration error: the Supabase environment variables are missing. Check your .env.local file."
       : null
   );
 
@@ -31,87 +33,85 @@ function LoginPageContent() {
     startTransition(async () => {
       const result = await login(formData);
       if (!result?.success) {
-        setError(result?.error || "Authentication failed. Please try again.");
+        setError(result?.error || "We could not sign you in. Please try again.");
       } else if (result.redirectTo) {
         router.push(result.redirectTo);
       }
     });
   };
 
+  const hasError = Boolean(error);
+
   return (
-    <div className="min-h-screen-safe flex flex-col items-center justify-center p-4 bg-gradient-to-b from-[#005131] to-[#003f27]">
-      <div className="mb-8 relative w-56 h-24">
-         <Image
-          src="/the-anchor-pub-logo-white-transparent.png"
-          alt="The Anchor"
-          fill
-          className="object-contain"
-          priority
-        />
-      </div>
+    <div className="relative flex min-h-screen-safe flex-col overflow-hidden bg-anchor-green-deep">
+      <BrandBackdrop />
 
-      <Card className="w-full max-w-md border-[#1f7c58] shadow-2xl shadow-black/30 bg-[#005131]/90 backdrop-blur-sm">
-        <CardHeader>
-          <CardTitle className="text-center text-2xl text-[#f5f1e6] font-bold">
-            Welcome Back
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {error && (
-            <div className="mb-4 p-3 text-sm text-red-200 bg-red-900/50 border border-red-800 rounded-md">
-              {error}
+      <div className="relative mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-7 px-5 pb-10 pt-[calc(env(safe-area-inset-top)+2rem)]">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <AnchorLogo height={80} priority />
+          <span className="font-script text-[32px] text-anchor-gold-bright">Welcome back</span>
+        </div>
+
+        <Card accent className="px-5 py-6">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-[18px]">
+            <div className="flex flex-col gap-1">
+              <h1 className="text-[28px] leading-[1.05] text-anchor-cream-text">Staff sign in</h1>
+              <p className="text-sm text-anchor-sage">Accounts are invite only. Ask an admin if you need one.</p>
             </div>
-          )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-emerald-50/90" htmlFor="email">
+            <div className="flex flex-col gap-2">
+              <label className={fieldLabelClass} htmlFor="email">
                 Email address
               </label>
               <Input
                 id="email"
                 name="email"
                 type="email"
-                placeholder="Enter email"
+                autoComplete="email"
+                placeholder="you@the-anchor.pub"
                 required
-                className="bg-[#003f27]/70 border-[#2f8f6a] focus:border-[#a57626]"
+                aria-invalid={hasError}
+                aria-describedby={hasError ? 'login-error' : undefined}
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-emerald-50/90" htmlFor="password">
+            <div className="flex flex-col gap-2">
+              <label className={fieldLabelClass} htmlFor="password">
                 Password
               </label>
               <Input
                 id="password"
                 name="password"
                 type="password"
-                placeholder="Password"
+                autoComplete="current-password"
+                placeholder="••••••••"
                 required
-                className="bg-[#003f27]/70 border-[#2f8f6a] focus:border-[#a57626]"
+                aria-invalid={hasError}
+                aria-describedby={hasError ? 'login-error' : undefined}
               />
             </div>
 
-            <div className="pt-2 space-y-3">
-              <Button
-                type="submit"
-                className="w-full"
-                size="lg"
-                isLoading={isPending}
-              >
-                Sign In
-              </Button>
-            </div>
+            <Button type="submit" size="lg" block className="mt-1" isLoading={isPending}>
+              Sign in
+            </Button>
+
+            {error && (
+              <p id="login-error" role="alert" className="text-sm text-anchor-danger-text">
+                {error}
+              </p>
+            )}
           </form>
-        </CardContent>
-      </Card>
+        </Card>
+
+        <CopyrightLine />
+      </div>
     </div>
   );
 }
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-[#f5f1e6] bg-[#005131]">Loading...</div>}>
+    <Suspense fallback={<div className="flex min-h-screen-safe items-center justify-center bg-anchor-green-deep text-anchor-cream-text">Loading…</div>}>
       <LoginPageContent />
     </Suspense>
   );

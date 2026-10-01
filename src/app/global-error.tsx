@@ -25,9 +25,9 @@ export default function GlobalError({ error, retry }: GlobalErrorProps) {
         <main
           role="status"
           aria-live="polite"
-          className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[var(--anchor-green)] p-6 text-center text-white"
+          className="flex min-h-screen flex-col items-center justify-center gap-4 bg-anchor-green-deep p-6 text-center text-anchor-cream-text"
         >
-          <h1 className="text-[clamp(30px,4.1vh,44px)] font-bold">Reconnecting…</h1>
+          <h1 className="text-[clamp(30px,4.1vh,44px)]">Reconnecting…</h1>
           <p className="text-[clamp(22px,3vh,32px)]">This page will be back in a moment.</p>
         </main>
       </body>
