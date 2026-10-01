@@ -194,13 +194,14 @@ const TV_LAYOUT_VARS = {
  *   - the height left between the bars: the screen less the top bar, the band,
  *     the footer and the main area's padding (706px at 1080p, so 64vh binds;
  *     468px at 720p against 461px, so it binds there too, with 7px to spare);
- *   - the width that keeps it clear of the snowball card in the top right
- *     corner. The ball is centred in the column beside the corner QR, so it
- *     can be that column less twice the card's width (and 10px of air). Never
- *     the binding term at 16:9 (786px and 469px), only on a narrower screen.
+ *   - the width that keeps it clear of the corner QR on its left and the
+ *     snowball card on its right. The ball is centred on the screen, so it can
+ *     be the main area less twice the wider of the two (the QR's column and
+ *     its gap, or the snowball card and 10px of air). Never the binding term
+ *     at 16:9 (1110px and 700px), only on a narrower screen.
  */
 const TV_BALL_SIZE =
-  'min(64vh, calc(100vh - var(--tv-top) - var(--tv-band) - var(--tv-foot) - 2 * var(--tv-pad-y)), calc(100vw - 2 * var(--tv-pad-x) - var(--tv-qr-col) - var(--tv-gap) - 2 * (var(--tv-snowball) + 10px)))';
+  'min(64vh, calc(100vh - var(--tv-top) - var(--tv-band) - var(--tv-foot) - 2 * var(--tv-pad-y)), calc(100vw - 2 * var(--tv-pad-x) - 2 * max(var(--tv-qr-col) + var(--tv-gap), var(--tv-snowball) + 10px)))';
 // The design's shadow, scaled with the ball: a dark edge, a gold glow below and
 // an inner shade (6px, 24px 80px and -40px 90px at 1080p).
 const TV_BALL_SHADOW_CLASS =
@@ -1198,74 +1199,81 @@ export default function DisplayUI({
               />
             )}
 
-            {showActiveGame && (
-              <div className="flex flex-col items-center justify-center h-full w-full">
-                {currentNumberDelayed ? (
-                  <div className="relative" data-check-overlap="ball">
-                     {/* The main ball. TV_BALL_SIZE is the design's 64vh capped
-                        by the real vertical chrome (the top bar, the band, the
-                        footer and the main area's padding, all from
-                        TV_LAYOUT_VARS), so it can never be flat-topped by the
-                        bars. Keyed on the number, so each new call scales in
-                        from 0.92 and fades in over 400ms (animate-ball-in;
-                        nothing moves under prefers-reduced-motion). */}
-                    <BingoBall
-                      key={currentNumberDelayed}
-                      number={currentNumberDelayed}
-                      size={TV_BALL_SIZE}
-                      numberScale={0.68}
-                      borderScale={0.02}
-                      className={cn('animate-ball-in', TV_BALL_SHADOW_CLASS)}
-                    />
-                  </div>
-                ) : (
-                  <>
-                    {/* Stages and prizes are key information, so they are
-                        not pulsed: people need to read them. */}
-                    {showPreCallStagePreview ? (
+            {/* Stages and prizes, before the first call. The card is wide, so
+                it stays in the column beside the corner QR. They are key
+                information, so they are not pulsed: people need to read them. */}
+            {showActiveGame && !currentNumberDelayed && showPreCallStagePreview && (
+              <div className="flex h-full w-full flex-col items-center justify-center">
+                <div
+                  className={cardClass({
+                    accent: true,
+                    className: 'w-full max-w-[1100px] animate-fade-in p-[clamp(18px,3vh,40px)]',
+                  })}
+                  data-check-overlap="stages"
+                >
+                  <p className={cn(TV_KICKER_CLASS, 'text-center')}>
+                    Game stages & prizes
+                  </p>
+                  <div className="mt-[clamp(12px,1.9vh,24px)] flex flex-col gap-[clamp(8px,1.1vh,14px)]">
+                    {stagePrizePreview.map((item) => (
                       <div
-                        className={cardClass({
-                          accent: true,
-                          className: 'w-full max-w-[1100px] animate-fade-in p-[clamp(18px,3vh,40px)]',
-                        })}
-                        data-check-overlap="stages"
+                        key={`${item.stageLabel}-${item.index}`}
+                        className="flex items-baseline justify-between gap-[2vw] rounded-card border border-line bg-anchor-green-raised px-[clamp(16px,1.5vw,28px)] py-[clamp(10px,1.5vh,18px)]"
                       >
-                        <p className={cn(TV_KICKER_CLASS, 'text-center')}>
-                          Game stages & prizes
+                        <p className={tvText('base', 'shrink-0 font-semibold')}>
+                          Stage {item.index + 1}: {item.stageLabel}
                         </p>
-                        <div className="mt-[clamp(12px,1.9vh,24px)] flex flex-col gap-[clamp(8px,1.1vh,14px)]">
-                          {stagePrizePreview.map((item) => (
-                            <div
-                              key={`${item.stageLabel}-${item.index}`}
-                              className="flex items-baseline justify-between gap-[2vw] rounded-card border border-line bg-anchor-green-raised px-[clamp(16px,1.5vw,28px)] py-[clamp(10px,1.5vh,18px)]"
-                            >
-                              <p className={tvText('base', 'shrink-0 font-semibold')}>
-                                Stage {item.index + 1}: {item.stageLabel}
-                              </p>
-                              {/* An empty prize is a setup gap for the host to
-                                  fix, not something to put in front of guests
-                                  (X12e): the host screen still flags it. */}
-                              {item.prizeLabel && (
-                                <p className={tvText('lg', 'min-w-0 text-right font-display text-anchor-gold-bright')}>
-                                  {item.prizeLabel}
-                                </p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
+                        {/* An empty prize is a setup gap for the host to
+                            fix, not something to put in front of guests
+                            (X12e): the host screen still flags it. */}
+                        {item.prizeLabel && (
+                          <p className={tvText('lg', 'min-w-0 text-right font-display text-anchor-gold-bright')}>
+                            {item.prizeLabel}
+                          </p>
+                        )}
                       </div>
-                    ) : (
-                      // Straight on the dark green: the screen is never the
-                      // game's colour now, so it needs no backing panel.
-                      <div data-check-overlap="ready">
-                        <h1 className={cn(TV_SIZE.hero, 'leading-[0.9]')}>Ready...</h1>
-                      </div>
-                    )}
-                  </>
-                )}
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
           </div>
+
+          {/* The ball, and "Ready..." before it. Centred on the screen, not in
+              the column beside the corner QR: that column starts a QR card's
+              width in from the left, which pushed the ball off centre. A layer
+              over the whole main area, whose padding is the same on both
+              sides, so its middle is the screen's. The ball's size keeps it
+              clear of the QR and the snowball card (TV_BALL_SIZE). */}
+          {showActiveGame && (currentNumberDelayed || !showPreCallStagePreview) && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              {currentNumberDelayed ? (
+                <div className="relative" data-check-overlap="ball">
+                  {/* The main ball. TV_BALL_SIZE is the design's 64vh capped
+                      by the real vertical chrome (the top bar, the band, the
+                      footer and the main area's padding, all from
+                      TV_LAYOUT_VARS), so it can never be flat-topped by the
+                      bars. Keyed on the number, so each new call scales in
+                      from 0.92 and fades in over 400ms (animate-ball-in;
+                      nothing moves under prefers-reduced-motion). */}
+                  <BingoBall
+                    key={currentNumberDelayed}
+                    number={currentNumberDelayed}
+                    size={TV_BALL_SIZE}
+                    numberScale={0.68}
+                    borderScale={0.02}
+                    className={cn('animate-ball-in', TV_BALL_SHADOW_CLASS)}
+                  />
+                </div>
+              ) : (
+                // Straight on the dark green: the screen is never the
+                // game's colour now, so it needs no backing panel.
+                <div data-check-overlap="ready">
+                  <h1 className={cn(TV_SIZE.hero, 'leading-[0.9]')}>Ready...</h1>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Snowball countdown card. Top right so it can never collide with
               the corner QR, and static so it needs no prefers-reduced-motion
