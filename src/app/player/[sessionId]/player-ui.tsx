@@ -1,13 +1,16 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Coffee, RefreshCw } from 'lucide-react';
 import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
-import { BingoBall } from '@/components/ui/bingo-ball';
+import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Modal } from '@/components/ui/modal';
+import { Card } from '@/components/ui/card';
+import { Kicker } from '@/components/ui/kicker';
+import { AnchorLogo } from '@/components/ui/logo';
+import { Sheet } from '@/components/ui/sheet';
 import { useWakeLock } from '@/hooks/wake-lock';
 import {
   formatPounds,
@@ -24,6 +27,7 @@ import {
 } from '@/lib/public-selectors';
 import { getInGameSubState, getNightPhase, pickNextGame } from '@/lib/night-phase';
 import { getClaimPanelState } from '@/lib/claim-panel';
+import { formatWinHeadline } from '@/lib/win-headline';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
 import { formatGameIdentity, getGamePosition, getHouseRules } from '@/lib/house-rules';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
@@ -42,6 +46,7 @@ import { PhoneEvents, PhoneReviewButton } from '@/components/display/phone-event
 import type { EventsProjection } from '@/lib/playlist';
 import { useSessionOverview } from '@/components/display/use-session-overview';
 import { logError } from '@/lib/log-error';
+import { KITCHEN_OPEN_UNTIL } from '@/lib/venue-links';
 
 // Define types for props
 type Session = Database['public']['Tables']['sessions']['Row'];
@@ -774,7 +779,6 @@ export default function PlayerUI({
   const isValidating = inGameSubState === 'claim_check';
   const isWin = inGameSubState === 'win';
 
-  const backgroundColor = currentActiveGame?.background_colour || '#005131';
   const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
     ? getSnowballCallsLabel(revealedCallCount, currentSnowballPot.current_max_calls)
@@ -786,13 +790,23 @@ export default function PlayerUI({
     ? getSnowballWindowStatus(revealedCallCount, currentSnowballPot.current_max_calls)
     : null;
 
+  // The line under a win, "£10 · Line · call 22": the stage's prize, the stage
+  // and the revealed count. Recording a winner pauses the game in the same
+  // write, so the count shown is the call the win was made on. A part that is
+  // not known is left out.
+  const winSummary = [
+    currentPrizeText,
+    currentStageName,
+    revealedCallCount > 0 ? `call ${revealedCallCount}` : null,
+  ].filter(Boolean).join(' · ');
+
   // First server answer not in yet. Deliberately brief: unlike the old boolean
   // gate this can always be left, because the poll above resolves the phase on
   // its first response.
   if (loadPhase === 'loading') {
     return (
-      <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-current mr-3" />
+      <div className="flex min-h-screen-safe flex-col items-center justify-center gap-4 bg-anchor-green-deep px-4 text-center text-[15px] text-anchor-sage animate-fade-in">
+        <AnchorLogo height={64} priority />
         Connecting to game…
       </div>
     );
@@ -802,82 +816,84 @@ export default function PlayerUI({
   // screen straight on with no reload.
   if (loadPhase === 'failed') {
     return (
-      <div
-        className="flex min-h-screen items-center justify-center p-6 text-white"
-        style={{ backgroundColor: '#005131' }}
-      >
-        <Card className="w-full max-w-sm bg-[#003f27]/80 border-[#1f7c58]">
-          <CardContent className="p-6 text-center" role="status" aria-live="polite">
-            <div className="text-4xl mb-2">📡</div>
-            <h2 className="text-xl font-bold text-white">Reconnecting to the game</h2>
-            <p className="text-white mt-1">Hold on to your tickets, this screen will catch up in a moment.</p>
-            <span className="mt-4 inline-block h-2 w-2 animate-pulse rounded-full bg-white" />
-          </CardContent>
+      <div className="flex min-h-screen-safe items-center justify-center bg-anchor-green-deep p-4 text-anchor-cream-text">
+        <Card className="w-full max-w-md">
+          <div className="flex flex-col items-center gap-2 px-5 py-6 text-center" role="status" aria-live="polite">
+            <RefreshCw aria-hidden="true" size={36} strokeWidth={2} className="text-anchor-gold-bright" />
+            <h2 className="text-[28px] leading-[1.05] text-anchor-cream-text">Reconnecting to the game</h2>
+            <p className="text-[15px] leading-normal text-anchor-sage">
+              Hold on to your tickets, this screen will catch up in a moment.
+            </p>
+          </div>
         </Card>
       </div>
     );
   }
 
   return (
-    <div
-      className={cn(
-        "min-h-screen pb-8 text-white"
-      )}
-      style={{ backgroundColor: backgroundColor }}
-    >
+    <div className="min-h-screen-safe bg-anchor-green-deep pb-10 text-anchor-cream-text">
       <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Header. The Rules button is here in every part of the night, during
-          play included (spec 5.3). Solid, not see-through: it stays put while
-          the events list scrolls under it, and the list's text showed through
-          an 80 percent tint. */}
-      <div className="bg-[#003f27] p-4 border-b border-[#1f7c58] flex items-center justify-between gap-3 sticky top-0 z-20 shadow-md">
-        <div className="min-w-0">
-          <h1 className="font-bold text-lg leading-tight text-white">{currentSession.name}</h1>
-          {hasRenderableGame && currentActiveGame && (
-            <p className="text-base text-white">
-              {[activeIdentity, currentActiveGame.name].filter(Boolean).join(' · ')}
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+          play included (spec 5.3). Close to solid, not see-through: it stays
+          put while the events list scrolls under it, and the list's text
+          showed through an 80 percent tint. The top padding clears the
+          phone's status bar. */}
+      <header className="sticky top-0 z-20 border-b border-line-gold bg-anchor-green-deep/[0.96]">
+        <div className="mx-auto flex w-full max-w-md items-center justify-between gap-3 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+12px)]">
+          <div className="flex min-w-0 flex-col gap-[3px]">
+            <h1 className="truncate text-[22px] leading-[1.15] text-anchor-cream-text">{currentSession.name}</h1>
+            {hasRenderableGame && currentActiveGame && (
+              <>
+                {/* The book colour is a dot here and a band below: text never
+                    sits on it, whatever colour the admin picked. */}
+                <p className="flex items-center gap-1.5 text-xs font-semibold uppercase leading-[1.3] tracking-[0.12em] text-anchor-gold-bright">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-3 w-3 shrink-0 rounded-full border border-anchor-cream-text"
+                    style={{ backgroundColor: currentActiveGame.background_colour }}
+                  />
+                  <span className="truncate">{activeIdentity}</span>
+                </p>
+                <p className="truncate text-sm leading-[1.3] text-anchor-sage">{currentActiveGame.name}</p>
+              </>
+            )}
+          </div>
           <Button
             variant="outline"
             size="sm"
-            className="min-h-[44px] px-3 text-base"
+            className="shrink-0 px-4"
             onClick={() => setShowRules(true)}
           >
             Rules
           </Button>
-          {hasRenderableGame && currentGameState && (
-            <div className="bg-[#005131] px-3 py-1 rounded border border-[#1f7c58]">
-              <span className="text-sm text-white uppercase block">Calls</span>
-              <span className="font-mono font-bold text-xl leading-none">{revealedCallCount}</span>
-            </div>
-          )}
         </div>
-      </div>
+      </header>
 
-      {/* Solid, not a tint. This used to be bg-[#a57626]/20 painted straight over
-          the game colour, which on the pale yellows and peaches the pub uses to
-          match its paper books left white text on near-white at about 1.4:1.
-          The hint was invisible, so phones slept mid-game. */}
+      {/* The book colour, as an 8px band under the header for the whole game,
+          break included. */}
+      {hasRenderableGame && currentActiveGame && (
+        <div aria-hidden="true" className="h-2" style={{ backgroundColor: currentActiveGame.background_colour }} />
+      )}
+
+      {/* On the raised green in cream, so it reads on every phone. An earlier
+          tint over the game colour left this hint invisible, and phones slept
+          mid-game. */}
       {!isWakeLockActive && (
-        <div className="bg-[#003f27] border-b border-[#a57626]/60 px-4 py-2 text-center text-base font-semibold uppercase tracking-wide text-white">
+        <div className="border-b border-line bg-anchor-green-raised px-4 py-2 text-center text-sm font-semibold text-anchor-cream-text">
           Tap once to keep this screen awake
         </div>
       )}
 
       {/* Main Status Content */}
-      <div className="p-4 space-y-4">
+      <div className="mx-auto flex w-full max-w-md flex-col gap-3.5 p-4">
 
         {/* Status Banners */}
         {isNightOver && (
-          <Card className="bg-[#003f27]/80 border-[#1f7c58]">
-            <CardContent className="p-6 text-center">
-              <div className="text-4xl mb-2">🙏</div>
-              <h2 className="text-xl font-bold text-white">Thanks for coming!</h2>
-              <p className="text-white">Please book for our next bingo event at the bar.</p>
-            </CardContent>
+          <Card accent className="flex flex-col items-center gap-2 px-5 py-6 text-center">
+            <Kicker>Anchor Bingo night</Kicker>
+            <h2 className="text-[34px] leading-none text-anchor-cream-text">Thanks for coming!</h2>
+            <p className="text-[15px] leading-normal">Book your table for the next bingo night at the bar before you leave.</p>
+            <p className="mt-1.5 font-script text-[30px] text-anchor-gold-bright">Where everyone&apos;s welcome</p>
           </Card>
         )}
 
@@ -892,19 +908,15 @@ export default function PlayerUI({
 
         {nightPhase === 'before_start' && (
           <>
-            <Card className="bg-[#003f27]/80 border-[#1f7c58]">
-              <CardContent className="p-6 text-center">
-                <div className="text-4xl mb-2">⏳</div>
-                <h2 className="text-xl font-bold text-white">Waiting for Host</h2>
-                <p className="text-white">Game will start soon...</p>
-              </CardContent>
+            <Card accent className="flex flex-col items-center gap-1.5 px-5 py-6 text-center">
+              <Kicker>Eyes down shortly</Kicker>
+              <h2 className="text-[30px] leading-[1.05] text-anchor-cream-text">Waiting for the caller</h2>
+              <p className="text-[15px] leading-normal text-anchor-sage">Get your books in and your pens ready.</p>
             </Card>
             {/* The rules inline before the first game (spec 5.3). */}
-            <Card className="bg-[#003f27] border-[#1f7c58]">
-              <CardContent className="p-5">
-                <h2 className="text-xl font-bold text-white mb-3">House rules</h2>
-                <PhoneRules rules={houseRules} />
-              </CardContent>
+            <Card className="flex flex-col gap-3 p-5">
+              <h2 className="text-2xl leading-[1.1] text-anchor-cream-text">House rules</h2>
+              <PhoneRules rules={houseRules} />
             </Card>
             {/* What else is on (spec 5.5), next bingo night first. */}
             <PhoneEvents projection={initialEvents} sessionDate={currentSession.start_date ?? null} phase="before_start" />
@@ -915,25 +927,24 @@ export default function PlayerUI({
             is on, as on a break and with the same in-game links. */}
         {nightPhase === 'between_games' && (
           <>
-            <Card className="bg-[#003f27] border-[#1f7c58]">
-              <CardContent className="p-6 text-center">
-                <h2 className="text-xl font-bold text-white">Next game coming up</h2>
-                {nextGame && (
-                  <>
-                    <p className="mt-2 text-xl font-bold text-white">{nextGame.name}</p>
-                    {nextIdentity && (
-                      <p className="mt-1 flex items-center justify-center gap-2 text-base font-semibold text-[#f3d59d]">
-                        <span
-                          aria-hidden
-                          className="inline-block h-4 w-4 shrink-0 rounded-full border-2 border-white"
-                          style={{ backgroundColor: nextGame.background_colour }}
-                        />
-                        {nextIdentity}
-                      </p>
-                    )}
-                  </>
-                )}
-              </CardContent>
+            <Card accent className="flex flex-col items-center gap-1.5 px-5 py-6 text-center">
+              <Kicker>Anchor Bingo night</Kicker>
+              <h2 className="text-[30px] leading-[1.05] text-anchor-cream-text">Next game coming up</h2>
+              {nextGame && (
+                <>
+                  <p className="mt-1.5 font-display text-[22px] leading-[1.1] text-anchor-cream-text">{nextGame.name}</p>
+                  {nextIdentity && (
+                    <p className="flex items-center justify-center gap-1.5 text-xs font-semibold uppercase leading-[1.3] tracking-[0.12em] text-anchor-gold-bright">
+                      <span
+                        aria-hidden
+                        className="inline-block h-3 w-3 shrink-0 rounded-full border border-anchor-cream-text"
+                        style={{ backgroundColor: nextGame.background_colour }}
+                      />
+                      {nextIdentity}
+                    </p>
+                  )}
+                </>
+              )}
             </Card>
             <PhoneEvents
               projection={initialEvents}
@@ -945,14 +956,11 @@ export default function PlayerUI({
 
         {isOnBreak && (
           <>
-            {/* The solid card background, not a 20 percent tint over the game
-                colour, which left white text at about 1.4:1 on a pale book colour. */}
-            <Card className="bg-[#003f27] border-yellow-600">
-              <CardContent className="p-6 text-center">
-                <div className="text-4xl mb-2 animate-bounce">☕️</div>
-                <h2 className="text-2xl font-bold text-white">On Break</h2>
-                <p className="text-white">We will resume shortly</p>
-              </CardContent>
+            <Card accent className="flex flex-col items-center gap-1.5 px-5 py-6 text-center">
+              <Coffee aria-hidden="true" size={36} strokeWidth={2} className="text-anchor-gold-bright" />
+              <h2 className="text-[34px] leading-none text-anchor-cream-text">Break time</h2>
+              <p className="text-[15px] leading-normal">Hold on to your tickets. We will be back shortly.</p>
+              <p className="mt-1.5 font-script text-[30px] text-anchor-gold-bright">Kitchen open until {KITCHEN_OPEN_UNTIL}</p>
             </Card>
             {/* What else is on, under the break card and next bingo night
                 first: the same list as the TV's break loop, with the in-game
@@ -966,194 +974,210 @@ export default function PlayerUI({
           </>
         )}
 
-        {/* The live claim (spec 5.2), replacing the old "Checking Claim" card. */}
+        {/* The live claim (spec 5.2), replacing the old "Checking Claim" card.
+            The panel draws the headline, the balls and the count; the card
+            and its label are drawn here. */}
         {isValidating && claimPanel && (
-          <Card className="bg-[#003f27] border-[#a57626]">
-            <CardContent className="p-5">
-              <ClaimPanel state={claimPanel} variant="phone" />
-            </CardContent>
+          <Card className="flex flex-col gap-3 border-line-strong px-4 py-5 text-center">
+            <Kicker as="p">Hold your tickets</Kicker>
+            <ClaimPanel state={claimPanel} variant="phone" />
           </Card>
         )}
 
+        {/* The win is only ever shown once it is recorded. The headline comes
+            from the database in capitals; formatWinHeadline recases it. */}
         {isWin && (
-          <Card className="bg-green-600 border-green-400 shadow-[0_0_30px_rgba(34,197,94,0.4)]">
-            <CardContent className="p-6 text-center text-white">
-              <div className="text-6xl mb-2">🎉</div>
-              <h2 className="text-3xl font-black uppercase">{currentGameState?.display_win_text}</h2>
-              {currentGameState?.display_winner_name && (
-                <p className="text-xl mt-2 font-medium">{currentGameState.display_winner_name}</p>
-              )}
-              {/* The claimed balls stay on screen under the win. */}
-              {claimPanel && claimPanel.balls.length > 0 && (
-                <div className="mt-4">
-                  <ClaimBalls balls={claimPanel.balls} variant="phone" />
-                </div>
-              )}
-            </CardContent>
+          <Card accent className="flex flex-col items-center gap-2.5 px-4 py-6 text-center shadow-gold animate-fade-up">
+            <p className="font-script text-[30px] text-anchor-gold-bright">Well played</p>
+            <h2 className="text-[40px] leading-[0.95] text-anchor-cream-text">
+              {formatWinHeadline(currentGameState?.display_win_text)}
+            </h2>
+            {currentGameState?.display_winner_name && (
+              <p className="text-[15px] leading-normal text-anchor-sage">{currentGameState.display_winner_name}</p>
+            )}
+            {/* The claimed balls stay on screen under the win. */}
+            {claimPanel && claimPanel.balls.length > 0 && (
+              <div className="mt-1.5">
+                <ClaimBalls balls={claimPanel.balls} variant="phone" />
+              </div>
+            )}
+            {winSummary && <p className="text-[15px] font-semibold text-anchor-gold-bright">{winSummary}</p>}
           </Card>
         )}
 
         {/* Active Game Display */}
         {hasRenderableGame && !isOnBreak && (
           <>
-            {/* Info Cards */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className={cn("bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]", !currentPrizeText && "col-span-2")}>
-                <span className="text-sm text-white uppercase block">Playing For</span>
-                <span className="font-bold text-white text-xl leading-tight">
-                  {currentStageName}
-                </span>
-              </div>
-              {/* Hidden when empty: "Prize not set" is for the host screen
-                  only (X12e). */}
-              {currentPrizeText && (
-                <div className="bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]">
-                  <span className="text-sm text-white uppercase block">Prize</span>
-                  <span className="font-bold text-xl leading-tight text-white">
-                    {currentPrizeText}
-                  </span>
+            <Card accent className="flex flex-col items-center gap-3.5 px-4 pb-4 pt-5">
+              {/* Current Number. Keyed on the number, so each new call fades
+                  in and settles once. */}
+              {currentNumberDelayed ? (
+                <BingoBall
+                  key={currentNumberDelayed}
+                  number={currentNumberDelayed}
+                  size={200}
+                  numberScale={0.55}
+                  className="animate-ball-in shadow-gold inset-shadow-[0_-12px_28px_rgb(0_0_0/0.25)]"
+                />
+              ) : (
+                <div className="flex h-[200px] w-[200px] shrink-0 items-center justify-center rounded-full border-2 border-dashed border-line-strong bg-anchor-green-raised">
+                  <Kicker>Ready</Kicker>
                 </div>
               )}
-            </div>
 
-            {/* Solid, not a 25 percent tint. Over a pale game colour the old
-                tint left the jackpot figure and the calls-left countdown as
-                white on near-white. This is the most valuable number on the
-                screen, so it gets a background of its own. */}
-            {isSnowballGame && (
-              <div className="bg-[#7a5719] p-3 rounded-lg border border-[#f3d59d]/70 shadow-lg shadow-black/25">
-                {currentSnowballPot && currentGameState && snowballWindowStatus ? (
+              {/* Calls, the stage and its prize, divided by gold rules. The
+                  labels and the stage stay on one line; a long prize (it is
+                  free text) wraps inside its own cell rather than push the
+                  row off the card. */}
+              <div className="flex w-full items-stretch justify-between gap-3.5 border-t border-line-gold pt-3.5 text-left">
+                <div className="flex shrink-0 flex-col gap-1">
+                  <Kicker className="whitespace-nowrap text-[11px]">Calls</Kicker>
+                  <span className="text-2xl font-semibold leading-[1.1] tabular-nums">{revealedCallCount}</span>
+                </div>
+                <div aria-hidden="true" className="w-px shrink-0 bg-line-gold" />
+                <div className="flex shrink-0 flex-col gap-1">
+                  <Kicker className="whitespace-nowrap text-[11px]">Playing for</Kicker>
+                  <span className="whitespace-nowrap text-2xl font-semibold leading-[1.1]">
+                    {currentStageName}
+                  </span>
+                </div>
+                {/* Hidden when empty: "Prize not set" is for the host screen
+                    only (X12e). */}
+                {currentPrizeText && (
                   <>
-                    <div className="flex justify-between items-center gap-4">
-                      <div>
-                        <span className="text-white text-sm font-bold uppercase block">Snowball Jackpot</span>
-                        <span className="text-2xl font-bold text-white">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
-                      </div>
-                      <div className="text-right shrink-0">
-                        {snowballWindowStatus === 'open' ? (
-                          <>
-                            <span className="block text-6xl font-black leading-none text-white tabular-nums">
-                              {snowballCallsRemaining}
-                            </span>
-                            <span className="block text-sm font-bold uppercase tracking-wider text-white/90 mt-1">
-                              Calls Left
-                            </span>
-                          </>
-                        ) : (
-                          <span className="block text-xl font-black uppercase text-white">
-                            {snowballCallsLabel}
-                          </span>
-                        )}
-                      </div>
+                    <div aria-hidden="true" className="w-px shrink-0 bg-line-gold" />
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <Kicker className="whitespace-nowrap text-[11px]">Prize</Kicker>
+                      <span className="break-words font-display text-[26px] leading-[1.1] text-anchor-gold-bright">
+                        {currentPrizeText}
+                      </span>
                     </div>
-                    <p className="text-base text-white/90 mt-2">
-                      {revealedCallCount}/{currentSnowballPot.current_max_calls} calls made for the jackpot
-                    </p>
                   </>
+                )}
+              </div>
+            </Card>
+
+            {/* The most valuable number on the screen, so it has a card of
+                its own. */}
+            {isSnowballGame && (
+              <Card className="px-4 py-3.5">
+                {currentSnowballPot && currentGameState && snowballWindowStatus ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <Kicker className="text-[11px]">Snowball jackpot</Kicker>
+                      <span className="font-display text-[32px] leading-none text-anchor-gold-bright">£{formatPounds(Number(currentSnowballPot.current_jackpot_amount))}</span>
+                      <span className="mt-1 text-[13px] leading-[1.3] text-anchor-sage">
+                        Full House within {currentSnowballPot.current_max_calls} calls
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end text-right">
+                      {snowballWindowStatus === 'open' ? (
+                        <>
+                          <span className="text-[48px] font-bold leading-none tabular-nums">
+                            {snowballCallsRemaining}
+                          </span>
+                          <Kicker className="text-[11px]">Calls left</Kicker>
+                        </>
+                      ) : (
+                        <span className="max-w-[9rem] text-lg font-semibold leading-[1.2] text-anchor-gold-bright">
+                          {snowballCallsLabel}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 ) : (
-                  <p className="text-white font-semibold">
+                  <p className="text-[15px] font-semibold leading-normal">
                     Snowball countdown unavailable: this game is not linked to a snowball pot.
                   </p>
                 )}
-              </div>
+              </Card>
             )}
 
-            {/* Current Number */}
-            <div className="flex justify-center py-4">
-              {currentNumberDelayed ? (
-                <div className="relative">
-                <div className="w-48 h-48 bg-[#005131] rounded-full flex items-center justify-center shadow-2xl border-8 border-white">
-                    <span className="text-8xl font-black text-white tracking-tighter">
-                      {currentNumberDelayed}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                // Filled rather than transparent: the dashed outline used to let
-                // the game colour through behind white text.
-                <div className="w-48 h-48 rounded-full border-4 border-[#1f7c58] border-dashed bg-[#003f27]/90 flex items-center justify-center">
-                  <span className="text-white font-bold">READY</span>
-                </div>
-              )}
-            </div>
-
-            {/* Recent History. Five balls, 40 percent larger than before, and
-                allowed to slide sideways rather than shrink: BingoBall carries
-                shrink-0 so the balls stay circular at 320px and at 200 percent
-                text zoom. */}
-            {/* Everything here used to sit on the raw game colour. "View All
-                Numbers" is the only route to the full 1 to 90 board, which is
-                the one thing a punter with a paper book actually wants, and on
-                a pale game colour it was white on near-white and effectively
-                unreachable. The dark panel makes the contrast a property of the
-                component rather than of whichever colour the admin picked. */}
-            <div className="rounded-xl border border-[#1f7c58] bg-[#003f27]/90 p-3">
-              <div className="flex justify-between items-end mb-2">
-                <span className="text-base text-white font-medium">Recent Calls</span>
+            {/* Recent history. Five chips, allowed to slide sideways rather
+                than shrink: NumberChip carries shrink-0 so the chips stay
+                circular at 320px and at 200 percent text zoom. Keyed on the
+                number, so only the new chip fades in. */}
+            {/* "All 90 numbers" is the only route to the full 1 to 90 board,
+                which is the one thing a punter with a paper book actually
+                wants, so it keeps a 44px target and the gold of a link. */}
+            <Card className="flex flex-col gap-2.5 px-4 py-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <Kicker>Recent calls</Kicker>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-white h-auto min-h-[44px] px-3 text-base underline decoration-[#f3d59d] underline-offset-4 hover:bg-white/10"
+                  className="-mr-2.5 px-2.5 text-anchor-gold-bright"
                   onClick={() => setShowFullHistory(true)}
                 >
-                  View All Numbers
+                  All 90 numbers
                 </Button>
               </div>
-              <div className="flex gap-2 overflow-x-auto pb-2 mask-linear-fade-right">
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 mask-linear-fade-right">
                 {delayedNumbers.slice(-5).reverse().map((num, i) => (
-                  <BingoBall
-                    key={i}
+                  <NumberChip
+                    key={num}
                     number={num}
-                    variant={i === 0 ? "active" : "called"}
-                    className={i === 0 ? "w-[4.9rem] h-[4.9rem] text-[1.75rem] bg-[#005131] text-white border-white/70" : "w-[4.2rem] h-[4.2rem] text-[1.575rem] opacity-80 bg-[#005131] text-white border-white/50"}
+                    size={56}
+                    numberScale={0.39}
+                    latest={i === 0}
+                    className="animate-fade-in"
                   />
                 ))}
-                {delayedNumbers.length === 0 && <p className="text-white italic text-base">No numbers called yet</p>}
+                {delayedNumbers.length === 0 && <p className="text-[15px] leading-normal text-anchor-sage">No numbers called yet</p>}
               </div>
-            </div>
+            </Card>
           </>
         )}
       </div>
 
-      {/* Full History Modal */}
-      <Modal
+      {/* The full 1 to 90 board, as a bottom sheet. */}
+      <Sheet
         isOpen={showFullHistory}
         onClose={() => setShowFullHistory(false)}
-        title="Called Numbers"
-        className="h-[80vh] flex flex-col"
+        title="Called numbers"
+        description={`${revealedCallCount} of 90 called · newest ringed in gold`}
+        bodyClassName="py-4"
+        footer={
+          <Button variant="outline" size="md" block onClick={() => setShowFullHistory(false)}>Close</Button>
+        }
       >
-        <div className="flex-1 overflow-y-auto p-1">
-          <div className="grid grid-cols-10 gap-1">
-            {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
-              const isCalled = delayedNumbers.includes(num);
-              return (
-                <div
-                  key={num}
-                  className={cn(
-                    "aspect-square flex items-center justify-center text-base font-bold rounded",
-                    isCalled ? "bg-green-600 text-white" : "bg-[#003f27] text-white"
-                  )}
-                >
-                  {num}
-                </div>
-              );
-            })}
-          </div>
+        <div className="grid grid-cols-6 gap-1.5">
+          {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
+            const isCalled = delayedNumbers.includes(num);
+            const isNewest = num === currentNumberDelayed;
+            return (
+              <div
+                key={num}
+                className={cn(
+                  "flex aspect-square min-h-12 items-center justify-center rounded-card border text-xl font-semibold tabular-nums",
+                  isNewest
+                    ? "border-anchor-gold-bright bg-anchor-gold-bright font-bold text-anchor-charcoal"
+                    : isCalled
+                      ? "border-anchor-gold-bright bg-anchor-green-raised text-anchor-cream-text"
+                      : "border-anchor-gold-bright/[0.12] bg-anchor-green-deep text-anchor-sage"
+                )}
+              >
+                {num}
+              </div>
+            );
+          })}
         </div>
-        <div className="mt-4 text-center">
-          <Button variant="secondary" className="w-full" onClick={() => setShowFullHistory(false)}>Close</Button>
-        </div>
-      </Modal>
+      </Sheet>
 
       {/* House rules, available all night (spec 5.3). */}
-      <Modal isOpen={showRules} onClose={() => setShowRules(false)} title="House rules">
-        <PhoneRules rules={houseRules} />
-        <div className="mt-4">
-          <Button variant="secondary" className="w-full min-h-[44px] text-base" onClick={() => setShowRules(false)}>
+      <Sheet
+        isOpen={showRules}
+        onClose={() => setShowRules(false)}
+        title="House rules"
+        bodyClassName="py-4"
+        footer={
+          <Button variant="outline" size="md" block onClick={() => setShowRules(false)}>
             Close
           </Button>
-        </div>
-      </Modal>
+        }
+      >
+        <PhoneRules rules={houseRules} />
+      </Sheet>
 
     </div>
   );
