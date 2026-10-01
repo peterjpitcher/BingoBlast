@@ -1,4 +1,4 @@
--- Rollback for 20261001000300_jackpot_components.sql (M3). Function
+-- Rollback for 20261001075401_jackpot_components.sql (M3). Function
 -- definitions only.
 --
 -- WHAT IT DOES

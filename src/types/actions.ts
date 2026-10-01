@@ -12,15 +12,15 @@
 export type ActionFailureCode =
   | 'winner_on_ball'
   // Night lifecycle: start_game, finish_game, end_night
-  // (supabase/migrations/20261001000100_night_lifecycle.sql).
+  // (supabase/migrations/20261001075034_night_lifecycle.sql).
   | 'night_ended'
   | 'other_game_in_progress'
   | 'invalid_sequence'
   | 'session_not_found'
   | 'game_in_progress'
   // Claims: begin_claim_check, set_claim_draft, check_claim, the bound undo in
-  // void_last_number (20261001000200_claim_attempts.sql) and the enforcement in
-  // record_winner_atomic (20261001000400_claim_enforcement.sql).
+  // void_last_number (20261001075215_claim_attempts.sql) and the enforcement in
+  // record_winner_atomic (20261001075456_claim_enforcement.sql).
   | 'stage_already_won'
   | 'attempt_required'
   | 'unknown_stage'
@@ -36,7 +36,7 @@ export type ActionFailureCode =
   | 'claim_fields_protected'
   | 'claim_not_checked'
   | 'claim_not_valid'
-  // Money (20261001000300_jackpot_components.sql).
+  // Money (20261001075401_jackpot_components.sql).
   | 'game_not_completed'
   | 'winner_void'
 

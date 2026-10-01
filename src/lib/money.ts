@@ -69,7 +69,7 @@ const isPence = (value: number | null | undefined): value is number =>
 /**
  * What one winner was paid, in pence (X22).
  *
- * Since 20261001000300_jackpot_components.sql a winner's money is two
+ * Since 20261001075401_jackpot_components.sql a winner's money is two
  * components: prize_share_pence is the ORDINARY stage prize share only, and a
  * snowball jackpot winner's share of the pot is jackpot_share_pence. Totalling
  * the first alone is how a £140 jackpot used to vanish from the night's

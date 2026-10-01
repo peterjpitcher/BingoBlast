@@ -1,5 +1,5 @@
 -- Behavioural assertions for M1, the night lifecycle
--- (20261001000100_night_lifecycle.sql), run against the fully replayed database
+-- (20261001075034_night_lifecycle.sql), run against the fully replayed database
 -- in suites D and E of supabase/tests/run.sh.
 --
 -- Every branch of start_game, finish_game and end_night, the sessions stamp
@@ -405,7 +405,7 @@ update public.sessions set started_at = null where id = 'c2000000-0000-4000-8000
 create temp table lc_before as
   select id, started_at, completed_at, state_version from public.sessions;
 
-\ir ../migrations/20261001000100_night_lifecycle.sql
+\ir ../migrations/20261001075034_night_lifecycle.sql
 
 do $$
 declare v_started timestamptz; v_completed timestamptz;
@@ -428,7 +428,7 @@ drop table lc_before;
 create temp table lc_before as
   select id, started_at, state_version from public.sessions;
 
-\ir ../migrations/20261001000100_night_lifecycle.sql
+\ir ../migrations/20261001075034_night_lifecycle.sql
 
 do $$
 begin

@@ -48,7 +48,7 @@ export interface SnowballSettlementRow {
  * One row from list_unsettled_snowball_games: a finished snowball game, outside
  * a test night, that ended on or after 2026-10-01 00:00 Europe/London and has
  * no settlement record. Defined in
- * supabase/migrations/20261001000300_jackpot_components.sql.
+ * supabase/migrations/20261001075401_jackpot_components.sql.
  */
 export interface UnsettledSnowballGameRow {
   game_id: string
@@ -65,7 +65,7 @@ export type ClaimResult = 'valid' | 'invalid' | 'late'
 
 /**
  * What finish_game returns. Defined in
- * supabase/migrations/20261001000100_night_lifecycle.sql.
+ * supabase/migrations/20261001075034_night_lifecycle.sql.
  */
 export interface FinishGameResult {
   game_state: Database['public']['Tables']['game_states']['Row']
@@ -113,7 +113,7 @@ export type CheckClaimCode =
 
 /**
  * The jsonb every claim function returns. Defined in
- * supabase/migrations/20261001000200_claim_attempts.sql. Guard failures
+ * supabase/migrations/20261001075215_claim_attempts.sql. Guard failures
  * (unauthorized, not_controller, not_in_progress, on_break, attempt_required,
  * game_state_not_found, unknown_stage) are raised as errors instead.
  */
@@ -314,7 +314,7 @@ export interface Database {
           updated_at: string
           state_version: number // Monotonic counter bumped on every update; used to order Realtime/polling snapshots
           /**
-           * The claim being checked (20261001000200_claim_attempts.sql). Every
+           * The claim being checked (20261001075215_claim_attempts.sql). Every
            * claim_* column is written only by begin_claim_check, set_claim_draft,
            * check_claim and the bound undo in void_last_number: the
            * guard_claim_fields trigger refuses a direct write while paused and
@@ -750,7 +750,7 @@ export interface Database {
        * Paused for a claim, it is the one undo an attempt may make: pass the
        * attempt and the ball count the host saw. Raises paused_for_validation
        * (no attempt given), attempt_mismatch, verdict_already_given or
-       * already_undone. See 20261001000200_claim_attempts.sql.
+       * already_undone. See 20261001075215_claim_attempts.sql.
        */
       void_last_number: {
         Args: {
@@ -766,7 +766,7 @@ export interface Database {
        * invalid_sequence, game_not_found, session_not_found, and for the cash
        * jackpot amount invalid_cash_jackpot, cash_jackpot_not_allowed and
        * cash_jackpot_stage_count. Cookie client only.
-       * See 20261001000100_night_lifecycle.sql.
+       * See 20261001075034_night_lifecycle.sql.
        */
       start_game: {
         Args: {
@@ -843,7 +843,7 @@ export interface Database {
           /**
            * Idempotency key for one claim attempt. Pass the same value on a
            * retry of the same claim; pass a fresh one for the next claim,
-           * including a tie. From 20261001000400_claim_enforcement.sql this
+           * including a tie. From 20261001075456_claim_enforcement.sql this
            * must be the claim attempt id given to begin_claim_check, with a
            * 'valid' verdict from check_claim, or a new winner is refused
            * (claim_not_checked, attempt_mismatch, stale_attempt,
@@ -857,7 +857,7 @@ export interface Database {
       /**
        * Writes only winners.prize_given, so a host can tick a prize as handed
        * over without gaining is_void. Returns the persisted value. Raises
-       * winner_void for a voided winner (20261001000300_jackpot_components.sql).
+       * winner_void for a voided winner (20261001075401_jackpot_components.sql).
        * Defined in supabase/migrations/20260730065446_host_can_mark_prize_given.sql.
        */
       set_winner_prize_given: {
@@ -874,7 +874,7 @@ export interface Database {
        * admin-only RLS. Also security definer and auth.uid()-reading, so it
        * needs the cookie-based client, never the service-role client. Raises
        * game_not_completed unless the game is completed
-       * (20261001000300_jackpot_components.sql).
+       * (20261001075401_jackpot_components.sql).
        */
       settle_snowball_pot: {
         Args: { p_game_id: string }

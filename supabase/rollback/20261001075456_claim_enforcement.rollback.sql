@@ -1,9 +1,9 @@
--- Rollback for 20261001000400_claim_enforcement.sql (M2b). Function
+-- Rollback for 20261001075456_claim_enforcement.sql (M2b). Function
 -- definitions only.
 --
 -- WHAT IT DOES
 --   Restores record_winner_atomic to its M3 definition
---   (20261001000300_jackpot_components.sql), copied verbatim: no claim
+--   (20261001075401_jackpot_components.sql), copied verbatim: no claim
 --   enforcement, the forced snowball flag as before, "BINGO!" win text and the
 --   old money text. Hosts on a pre-claim build can record winners again.
 --

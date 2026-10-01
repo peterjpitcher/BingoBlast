@@ -1,6 +1,6 @@
 // supabase/tests/claim-stage-counts.test.ts
 //
-// The claim functions in 20261001000200_claim_attempts.sql take the number of
+// The claim functions in 20261001075215_claim_attempts.sql take the number of
 // claimed numbers each stage needs from the SQL helper required_claim_count.
 // The host screen takes it from REQUIRED_SELECTION_COUNT_BY_STAGE. If the two
 // ever disagree, a claim the host screen accepts is refused by the server, or

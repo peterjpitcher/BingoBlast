@@ -1,4 +1,4 @@
--- Rollback for 20261001000100_night_lifecycle.sql (M1). Function definitions
+-- Rollback for 20261001075034_night_lifecycle.sql (M1). Function definitions
 -- only.
 --
 -- WHAT IT DOES

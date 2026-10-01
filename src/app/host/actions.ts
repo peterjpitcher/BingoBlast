@@ -47,9 +47,9 @@ interface MappedRpcError {
 /**
  * Contract with supabase/migrations/20260729231945_atomic_host_mutations.sql,
  * 20260730064309_winner_idempotency_key.sql and the four migrations of
- * 1 October 2026 (20261001000100_night_lifecycle.sql,
- * 20261001000200_claim_attempts.sql, 20261001000300_jackpot_components.sql,
- * 20261001000400_claim_enforcement.sql). Those functions raise short
+ * 1 October 2026 (20261001075034_night_lifecycle.sql,
+ * 20261001075215_claim_attempts.sql, 20261001075401_jackpot_components.sql,
+ * 20261001075456_claim_enforcement.sql). Those functions raise short
  * machine-readable keys, and the claim functions also return them as `code`
  * on a refusal; this map is the only place those keys become words a host
  * reads. Keep the two in step.
@@ -1583,7 +1583,7 @@ export async function advanceToNextStage(
  * response can be repeated with the same attempt, after a reload, the next
  * stage or a takeover, and the function inserts nothing and returns the state
  * as it stands. A tie is a separate attempt (Check another claimant), so both
- * winners still save. From 20261001000400_claim_enforcement.sql a new winner
+ * winners still save. From 20261001075456_claim_enforcement.sql a new winner
  * without that checked, valid attempt is refused (claim_not_checked,
  * attempt_mismatch, stale_attempt, claim_not_valid). The one exemption is
  * Manual Snowball Win (`forceSnowballJackpot`), which keeps its own key and is

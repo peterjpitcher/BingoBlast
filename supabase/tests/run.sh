@@ -552,7 +552,7 @@ replay_suite E bingo_replay_current_test on
 # ===========================================================================
 # Suites D and E test the end state. This one tests the path:
 #
-#   1. Replay every migration BEFORE 20261001000100, then load data shaped like
+#   1. Replay every migration BEFORE 20261001075034, then load data shaped like
 #      production's history (staged-fixtures.sql): a finished night, a settled
 #      and an unsettled jackpot, an ordinary tie.
 #   2. Snapshot every function, ACL, comment and trigger (rollback.test.sql).
@@ -567,11 +567,11 @@ replay_suite E bingo_replay_current_test on
 # Production default privileges only: suite E already covers the other world,
 # and a restored function's ACL is what the rollback must get exactly right.
 ROLLBACK="$HERE/../rollback"
-STAGED_CUTOFF="20261001000100"
-M1="$MIGRATIONS/20261001000100_night_lifecycle.sql"
-M2A="$MIGRATIONS/20261001000200_claim_attempts.sql"
-M3="$MIGRATIONS/20261001000300_jackpot_components.sql"
-M2B="$MIGRATIONS/20261001000400_claim_enforcement.sql"
+STAGED_CUTOFF="20261001075034"
+M1="$MIGRATIONS/20261001075034_night_lifecycle.sql"
+M2A="$MIGRATIONS/20261001075215_claim_attempts.sql"
+M3="$MIGRATIONS/20261001075401_jackpot_components.sql"
+M2B="$MIGRATIONS/20261001075456_claim_enforcement.sql"
 
 echo "==> suite F: replaying the migrations before $STAGED_CUTOFF"
 psql_strict -d postgres -c "create database bingo_staged_test;"
@@ -599,12 +599,12 @@ psql_strict -d bingo_staged_test -v phase=enforced -v label=none -f "$HERE/rollb
 
 echo "==> suite F: rolling back M2b (twice)"
 for _ in 1 2; do
-  psql_strict --single-transaction -d bingo_staged_test -f "$ROLLBACK/20261001000400_claim_enforcement.rollback.sql" >/dev/null
+  psql_strict --single-transaction -d bingo_staged_test -f "$ROLLBACK/20261001075456_claim_enforcement.rollback.sql" >/dev/null
 done
 psql_strict -d bingo_staged_test -v phase=compare -v label=m3 -f "$HERE/rollback.test.sql" >/dev/null
 
 echo "==> suite F: rolling back M3, M2a and M1 (each twice)"
-for r in 20261001000300_jackpot_components 20261001000200_claim_attempts 20261001000100_night_lifecycle; do
+for r in 20261001075401_jackpot_components 20261001075215_claim_attempts 20261001075034_night_lifecycle; do
   for _ in 1 2; do
     psql_strict --single-transaction -d bingo_staged_test -f "$ROLLBACK/$r.rollback.sql" >/dev/null
   done

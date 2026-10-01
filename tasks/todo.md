@@ -131,7 +131,7 @@
 ## S1 Lifecycle (migration M1)
 
 ### Task S1.1: migration M1 and database tests
-- [x] Create `supabase/migrations/20261001000100_night_lifecycle.sql`:
+- [x] Create `supabase/migrations/20261001075034_night_lifecycle.sql`:
   - **Session columns:** `sessions.started_at timestamptz`, `completed_at timestamptz`, `state_version bigint not null default 0`.
   - **Session trigger:** `sessions_lifecycle_stamp` (`before update`):
     - bumps `state_version`;
@@ -200,7 +200,7 @@
 ## S2 Claims (migrations M2a and M2b)
 
 ### Task S2.1: migration M2a (additive claims)
-- [x] Create `supabase/migrations/20261001000200_claim_attempts.sql`, per spec 5.2:
+- [x] Create `supabase/migrations/20261001075215_claim_attempts.sql`, per spec 5.2:
   - **Columns** on `game_states`: `claim_attempt_id uuid`, `claim_stage_index integer`, `claim_call_count integer`, `claim_draft_seq integer not null default 0`, `claim_undo_used boolean not null default false`, `claim_numbers jsonb`, and `claim_result text` with a check that it is `valid`, `invalid` or `late`.
   - **Public mirror:** `claim_numbers` and `claim_result` on `game_states_public`. Redefine `sync_game_states_public()` including them, and restate its search path and revokes.
   - **`guard_claim_fields()`** (`before update` on `game_states`):
@@ -229,7 +229,7 @@
 - [x] Commit `feat(db): claim attempts, live drafts and server verdicts`.
 
 ### Task S2.2: migration M2b (enforcement)
-- [x] Create `supabase/migrations/20261001000400_claim_enforcement.sql`. It is applied **last**, after M3. Redefine `record_winner_atomic` from the **M3** body (`20261001000300_jackpot_components.sql`):
+- [x] Create `supabase/migrations/20261001075456_claim_enforcement.sql`. It is applied **last**, after M3. Redefine `record_winner_atomic` from the **M3** body (`20261001075401_jackpot_components.sql`):
   1. the idempotency lookup stays first;
   2. for a new winner, require the valid attempt (`claim_attempt_id = p_client_request_id`, `claim_result = 'valid'`, `claim_stage_index = current_stage_index`) and re-check `claim_numbers` against `called_numbers`, including the last ball;
   3. the manual exemption needs `p_force_snowball_jackpot` and a snowball-type game and Full House and the window open;
@@ -288,7 +288,7 @@
 ## S6 Money (migration M3)
 
 ### Task S6.1: migration M3
-- [x] Create `supabase/migrations/20261001000300_jackpot_components.sql`, per spec 7 (M3). It sits between M2a and M2b, and must work with today's live host screen:
+- [x] Create `supabase/migrations/20261001075401_jackpot_components.sql`, per spec 7 (M3). It sits between M2a and M2b, and must work with today's live host screen:
   - `winners.jackpot_pool_pence integer`, `jackpot_share_pence integer`;
   - `record_winner_atomic` redefined from its current body (`20260825080608_prize_amounts_and_tie_shares.sql`): the ordinary pool is parsed from the ordinary prize text before the jackpot text is appended, and the jackpot pool is set from the pot amount;
   - the recompute function or trigger shares both components (the jackpot only among non-void eligible jackpot winners at that stage; the odd penny to the earliest by `created_at`, then `id`);
@@ -453,3 +453,19 @@ The owner decides these; they are listed in the PR:
 - approve migrations and deploy.
 
 The local stack is in `scratchpad/localstack` and can be stopped with `supabase stop`.
+
+## Release (1 October 2026)
+
+- The owner confirmed assumptions A1 to A6 and approved the release and the four migrations.
+- **PRs #16 and #17 merged.** The reliability slice went live as deployment `dpl_HD6VoCiYRdRBAqA4uEzECcJ138PB`, commit `0d5faf3`; `/api/build` reported that commit.
+- **Migrations applied** through the Supabase migration tool, in order, each verified against its file by function-body hash:
+  - `night_lifecycle` as `20261001075034`
+  - `claim_attempts` as `20261001075215`
+  - `jackpot_components` as `20261001075401`
+  - `claim_enforcement` as `20261001075456`
+- **Data check:** the winners' money snapshot was identical before and after (115 winners, total GBP 955.00), `started_at` was backfilled on 8 of 8 sessions, and no new function is executable by anon.
+- **Production smoke test** in a transaction that rolled back, as an admin identity with the authenticated role: start, five calls, claim attempt and retry, draft and stale draft, wrong count, invalid, new claimant, valid, public mirror, forged write refused, wrong key refused, record (LINE WINNER!, Anonymous, one row on retry), finish and session completion, end night again, start after end refused. Nothing persisted.
+- **PR #18 merged** and live as deployment `dpl_FwYnHWHVhTPuXVVwh75ztZeaFdD2`, commit `677ddca`. `/api/build` reported that commit, and the TV, phone, `/play` and login pages loaded with no application error.
+- **Open:** the events feed answers `error` because the management API returns 401 for the value stored in Vercel as `ANCHOR_API_KEY`. The stored value is not an API key (40 characters with spaces, no `anch_` prefix), and the management app shows the "cash bingo" key as never used. The TV shows its fallback slides until the owner stores the real key and production is redeployed.
+- The migration files were renamed to the applied versions afterwards, contents unchanged.
+
