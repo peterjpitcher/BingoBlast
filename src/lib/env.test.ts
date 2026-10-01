@@ -16,6 +16,10 @@ const KEYS = [
   'ANCHOR_API_BASE_URL',
 ] as const;
 
+// The shape the management app issues: "anch_" then 32 random bytes in
+// base64url. Not a real key.
+const VALID_KEY = `anch_${'Ab3-_xYz'.repeat(5)}abc`;
+
 let saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -106,7 +110,7 @@ test('the events feed is required, so a production build without ANCHOR_API_KEY 
   assert.equal(EVENTS_FEED_REQUIRED, true);
   process.env.VERCEL_ENV = 'production';
   assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY/);
-  process.env.ANCHOR_API_KEY = 'key';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
   assert.doesNotThrow(() => validateBuildEnv());
 });
 
@@ -120,7 +124,7 @@ test('preview and local builds do not need ANCHOR_API_KEY', () => {
 test('a production build needs ANCHOR_API_KEY when the feed is required, and a preview does not', () => {
   process.env.VERCEL_ENV = 'production';
   assert.throws(() => validateBuildEnv({ eventsFeedRequired: true }), /ANCHOR_API_KEY/);
-  process.env.ANCHOR_API_KEY = 'key';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
   assert.doesNotThrow(() => validateBuildEnv({ eventsFeedRequired: true }));
 
   delete process.env.ANCHOR_API_KEY;
@@ -134,13 +138,50 @@ test('a production build treats an ANCHOR_API_KEY of only spaces as not set', ()
   assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY/);
   process.env.ANCHOR_API_KEY = '\t\n';
   assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY/);
-  process.env.ANCHOR_API_KEY = ' key ';
+  process.env.ANCHOR_API_KEY = ` ${VALID_KEY} `;
+  assert.doesNotThrow(() => validateBuildEnv());
+});
+
+test('an ANCHOR_API_KEY that is not shaped like a management key fails the build, in any environment', () => {
+  // What production held on 1 October 2026: the CLI command pasted as the
+  // value. It passed the "is it set" check, and the feed then answered 401.
+  for (const bad of [
+    'vercel env add ANCHOR_API_KEY production',
+    'key',
+    'Bearer ' + VALID_KEY,
+    VALID_KEY.replace('anch_', 'ANCH_'),
+    'anch_short',
+    VALID_KEY.slice(0, 20) + ' ' + VALID_KEY.slice(20),
+  ]) {
+    for (const env of ['production', 'preview', undefined]) {
+      if (env) process.env.VERCEL_ENV = env;
+      else delete process.env.VERCEL_ENV;
+      process.env.ANCHOR_API_KEY = bad;
+      assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY does not look like a management API key/, `${bad} in ${env}`);
+    }
+  }
+});
+
+test('the key check never prints the value', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = 'anch_not-a-real-key but secret-looking';
+  assert.throws(
+    () => validateBuildEnv(),
+    (err: unknown) => err instanceof Error && !err.message.includes('secret-looking') && !err.message.includes('anch_not'),
+  );
+});
+
+test('a key shaped like a management key passes, with or without surrounding spaces', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
+  assert.doesNotThrow(() => validateBuildEnv());
+  process.env.ANCHOR_API_KEY = `\n${VALID_KEY}  `;
   assert.doesNotThrow(() => validateBuildEnv());
 });
 
 test('ANCHOR_API_BASE_URL is optional', () => {
   process.env.VERCEL_ENV = 'production';
-  process.env.ANCHOR_API_KEY = 'key';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
   assert.doesNotThrow(() => validateBuildEnv());
   process.env.ANCHOR_API_BASE_URL = '   ';
   assert.doesNotThrow(() => validateBuildEnv(), 'blank means the default');
@@ -172,7 +213,7 @@ test('ANCHOR_API_BASE_URL may be local http outside production only', () => {
     process.env.VERCEL_ENV = 'preview';
     assert.doesNotThrow(() => validateBuildEnv(), local);
     process.env.VERCEL_ENV = 'production';
-    process.env.ANCHOR_API_KEY = 'key';
+    process.env.ANCHOR_API_KEY = VALID_KEY;
     assert.throws(() => validateBuildEnv(), /ANCHOR_API_BASE_URL/, local);
     delete process.env.ANCHOR_API_KEY;
   }

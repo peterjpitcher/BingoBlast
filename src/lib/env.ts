@@ -23,6 +23,14 @@
  */
 export const EVENTS_FEED_REQUIRED = true;
 
+/**
+ * The shape of a management app API key: "anch_" then the key in base64url
+ * (generateApiKey in the management app makes 32 random bytes, 43 characters).
+ * The length is a floor, not an exact match, so a longer key format still
+ * passes; the point is to reject text that is plainly not a key.
+ */
+const MANAGEMENT_API_KEY_SHAPE = /^anch_[A-Za-z0-9_-]{20,}$/;
+
 export interface PublicSupabaseEnv {
   url: string;
   anonKey: string;
@@ -135,8 +143,20 @@ export function validateBuildEnv(options: ValidateBuildEnvOptions = {}): void {
   // Trimmed, as src/lib/events-feed/client.ts reads it: a key of only spaces
   // is no key, and passing the build with one would ship a feed that can
   // never authenticate.
-  if (eventsFeedRequired && isProduction && !process.env.ANCHOR_API_KEY?.trim()) {
+  const apiKey = process.env.ANCHOR_API_KEY?.trim();
+  if (eventsFeedRequired && isProduction && !apiKey) {
     problems.push('ANCHOR_API_KEY is not set, and production builds need it for the events feed.');
+  }
+
+  // A value that is set but is not a key is worse than a missing one: it
+  // passes "is it set" and the feed then answers 401 for ever. On 1 October
+  // 2026 production held the text of the CLI command pasted as the value.
+  // The value itself is never put in the message.
+  if (apiKey && !MANAGEMENT_API_KEY_SHAPE.test(apiKey)) {
+    problems.push(
+      'ANCHOR_API_KEY does not look like a management API key ("anch_" followed by the key, no spaces). ' +
+        'Paste the key itself from the management app, not a command or a label.',
+    );
   }
 
   const apiBaseUrl = process.env.ANCHOR_API_BASE_URL?.trim();
