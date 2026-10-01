@@ -553,7 +553,7 @@ Severity is the consequence; likelihood is on a real pub night. **(re-verified)*
 
 Every migration updates `supabase/tests/harness-schema.sql` and `src/types/database.ts` where they copy the schema. Enum values are never used in the migration that adds them. Migrations keep the version they are applied with. Each migration ships with a tested rollback script for **function definitions only**, in `supabase/rollback/`. Rolling back the app or the functions does not reverse data: a reset, a settled pot or cash already paid stays as it is.
 
-**The order is linear:** M1, then M2a, then M3, then M2b. M1, M2a and M3 are all compatible with the host screen that is live today, so they can be applied before the new screens are deployed. M2b (enforcement) goes last, once every host screen runs the new code. M3 and M2b both redefine `record_winner_atomic`: M2b is written on top of M3, and `test:db` tests the final combined definition. Any function whose parameter list changes (for example `void_last_number`) is dropped and recreated with default parameters, so an old caller's argument set still resolves to exactly one function.
+**The order is linear:** M1, then M2a, then M3, then M2b. M1, M2a and M3 are all compatible with the host screen that is live today (suite F proves this). M2b (enforcement) is its own migration so it can be rolled back alone. All four are applied together, outside play, immediately before the features deploy (section 12). M3 and M2b both redefine `record_winner_atomic`: M2b is written on top of M3, and `test:db` tests the final combined definition. Any function whose parameter list changes (for example `void_last_number`) is dropped and recreated with default parameters, so an old caller's argument set still resolves to exactly one function.
 
 **M1, lifecycle (S1):**
 
@@ -734,10 +734,12 @@ The error sink (`ERROR_SINK_URL`) is not configured in production today, so repo
 
 **Release sequence** (owner's yes at each migration and deployment; never on a bingo day):
 
+This follows the review's second option (R05): one release outside play, with a compulsory host refresh and a tested recovery path. It is simpler than staging enforcement across two deploys, and nights are monthly.
+
 1. Merge and deploy S0. It has no migration.
-2. Apply M1, M2a and M3. The live screens keep working against all three.
-3. Issue the events key and add `ANCHOR_API_KEY` to Vercel (production and preview). Then merge and deploy the features PR.
-4. Reload every host screen, TV and phone; the build check prompts hosts and reloads the TV and phones by itself. Confirm that no host screen runs old code, then apply M2b.
+2. Issue the events key and add `ANCHOR_API_KEY` to Vercel (production and preview).
+3. **On a day with no bingo, outside opening hours**, apply M1, M2a, M3 and M2b in one `supabase db push`, then immediately merge and deploy the features PR. Between those two steps the old host screen cannot record a winner, which does not matter because no game is running.
+4. Reload every host screen. The build check prompts hosts, and reloads the TV and phones by itself.
 5. Rehearsal (A4): a test session with `/display?rehearsal=1` on the pub TV. Scan every QR from the back of the room, run the claim flow including a tie and a late claim, and leave the TV on `/display` through end of night and next-session discovery. Confirm the snowball pot has not moved.
 6. Switch on `NEXT_PUBLIC_REVIEW_INVITE_ENABLED` once the management feedback page is neutral.
 
@@ -826,7 +828,7 @@ The error sink (`ERROR_SINK_URL`) is not configured in production today, so repo
 
 1. The live draft adds one write per tap under a lock on `game_states`. Is the single-in-flight send queue enough at the pace a host taps?
 2. Does moving `startGame`'s writes into `start_game` preserve the cash-jackpot prize write and the re-open behaviour exactly?
-3. Is the M2b gate (confirm no old host screens) practical with monthly nights?
+3. Is a single release outside play, with the build check forcing a host refresh, an acceptable stand-in for staging enforcement across two deploys?
 4. Is the build-check reload safe on every TV browser the pub might use?
 
 ---
@@ -839,7 +841,7 @@ The error sink (`ERROR_SINK_URL`) is not configured in production today, so repo
 | R02 Serialise lifecycle transitions | Adopted. Session-first locking inside `start_game`, `finish_game`, `end_night` and reset; no game-state trigger on sessions; `end_night` is idempotent | 5.1 |
 | R03 Timestamp reset and public reads | Adopted. Reset clears `started_at`, a re-open keeps it, all four selectors change, the precedence is stated, and `completed_at` is not backfilled | 5.1 |
 | R04 Jackpot accounting | Adopted. Two components, pools and shares, totals, voids, and historic rows only from recorded evidence. The sharing rule is A2 | 7 (M3) |
-| R05 Release compatibility | Adopted. Additive M2a, then the new screen, then M2b enforcement; linear M2b then M3 order, with the combined function tested; the build check; rollback scripts; stated limits of rollback | 7, 12 |
+| R05 Release compatibility | Adopted, using the review's second option: one release outside play, with migrations applied immediately before the deploy and a forced host refresh through the build check. M1, M2a and M3 are proved compatible with the live screens. The order is linear (M3 then M2b) and the combined function is tested. Rollback scripts are tested, and the limits of rollback are stated | 7, 12 |
 | R06 Feedback destination | Adopted. The invitation is switched off until the page is neutral; the change is written up | 5.6, A5 |
 | R07 Rehearsal routes | Adopted. `?rehearsal=1` on `/display`, `?s=` QR codes, and preview origins that never point at production | 5.4, 5.8, 12 |
 | R08 Late-ball rule | Adopted. Host discretion instead of guessed visibility, a bound single undo, and public wording that says the ticket is checked by the host | 5.2, A1 |
