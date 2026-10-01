@@ -26,7 +26,14 @@ import { getInGameSubState, getNightPhase, pickNextGame } from '@/lib/night-phas
 import { getClaimPanelState } from '@/lib/claim-panel';
 import { formatWinHeadline } from '@/lib/win-headline';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
-import { buildPlaylist, slideCarriesQr, type EventsProjection, type Slide, type SlideKind } from '@/lib/playlist';
+import {
+  buildPlaylist,
+  slideAllowsCornerQr,
+  slideShowsStatusInTopBar,
+  type EventsProjection,
+  type Slide,
+  type SlideKind,
+} from '@/lib/playlist';
 import { buildFollowUrl } from '@/lib/follow-link';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
@@ -915,10 +922,11 @@ export default function DisplayUI({
   // Never two QR codes at once: while a slide with a code of its own is up (an
   // event or the next bingo night, on a break or between games), the corner QR
   // and its column go, which also gives the event slide the full width it is
-  // laid out for.
-  const slideHasOwnQr = playlist.length > 0 && activeSlideKind !== null && slideCarriesQr(activeSlideKind);
+  // laid out for. They go for the Break time card too, so it sits in the
+  // middle of the screen on its own (slideAllowsCornerQr).
+  const slideHidesCornerQr = playlist.length > 0 && activeSlideKind !== null && !slideAllowsCornerQr(activeSlideKind);
   const showCornerQr =
-    !!followUrl && (hasRenderableGame || nightPhase === 'between_games') && !slideHasOwnQr;
+    !!followUrl && (hasRenderableGame || nightPhase === 'between_games') && !slideHidesCornerQr;
 
   const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
@@ -1032,6 +1040,13 @@ export default function DisplayUI({
   // and between games.
   const pauseStatusLabel =
     nightPhase === 'between_games' ? 'Next game coming up' : inGameSubState === 'break' ? 'Break time' : null;
+  // The rules slide carries that label itself. An event or next-bingo slide
+  // does not: while one is up, the top bar says it, in place of the game and
+  // book colour, and the slide keeps all its room for the artwork.
+  const topBarStatusLabel =
+    pauseStatusLabel && playlist.length > 0 && activeSlideKind !== null && slideShowsStatusInTopBar(activeSlideKind)
+      ? pauseStatusLabel
+      : null;
 
   const renderSlideContent = (slide: Slide) => {
     switch (slide.kind) {
@@ -1045,10 +1060,11 @@ export default function DisplayUI({
         return renderNextGameSlide();
       default:
         // Events, next bingo, thanks, review: shared with the idle /display.
-        // On a break and between games the event slides carry the status label
-        // too. They need no backing panel there any more: the screen stays
-        // dark green and the book colour is only the band under the top bar.
-        return <PromoSlide slide={slide} nowMs={slideNowMs} statusLabel={pauseStatusLabel} />;
+        // On a break and between games the top bar carries the status label
+        // for them (topBarStatusLabel above). They need no backing panel: the
+        // screen stays dark green and the book colour is only the band under
+        // the top bar.
+        return <PromoSlide slide={slide} nowMs={slideNowMs} />;
     }
   };
 
@@ -1112,7 +1128,10 @@ export default function DisplayUI({
              keeps a long session or game name to one line instead of pushing
              out of the bar (X12f). During play the right block leads with the
              game number and book colour (spec 5.3) at the key-information
-             size, over the game's name, beside a chip in the book colour. With
+             size, over the game's name, beside a chip in the book colour.
+             While an event slide is up on a break or between games, that
+             first line reads "Break time" or "Next game coming up" instead
+             (topBarStatusLabel). With
              leading-[1.1] the two lines fit the bar: 49px + 36px in 112px at
              1080p, 33px + 24px in 76px at 720p. The block may take up to 62%
              of the bar before its lines end in "...". */}
@@ -1120,7 +1139,9 @@ export default function DisplayUI({
          {hasRenderableGame && currentActiveGame && (
            <div className="flex min-w-0 max-w-[62%] shrink-0 items-center gap-[clamp(16px,1.25vw,24px)]">
              <div className="flex min-w-0 flex-col items-end gap-[2px]">
-               {activeIdentity && <p className={cn(gameIdentityClass, 'max-w-full truncate')}>{activeIdentity}</p>}
+               {(topBarStatusLabel ?? activeIdentity) && (
+                 <p className={cn(gameIdentityClass, 'max-w-full truncate')}>{topBarStatusLabel ?? activeIdentity}</p>
+               )}
                <p className={tvText('xs', 'max-w-full truncate font-medium leading-[1.1]')}>{currentActiveGame.name}</p>
              </div>
              {bookColour && (
@@ -1131,6 +1152,11 @@ export default function DisplayUI({
                />
              )}
            </div>
+         )}
+         {/* Between games there is no game in play, so no right block: the
+             status label stands there on its own while an event slide is up. */}
+         {!(hasRenderableGame && currentActiveGame) && topBarStatusLabel && (
+           <p className={cn(gameIdentityClass, 'max-w-[62%] shrink-0 truncate')}>{topBarStatusLabel}</p>
          )}
       </header>
 

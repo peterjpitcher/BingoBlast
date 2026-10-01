@@ -11,9 +11,10 @@
 //     screen's clock (src/lib/dates.ts), never sent by the server (R10).
 //   - The QR is level M and at least 40% of the screen height; the playlist
 //     has already picked the pre-event, in-game or post-event link.
-//   - On a break or between games it carries a status label ("Break time",
-//     "Next game coming up"), the same one as the rules slide, so the room can
-//     always see where the night is.
+//   - On a break or between games the TV's top bar says where the night is
+//     ("Break time", "Next game coming up") while this slide is up, so the
+//     slide itself carries no label and keeps its room for the artwork.
+//   - The QR code stands in from the right edge of the slide.
 'use client';
 
 import React, { useState } from 'react';
@@ -25,7 +26,7 @@ import { cn } from '@/lib/utils';
 import { formatEventWhenAndTime } from '@/lib/dates';
 import type { ScreenEvent, ScreenEventImage } from '@/lib/playlist';
 import { eventImageLoader, eventImageSizes } from './event-image';
-import { TV_KICKER_CLASS, TV_STATUS_LABEL_CLASS, tvText } from './tv-text';
+import { TV_KICKER_CLASS, tvText } from './tv-text';
 
 // At least 40% of the screen height: 432px at 1080p, 288px at 720p.
 const EVENT_QR_SIZE = 'max(40vh, 288px)';
@@ -50,11 +51,9 @@ export interface EventSlideProps {
   nowMs: number;
   /** The line above the title, for example "Coming up at The Anchor". */
   eyebrow: string;
-  /** Keeps the phase visible while the event is up, for example "Break time". */
-  statusLabel?: string | null;
 }
 
-export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventSlideProps) {
+export function EventSlide({ event, qrUrl, nowMs, eyebrow }: EventSlideProps) {
   // Remembered by URL, so a failure never carries over to another event's image.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const image =
@@ -88,13 +87,6 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventS
     </div>
   );
 
-  const statusPill = statusLabel ? (
-    // In a pill, so it reads apart from the kicker.
-    <p className={cn(TV_STATUS_LABEL_CLASS, 'shrink-0 self-start rounded-full border border-line-strong px-[0.8em] py-[0.2em]')}>
-      {statusLabel}
-    </p>
-  ) : null;
-
   // The words. The title takes the slide-title size, not the headline size:
   // the artwork is the headline now, and a smaller title leaves it more room.
   const renderText = (titleClampClass: string) => (
@@ -121,17 +113,15 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventS
             {renderImage(image, 'relative aspect-square h-full max-h-[36vw]')}
           </div>
           <div className="flex min-w-0 flex-1 flex-col justify-center gap-[1.6vh] text-left">
-            {statusPill}
             {renderText('line-clamp-4')}
           </div>
         </>
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center gap-[1.6vh] text-left">
-          {statusPill}
-          {/* Landscape artwork: it takes whatever room the label above and
-              the words below leave, so it is as large as each screen allows
-              (about 1270 by 715 before the night starts at 1920x1080, where
-              it used to be 768 by 432). The stretch is a size container, and
+          {/* Landscape artwork: it takes whatever room the words below leave,
+              so it is as large as each screen allows (about 1210 by 680 at
+              1920x1080, where it used to be 768 by 432). The stretch is a
+              size container, and
               the frame is the largest 16:9 box that fits it (cqh and cqw are
               the stretch's own height and width), so the frame always hugs
               the artwork. It sits at the bottom of the stretch, next to its
@@ -145,7 +135,9 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventS
         </div>
       )}
 
-      <div className="flex shrink-0 flex-col items-center justify-center gap-[1.5vh]">
+      {/* pr-[3vw]: the code stands in from the edge of the slide, about as
+          far as it stands from the artwork, rather than sitting on the edge. */}
+      <div className="flex shrink-0 flex-col items-center justify-center gap-[1.5vh] pr-[3vw]">
         <div className="rounded-card border border-line-gold bg-white p-[clamp(13px,1.85vh,20px)]">
           <QRCodeSVG
             value={qrUrl}
