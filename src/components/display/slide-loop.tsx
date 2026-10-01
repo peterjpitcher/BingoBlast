@@ -35,7 +35,10 @@ export interface SlideLoopProps {
   onSlideChange?: (kind: SlideKind | null) => void;
 }
 
-const FADE_MS = 600;
+// The brand's slow fade (400ms on its ease-out curve). A script animation, so
+// it checks reduced motion itself below rather than through the stylesheet.
+const FADE_MS = 400;
+const FADE_EASING = 'cubic-bezier(0.16, 1, 0.3, 1)';
 
 function SlideLoopRun({ slides, renderSlide, className, onSlideChange }: SlideLoopProps) {
   const [index, setIndex] = useState(0);
@@ -67,7 +70,7 @@ function SlideLoopRun({ slides, renderSlide, className, onSlideChange }: SlideLo
     const element = containerRef.current;
     if (!element || typeof element.animate !== 'function') return;
     if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    element.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FADE_MS, easing: 'ease-out' });
+    element.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FADE_MS, easing: FADE_EASING });
   }, [position]);
 
   if (!slide) return null;

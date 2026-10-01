@@ -18,11 +18,12 @@ import React, { useState } from 'react';
 import Image, { getImageProps } from 'next/image';
 import { preload } from 'react-dom';
 import { QRCodeSVG } from 'qrcode.react';
+import { QR_BACKGROUND, QR_FOREGROUND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 import { formatEventWhenAndTime } from '@/lib/dates';
 import type { ScreenEvent, ScreenEventImage } from '@/lib/playlist';
 import { eventImageLoader, eventImageSizes } from './event-image';
-import { TV_STATUS_LABEL_CLASS, tvText } from './tv-text';
+import { TV_KICKER_CLASS, TV_STATUS_LABEL_CLASS, tvText } from './tv-text';
 
 // At least 40% of the screen height: 432px at 1080p, 288px at 720p.
 const EVENT_QR_SIZE = 'max(40vh, 288px)';
@@ -58,8 +59,10 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventS
     event.image && event.image.url !== failedUrl && !isKnownFailed(event.image.url, nowMs) ? event.image : null;
   const whenLine = formatEventWhenAndTime(event.startsAt, nowMs);
 
+  // The artwork is shown whole, so the tile has no scrim over it; its own
+  // surface shows behind an image that does not quite fill the box.
   const renderImage = (img: ScreenEventImage, boxClass: string) => (
-    <div className={cn('relative shrink-0 overflow-hidden rounded-3xl', boxClass)}>
+    <div className={cn('relative shrink-0 overflow-hidden rounded-card border border-line-gold bg-anchor-green-raised', boxClass)}>
       <Image
         src={img.url}
         alt={img.alt}
@@ -80,36 +83,41 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventS
   return (
     <section
       aria-label={event.title}
-      className="mx-auto flex h-full w-full max-w-[1800px] items-center gap-[3vw] overflow-hidden text-white"
+      className="mx-auto flex h-full w-full max-w-[1800px] items-center gap-[3vw] overflow-hidden text-anchor-cream-text"
     >
       {image?.square && renderImage(image, 'aspect-square h-[40vh]')}
 
       <div className="flex min-w-0 flex-1 flex-col gap-[1.6vh] text-left">
         {/* First in the column, above the artwork: one more line fits both
-            layouts at 1280x720 (about 510px of the 576px the slides get). */}
-        {statusLabel && <p className={TV_STATUS_LABEL_CLASS}>{statusLabel}</p>}
+            layouts at 1280x720 (about 545px of the 590px the slides get). In a
+            pill, so it reads apart from the kicker under it. */}
+        {statusLabel && (
+          <p className={cn(TV_STATUS_LABEL_CLASS, 'self-start rounded-full border border-line-strong px-[0.8em] py-[0.2em]')}>
+            {statusLabel}
+          </p>
+        )}
         {image && !image.square && renderImage(image, 'aspect-video h-[40vh] max-w-full self-start')}
-        <p className={tvText('xs', 'font-semibold uppercase tracking-[0.2em] text-white/85')}>{eyebrow}</p>
+        <p className={TV_KICKER_CLASS}>{eyebrow}</p>
         {/* leading-[1.15]: the clamp hides overflow, and the title size's
             tighter 1.05 line shaved the bottoms off descenders such as "g". */}
-        <h2 className={tvText('lg', 'line-clamp-2 font-black leading-[1.15]')}>{event.title}</h2>
-        {whenLine && <p className={tvText('base', 'font-bold text-[#f3d59d]')}>{whenLine}</p>}
+        <h2 className={tvText('xl', 'line-clamp-2 leading-[1.15]')}>{event.title}</h2>
+        {whenLine && <p className={tvText('base', 'font-semibold text-anchor-gold-bright')}>{whenLine}</p>}
       </div>
 
-      <div className="flex shrink-0 flex-col items-center gap-[1.2vh]">
-        <div className="rounded-3xl bg-white p-[1.5vh]">
+      <div className="flex shrink-0 flex-col items-center gap-[1.5vh]">
+        <div className="rounded-card border border-line-gold bg-white p-[clamp(13px,1.85vh,20px)]">
           <QRCodeSVG
             value={qrUrl}
             level="M"
             marginSize={2}
             size={432}
             title={`QR code: details of ${event.title}`}
-            fgColor="#005131"
-            bgColor="#FFFFFF"
+            fgColor={QR_FOREGROUND}
+            bgColor={QR_BACKGROUND}
             style={{ display: 'block', width: EVENT_QR_SIZE, height: EVENT_QR_SIZE }}
           />
         </div>
-        <p className={tvText('xs', 'font-bold')}>Scan for details</p>
+        <p className={tvText('xs', 'font-semibold')}>Scan for details</p>
       </div>
     </section>
   );

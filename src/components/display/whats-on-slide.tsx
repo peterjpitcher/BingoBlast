@@ -5,8 +5,10 @@
 // and the printed address go to the website's what's-on page.
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { QR_BACKGROUND, QR_FOREGROUND } from '@/lib/brand';
+import { cn } from '@/lib/utils';
 import { WHATS_ON_URL } from '@/lib/venue-links';
-import { tvText } from './tv-text';
+import { TV_SIZE, tvText } from './tv-text';
 
 // At least 40% of the screen height, like the event QR codes.
 const WHATS_ON_QR_SIZE = 'max(40vh, 288px)';
@@ -18,24 +20,24 @@ export function WhatsOnSlide() {
   return (
     <section
       aria-label="Bingo nights at The Anchor"
-      className="mx-auto flex h-full w-full max-w-[1700px] items-center justify-center gap-[4vw] text-white"
+      className="mx-auto flex h-full w-full max-w-[1700px] items-center justify-center gap-[4.6vw] text-anchor-cream-text"
     >
-      <div className="shrink-0 rounded-3xl bg-white p-[1.5vh]">
+      <div className="shrink-0 rounded-card border border-line-gold bg-white p-[clamp(13px,1.85vh,20px)]">
         <QRCodeSVG
           value={WHATS_ON_URL}
           level="M"
           marginSize={2}
           size={432}
           title="QR code: what's on at The Anchor"
-          fgColor="#005131"
-          bgColor="#FFFFFF"
+          fgColor={QR_FOREGROUND}
+          bgColor={QR_BACKGROUND}
           style={{ display: 'block', width: WHATS_ON_QR_SIZE, height: WHATS_ON_QR_SIZE }}
         />
       </div>
-      <div className="flex min-w-0 flex-col gap-[2.4vh] text-left">
-        <h1 className={tvText('lg', 'font-black uppercase tracking-[0.05em]')}>Bingo nights at The Anchor</h1>
-        <p className={tvText('base', 'font-semibold')}>See what&apos;s on</p>
-        <p className={tvText('base', 'break-all font-bold text-[#f3d59d]')}>{WHATS_ON_ADDRESS}</p>
+      <div className="flex min-w-0 flex-col gap-[clamp(14px,2.6vh,28px)] text-left">
+        <h1 className={tvText('2xl', 'max-w-[13ch] leading-[0.98]')}>Bingo nights at The Anchor</h1>
+        <p className={tvText('base', 'font-medium')}>See what&apos;s on</p>
+        <p className={cn(TV_SIZE.url, 'break-all font-bold leading-[1.05] text-anchor-gold-bright')}>{WHATS_ON_ADDRESS}</p>
       </div>
     </section>
   );
