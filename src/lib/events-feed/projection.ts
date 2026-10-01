@@ -26,6 +26,19 @@
 //   1-hour event details are memoised in this server instance's memory
 //   instead. A cold instance simply looks them up again on its next refresh.
 //
+// WHEN THE MANAGEMENT APP IS DOWN (createProjectionRefresher)
+//   Inside one server instance there is only ever one refresh in flight:
+//   requests that arrive while it runs share it rather than each starting
+//   their own. After a failed refresh, every refresh for the next
+//   REFRESH_FAIL_FAST_MS fails at once with that same error instead of trying
+//   again, so with a stale entry Next keeps serving it without a pile of
+//   background refreshes, and with nothing cached each page answers 'error'
+//   straight away instead of waiting up to the 8-second refresh budget.
+//
+//   A list in which every event is malformed fails the refresh too (a 'parse'
+//   error), so a broken response can never replace a good projection with an
+//   empty one.
+//
 // ERRORS
 //   Every failure goes to reportError through Next's `after()`, so reporting
 //   never delays a response. That includes a failed background refresh, which
@@ -62,6 +75,9 @@ export const DETAIL_TIMEOUT_MS = 3_000;
 
 /** How long a projection may keep serving while refreshes fail. */
 export const MAX_PROJECTION_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** After a failed refresh, how long every refresh fails at once instead of trying again. */
+export const REFRESH_FAIL_FAST_MS = 60_000;
 
 const CATEGORY_MEMO_MS = 24 * 60 * 60 * 1000;
 const DETAIL_MEMO_MS = 60 * 60 * 1000;
@@ -218,6 +234,16 @@ export async function buildEventsProjection(deps: BuildProjectionDeps): Promise<
   const loadList = async (params: Record<string, string>): Promise<ManagementEvent[]> => {
     const query = new URLSearchParams(params).toString();
     const parsed = parseEventList(await fetchJson(`/events?${query}`, { timeoutMs: listTimeout() }));
+    if (parsed.events.length === 0 && parsed.dropped > 0) {
+      // Not one event in the list could be read: almost certainly a change in
+      // the management app's format, not a genuinely empty list. Failing the
+      // refresh keeps the last good projection serving rather than caching
+      // nothing.
+      throw new EventsFeedError(
+        `All ${parsed.dropped} events in a management events list were malformed`,
+        'parse',
+      );
+    }
     dropped += parsed.dropped;
     return parsed.events;
   };
@@ -308,6 +334,71 @@ export async function buildEventsProjection(deps: BuildProjectionDeps): Promise<
 }
 
 // ---------------------------------------------------------------------------
+// One refresh at a time, and a pause after a failure (testable: the fetcher,
+// the clock and the reporter are injected).
+// ---------------------------------------------------------------------------
+
+export interface ProjectionRefresherDeps {
+  fetchJson: FetchJson;
+  /** Today's date in London, YYYY-MM-DD, read at the start of each refresh. */
+  todayIso: () => string;
+  /** Defaults to Date.now. */
+  now?: () => number;
+  memo?: ProjectionMemo;
+  /**
+   * Non-fatal problems, and each failed refresh once as 'events-feed:refresh'.
+   * A refresh that fails fast is not reported again.
+   */
+  report?: ReportFn;
+  /** Defaults to REFRESH_FAIL_FAST_MS. */
+  failFastMs?: number;
+}
+
+/**
+ * Wraps buildEventsProjection so that, per server instance:
+ *   - concurrent callers share the one refresh in flight;
+ *   - for `failFastMs` after a failure, a call rejects at once with that
+ *     failure, without touching the management app or reporting it again.
+ */
+export function createProjectionRefresher(deps: ProjectionRefresherDeps): () => Promise<CachedEventsProjection> {
+  const now = deps.now ?? Date.now;
+  const failFastMs = deps.failFastMs ?? REFRESH_FAIL_FAST_MS;
+  let inFlight: Promise<CachedEventsProjection> | null = null;
+  let lastFailure: { atMs: number; error: unknown } | null = null;
+
+  const refresh = async (): Promise<CachedEventsProjection> => {
+    try {
+      const projection = await buildEventsProjection({
+        fetchJson: deps.fetchJson,
+        todayIso: deps.todayIso(),
+        now,
+        memo: deps.memo,
+        report: deps.report,
+      });
+      lastFailure = null;
+      return projection;
+    } catch (err) {
+      lastFailure = { atMs: now(), error: err };
+      deps.report?.('events-feed:refresh', err);
+      throw err;
+    }
+  };
+
+  return () => {
+    if (inFlight) return inFlight;
+    if (lastFailure) {
+      const elapsed = now() - lastFailure.atMs;
+      if (elapsed >= 0 && elapsed < failFastMs) return Promise.reject(lastFailure.error);
+    }
+    const run = refresh().finally(() => {
+      inFlight = null;
+    });
+    inFlight = run;
+    return run;
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Serving a projection (testable: the loader and the clock are injected).
 // ---------------------------------------------------------------------------
 
@@ -391,25 +482,23 @@ function wasReported(err: unknown): boolean {
   return typeof err === 'object' && err !== null && reportedErrors.has(err);
 }
 
-const instanceMemo = createProjectionMemo();
+// One per server instance: the shared in-flight refresh and the pause after a
+// failure live here. A failed refresh is reported by the refresher as it
+// happens, because Next swallows a failed background refresh and keeps
+// serving the old entry; marking it means resolveEventsProjection does not
+// report it a second time on a cold start.
+const refreshProjection = createProjectionRefresher({
+  fetchJson: (path, { timeoutMs }) => fetchManagementJson(path, { timeoutMs }),
+  todayIso: () => getTodayIsoDateInLondon(),
+  memo: createProjectionMemo(),
+  report: (scope, err) => {
+    scheduleReport(scope, err);
+    markReported(err);
+  },
+});
 
 const loadCachedProjection = unstable_cache(
-  async (): Promise<CachedEventsProjection> => {
-    try {
-      return await buildEventsProjection({
-        fetchJson: (path, { timeoutMs }) => fetchManagementJson(path, { timeoutMs }),
-        todayIso: getTodayIsoDateInLondon(),
-        memo: instanceMemo,
-        report: scheduleReport,
-      });
-    } catch (err) {
-      // Reported here as well as on a cold start, because Next swallows a
-      // failed background refresh and keeps serving the old entry.
-      scheduleReport('events-feed:refresh', err);
-      markReported(err);
-      throw err;
-    }
-  },
+  (): Promise<CachedEventsProjection> => refreshProjection(),
   // Bump the version when CachedEventsProjection changes shape, so a new
   // release never reads an entry written by an old one.
   ['events-feed', 'projection', 'v1'],

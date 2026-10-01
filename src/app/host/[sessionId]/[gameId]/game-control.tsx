@@ -8,7 +8,7 @@ import { createClient } from '@/utils/supabase/client';
 import { callNextNumber, toggleBreak, recordWinner, skipStage, voidLastNumber, resumeGame, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost, endGame, settleSnowballPotForGame, beginClaimCheck, setClaimDraft, checkClaim, undoLastNumberForClaim } from '@/app/host/actions';
 import type { ClaimSnapshot } from '@/app/host/claim-action-types';
 import type { ActionFailureCode, ActionResult } from '@/types/actions';
-import { createClaimDraftQueue, type ClaimDraftQueue, type ClaimDraftQueueState } from '@/lib/claim-draft-queue';
+import { CLAIM_DRAFT_FLUSH_TIMEOUT_MS, createClaimDraftQueue, type ClaimDraftQueue, type ClaimDraftQueueState } from '@/lib/claim-draft-queue';
 import { createPollRunner } from '@/lib/poll-runner';
 import { describeWinnerTotal, winnerTotalPence } from '@/lib/money';
 import { Button } from '@/components/ui/button';
@@ -848,7 +848,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setIsTogglingBreak(true);
         try {
             const newOnBreakStatus = !currentGameState.on_break;
-            applyMutation(await toggleBreak(gameId, newOnBreakStatus), "Failed to toggle break.");
+            const result = await toggleBreak(gameId, newOnBreakStatus);
+            if (!result?.success && result?.code === 'stage_already_won') {
+                // As with Resume: a break would end the claim pause on a stage
+                // that is already won. The pad offers Continue (and Continue
+                // and Take Break) instead; the winners list is what tells it so.
+                void refreshWinnerLists();
+            }
+            applyMutation(result, "Failed to toggle break.");
         } catch (err) {
             // Without this the button simply returned to idle with nothing on
             // screen, and the host could not tell a refused break from a lost
@@ -1212,8 +1219,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         try {
             // Send any draft still waiting, so the room sees the list being
             // checked. Correctness does not depend on it: check_claim gets the
-            // full list below.
-            await claimDraftQueueRef.current?.flush();
+            // full list below. A draft send has no time limit of its own, so
+            // the wait is capped: on bad wifi Check Win used to sit on
+            // "Checking" until a reload. Past the cap the draft carries on in
+            // the background and the claim is checked anyway.
+            await claimDraftQueueRef.current?.flush({ timeoutMs: CLAIM_DRAFT_FLUSH_TIMEOUT_MS });
             await runClaimCheck(attemptId, selectedNumbers, false);
         } catch (err) {
             // Safe to repeat: the same attempt with the same numbers returns the

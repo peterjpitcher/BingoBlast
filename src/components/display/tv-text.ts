@@ -4,10 +4,11 @@
 // `text-tv-*` tokens in tailwind.config.ts, so the overhaul can restyle them
 // in one place; this file is how the TV uses them.
 //
-// Always through tvText(), never cn('text-tv-base', ...): tailwind-merge does
-// not know the token names and reads `text-tv-*` as a text colour, so
-// cn('text-tv-base', 'text-white') keeps text-white and silently drops the
-// size. tvText() merges the other classes and adds the size afterwards.
+// Use tvText(). cn() in src/lib/utils.ts now knows the `text-tv-*` sizes
+// (TV_FONT_SIZES), so cn('text-tv-base', 'text-white') keeps both, but before
+// that fix tailwind-merge read them as text colours and silently dropped the
+// size. tvText() merges the other classes and adds the size afterwards, so the
+// size is always present whatever else is passed.
 //
 // Whole class names only: Tailwind cannot see a class built at runtime.
 import { type ClassValue } from 'clsx';

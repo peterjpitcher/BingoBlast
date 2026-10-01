@@ -27,7 +27,7 @@ App Router maps `src/app/<segments>/page.tsx` → URL paths. Dynamic segments us
 | `/display` | `src/app/display/page.tsx` | Public (auto-redirects to single active session) |
 | `/display/[sessionId]` | `src/app/display/[sessionId]/page.tsx` | Public |
 | `/player/[sessionId]` | `src/app/player/[sessionId]/page.tsx` | Public (guest-friendly) |
-| `/play` | `src/app/play/page.tsx` | Public. The permanent follow-along link behind the TV's QR code: `?s=<uuid>` redirects to `/player/<uuid>`; otherwise exactly one qualifying session redirects to it, and none or several shows "No bingo running right now". Only a well-formed uuid ever goes into the redirect, and only to `/player` on this site |
+| `/play` | `src/app/play/page.tsx` | Public. The permanent follow-along link behind the TV's QR code: `?s=<uuid>` redirects to `/player/<uuid>`; otherwise exactly one qualifying session redirects to it, none shows "No bingo running right now" with upcoming events, and several shows a list of the qualifying sessions (running first) linking to `/play?s=<id>`. Only a well-formed uuid ever goes into the redirect, and only to `/player` on this site |
 
 ## API Routes
 

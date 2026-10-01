@@ -80,6 +80,27 @@ function siteUrlProblem(value: string, isProduction: boolean): string | null {
   return null;
 }
 
+/**
+ * Why an ANCHOR_API_BASE_URL value is not usable, or null when it is fine. The
+ * management key travels in a header on every request to it, so it must be
+ * https; plain http is accepted only for a loopback host outside production,
+ * so a local run can point at a local management app. A path is allowed (the
+ * default is https://management.orangejelly.co.uk/api).
+ */
+function apiBaseUrlProblem(value: string, isProduction: boolean): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return 'is not a URL';
+  }
+  const isLocalHttp = parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname) && !isProduction;
+  if (parsed.protocol !== 'https:' && !isLocalHttp) return 'must use https';
+  if (parsed.username || parsed.password) return 'must not contain a username or password';
+  if (parsed.search || parsed.hash) return 'must not contain a query or fragment';
+  return null;
+}
+
 export interface ValidateBuildEnvOptions {
   /** Overrides EVENTS_FEED_REQUIRED; for tests. */
   eventsFeedRequired?: boolean;
@@ -111,8 +132,17 @@ export function validateBuildEnv(options: ValidateBuildEnvOptions = {}): void {
     if (problem) problems.push(`NEXT_PUBLIC_SITE_URL ${problem} (got "${siteUrl}").`);
   }
 
-  if (eventsFeedRequired && isProduction && !process.env.ANCHOR_API_KEY) {
+  // Trimmed, as src/lib/events-feed/client.ts reads it: a key of only spaces
+  // is no key, and passing the build with one would ship a feed that can
+  // never authenticate.
+  if (eventsFeedRequired && isProduction && !process.env.ANCHOR_API_KEY?.trim()) {
     problems.push('ANCHOR_API_KEY is not set, and production builds need it for the events feed.');
+  }
+
+  const apiBaseUrl = process.env.ANCHOR_API_BASE_URL?.trim();
+  if (apiBaseUrl) {
+    const problem = apiBaseUrlProblem(apiBaseUrl, isProduction);
+    if (problem) problems.push(`ANCHOR_API_BASE_URL ${problem} (got "${apiBaseUrl}").`);
   }
 
   if (problems.length > 0) {

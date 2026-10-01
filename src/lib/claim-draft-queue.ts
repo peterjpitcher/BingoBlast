@@ -28,6 +28,13 @@ export type ClaimDraftQueueState = 'idle' | 'sending' | 'retrying' | 'stopped';
 /** The first retry waits a second; each later one doubles, up to this ceiling. */
 export const CLAIM_DRAFT_MAX_BACKOFF_MS = 8000;
 
+/**
+ * How long Check Win waits for the draft before checking anyway. A send on bad
+ * wifi has no time limit of its own, and Check Win must never hang on it:
+ * check_claim gets the full list whether the draft landed or not.
+ */
+export const CLAIM_DRAFT_FLUSH_TIMEOUT_MS = 1500;
+
 /** Wait before the retry that follows the given number of consecutive failures (1 or more). */
 export function claimDraftBackoffMs(failures: number): number {
   const step = Math.max(1, Math.floor(failures));
@@ -44,15 +51,24 @@ export interface ClaimDraftQueueOptions<H> {
   clearTimer?: (handle: H) => void;
 }
 
+export interface ClaimDraftFlushOptions {
+  /**
+   * Resolve after this long even if the send is still out. The send carries on
+   * in the background; only the wait is cut short. Omit to wait for the answer.
+   */
+  timeoutMs?: number;
+}
+
 export interface ClaimDraftQueue {
   /** Queues the whole ordered list. Sent at once when nothing is in flight. */
   push(numbers: readonly number[]): void;
   /**
    * Sends anything waiting now, skipping a backoff wait, and resolves once the
    * queue is idle, stopped, or has failed that attempt. It never waits through
-   * more than one failure.
+   * more than one failure, never rejects, and with `timeoutMs` never waits
+   * longer than that.
    */
-  flush(): Promise<void>;
+  flush(options?: ClaimDraftFlushOptions): Promise<void>;
   readonly state: ClaimDraftQueueState;
   /** Stops everything: cancels a pending retry and ignores any answer still to come. */
   dispose(): void;
@@ -160,11 +176,29 @@ export function createClaimDraftQueue<H = ReturnType<typeof setTimeout>>(
       if (retryTimer === null) sendNext();
     },
 
-    flush() {
+    flush(flushOptions = {}) {
       if (disposed || state === 'stopped') return Promise.resolve();
       if (!inFlight && pending === null) return Promise.resolve();
+      const { timeoutMs } = flushOptions;
       const done = new Promise<void>((resolve) => {
-        waiters.push(resolve);
+        let timer: H | null = null;
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          if (timer !== null) {
+            clearTimer(timer);
+            timer = null;
+          }
+          resolve();
+        };
+        waiters.push(finish);
+        if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs)) {
+          timer = setTimer(() => {
+            timer = null;
+            finish();
+          }, Math.max(0, timeoutMs));
+        }
       });
       if (!inFlight) sendNext();
       return done;

@@ -37,6 +37,7 @@ import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
 import { useClockOffset } from '@/hooks/use-clock-offset';
 import { useBuildCheck } from '@/hooks/use-build-check';
+import { isPublicReloadSafe } from '@/lib/build-check';
 import { useWakeLock } from '@/hooks/wake-lock';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
@@ -743,14 +744,9 @@ export default function DisplayUI({
           ? 'loading'
           : 'ready';
 
-  // New releases: reload by itself, but never over a claim check or a win.
-  useBuildCheck({
-    mode: 'auto',
-    safe:
-      !currentGameState ||
-      currentGameState.status !== 'in_progress' ||
-      (!currentGameState.paused_for_validation && !currentGameState.display_win_type),
-  });
+  // New releases: reload by itself, but only with no game in progress or on a
+  // break. Never while numbers are being called, a claim check or a win.
+  useBuildCheck({ mode: 'auto', safe: isPublicReloadSafe(currentGameState) });
 
   // The rest of the night: game numbers, the next game and the rules' pot.
   // Re-read whenever the session row moves on (a game starts or finishes).

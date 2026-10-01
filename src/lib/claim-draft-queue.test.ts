@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CLAIM_DRAFT_FLUSH_TIMEOUT_MS,
   CLAIM_DRAFT_MAX_BACKOFF_MS,
   claimDraftBackoffMs,
   createClaimDraftQueue,
@@ -246,6 +247,63 @@ test('flush resolves after one more failed attempt instead of waiting for ever',
   calls[0].reply.resolve('error');
   await done;
   assert.equal(queue.state, 'retrying');
+});
+
+// Check Win awaits flush(). A draft send on bad wifi has no time limit of its
+// own, so without one the button sat on "Checking" until somebody reloaded.
+test('a time-limited flush resolves when the send hangs, and the send carries on', async () => {
+  const { queue, calls, timers } = harness();
+  queue.push([4, 7]);
+
+  let flushed = false;
+  const done = queue.flush({ timeoutMs: CLAIM_DRAFT_FLUSH_TIMEOUT_MS }).then(() => {
+    flushed = true;
+  });
+  await settle();
+  assert.equal(flushed, false, 'it still waits while there is time');
+  assert.deepEqual(timers.delays(), [CLAIM_DRAFT_FLUSH_TIMEOUT_MS]);
+
+  timers.fireAll();
+  await done;
+  assert.equal(flushed, true, 'the time limit releases the caller');
+  assert.equal(queue.state, 'sending', 'the send itself is not abandoned');
+
+  calls[0].reply.resolve('ok');
+  await settle();
+  assert.equal(queue.state, 'idle');
+  assert.equal(calls.length, 1);
+});
+
+test('a time-limited flush answered in time clears its timer', async () => {
+  const { queue, calls, timers } = harness();
+  queue.push([4]);
+  const done = queue.flush({ timeoutMs: CLAIM_DRAFT_FLUSH_TIMEOUT_MS });
+  calls[0].reply.resolve('ok');
+  await done;
+  assert.equal(timers.pending.size, 0, 'no timer is left behind');
+  assert.equal(queue.state, 'idle');
+});
+
+test('a time-limited flush also skips a backoff wait, and is bounded while the retry hangs', async () => {
+  const { queue, calls, timers } = harness();
+  queue.push([4]);
+  calls[0].reply.resolve('error');
+  await settle();
+  assert.deepEqual(timers.delays(), [claimDraftBackoffMs(1)]);
+
+  const done = queue.flush({ timeoutMs: CLAIM_DRAFT_FLUSH_TIMEOUT_MS });
+  await settle();
+  assert.equal(calls.length, 2, 'the waiting list goes at once');
+  assert.deepEqual(timers.delays(), [CLAIM_DRAFT_FLUSH_TIMEOUT_MS], 'the backoff wait is replaced by the time limit');
+
+  timers.fireAll();
+  await done;
+  assert.equal(queue.state, 'retrying', 'still out; the caller is free to check the claim');
+});
+
+test('the Check Win time limit is short enough not to hold the host up', () => {
+  assert.ok(CLAIM_DRAFT_FLUSH_TIMEOUT_MS > 0);
+  assert.ok(CLAIM_DRAFT_FLUSH_TIMEOUT_MS <= 2000);
 });
 
 test('flush on an idle queue resolves straight away', async () => {

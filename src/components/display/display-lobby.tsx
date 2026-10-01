@@ -130,8 +130,8 @@ export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobby
         </h1>
         <Card className="w-full max-w-4xl bg-slate-900 border-slate-800">
           <CardHeader>
-            {/* The size is on the inner span: CardTitle merges its classes with
-                cn(), which would drop a text-tv-* token (see tv-text.ts). */}
+            {/* The size sits on the inner span so CardTitle's own heading size
+                cannot compete with it. */}
             <CardTitle className="text-center text-slate-400 uppercase tracking-widest">
               <span className={tvText('xs')}>Select Active Game</span>
             </CardTitle>

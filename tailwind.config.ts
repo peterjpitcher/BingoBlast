@@ -31,8 +31,10 @@ const config: Config = {
       //   tv-xs to tv-base stop growing at 1080p, because they sit in the
       //   TV's fixed-height top bar and footer; the larger sizes are only used
       //   on slides and overlays, so they keep growing on bigger screens.
-      // Use them through tvText() in src/components/display/tv-text.ts, not
-      // cn(): tailwind-merge reads `text-tv-*` as a text colour and drops it.
+      // Use them through tvText() in src/components/display/tv-text.ts. They are
+      // also registered as font sizes with tailwind-merge in src/lib/utils.ts,
+      // so cn() keeps them; keep that list in step with these names (a test
+      // checks it).
       fontSize: {
         "tv-xs": ["clamp(22px, 3vh, 32.4px)", { lineHeight: "1.25" }], // 22 / 32.4: the floor
         "tv-sm": ["clamp(26px, 3.5vh, 37.8px)", { lineHeight: "1.2" }], // 26 / 37.8: second lines

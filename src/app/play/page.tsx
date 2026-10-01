@@ -2,11 +2,12 @@ import React from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/utils/supabase/server';
-import { getTodayIsoDateInLondon } from '@/lib/dates';
+import { formatDateInLondon, getTodayIsoDateInLondon } from '@/lib/dates';
 import { isUuid } from '@/lib/utils';
 import {
   CANDIDATE_SESSION_STATUSES,
   RESOLVABLE_SESSION_COLUMNS,
+  pickSessionsByIds,
   resolveDisplaySession,
   type ResolvableSession,
 } from '@/lib/session-resolution';
@@ -17,6 +18,11 @@ import { PhoneEvents } from '@/components/display/phone-events';
 
 interface PlayPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+/** RESOLVABLE_SESSION_COLUMNS also reads the name, for the list of games. */
+interface PlaySession extends ResolvableSession {
+  name: string;
 }
 
 /**
@@ -30,8 +36,9 @@ interface PlayPageProps {
  *   still sent there: the player page recovers from an outage, and 404s a
  *   session that does not exist.
  * - Otherwise the session rule the TV uses (A3): exactly one qualifying
- *   session redirects to it; none or several shows "No bingo running right
- *   now" with the upcoming events under it (spec 5.5).
+ *   session redirects to it; several are listed, running first, each linking
+ *   to /play?s=<id>; none shows "No bingo running right now". The upcoming
+ *   events sit under either (spec 5.5).
  */
 export default async function PlayPage({ searchParams }: PlayPageProps) {
   const params = await searchParams;
@@ -56,7 +63,7 @@ export default async function PlayPage({ searchParams }: PlayPageProps) {
     .select(RESOLVABLE_SESSION_COLUMNS)
     .in('status', CANDIDATE_SESSION_STATUSES)
     .order('start_date', { ascending: false })
-    .returns<ResolvableSession[]>();
+    .returns<PlaySession[]>();
 
   if (sessionsError || !sessions) {
     logError('play', sessionsError ?? new Error('Play lookup returned nothing'));
@@ -74,6 +81,33 @@ export default async function PlayPage({ searchParams }: PlayPageProps) {
     redirect(`/player/${resolution.id}`);
   }
 
+  if (resolution.kind === 'many') {
+    const choices = pickSessionsByIds(sessions, resolution.ids);
+    return (
+      <PlayMessage
+        title="Which bingo are you at?"
+        body="More than one game is on. Tap yours to follow it."
+        events={await eventsPromise}
+      >
+        <ul className="mt-4 space-y-2 text-left">
+          {choices.map((session) => (
+            <li key={session.id}>
+              <Link
+                href={`/play?s=${encodeURIComponent(session.id)}`}
+                className="flex min-h-[44px] flex-col justify-center rounded-md border border-[var(--anchor-border)] px-4 py-2 text-white hover:bg-[var(--anchor-green-soft)]"
+              >
+                <span className="text-base font-semibold">{session.name}</span>
+                {session.start_date && (
+                  <span className="text-sm text-white/85">{formatDateInLondon(session.start_date)}</span>
+                )}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </PlayMessage>
+    );
+  }
+
   return <PlayMessage title="No bingo running right now" events={await eventsPromise} />;
 }
 
@@ -83,9 +117,11 @@ interface PlayMessageProps {
   retry?: boolean;
   /** Listed under the message, next bingo night first; links to the post-event pages, as on the idle TV. */
   events?: EventsProjection | null;
+  /** Inside the card, under the message (the list of games). */
+  children?: React.ReactNode;
 }
 
-function PlayMessage({ title, body, retry = false, events = null }: PlayMessageProps) {
+function PlayMessage({ title, body, retry = false, events = null, children }: PlayMessageProps) {
   return (
     <main
       className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-white"
@@ -97,6 +133,7 @@ function PlayMessage({ title, body, retry = false, events = null }: PlayMessageP
       >
         <h1 className="text-xl font-bold text-white">{title}</h1>
         {body && <p className="mt-2 text-base text-white">{body}</p>}
+        {children}
         {retry && (
           <Link
             href="/play"

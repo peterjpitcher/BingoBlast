@@ -861,9 +861,9 @@ export async function toggleBreak(gameId: string, onBreak: boolean): Promise<Act
 
     const { data: gameState, error: fetchError } = await supabase
         .from('game_states')
-        .select('status')
+        .select('status, current_stage_index, paused_for_validation')
         .eq('game_id', gameId)
-        .single<Pick<GameStateRow, 'status'>>();
+        .single<Pick<GameStateRow, 'status' | 'current_stage_index' | 'paused_for_validation'>>();
 
     if (fetchError || !gameState) {
         return failure('toggleBreak', COULD_NOT_READ_GAME_ERROR, fetchError ?? 'game state not found');
@@ -873,6 +873,48 @@ export async function toggleBreak(gameId: string, onBreak: boolean): Promise<Act
     // refreshes and shows the real state rather than treating it as a hard error.
     if (gameState.status !== 'in_progress') {
         return conflictFailure('toggleBreak', "This game is not in progress.");
+    }
+
+    // The break below also ends a claim pause, so it gets the same check as
+    // resumeGame: once the current stage has a non-void winner, ending the
+    // pause into a break would come back to calling numbers for a prize that is
+    // gone. The host continues to the next stage instead (Continue and Take
+    // Break does both in one write).
+    if (gameState.paused_for_validation) {
+        const { data: gameRow, error: gameError } = await supabase
+            .from('games')
+            .select('stage_sequence')
+            .eq('id', gameId)
+            .single<Pick<Database['public']['Tables']['games']['Row'], 'stage_sequence'>>();
+
+        if (gameError || !gameRow) {
+            return failure('toggleBreak', COULD_NOT_READ_GAME_ERROR, gameError ?? 'game not found');
+        }
+
+        const stageName = (gameRow.stage_sequence as string[] | null)?.[gameState.current_stage_index];
+        if (stageName) {
+            // is_void is nullable, so "not void" is null or false. A plain
+            // eq('is_void', false) would skip the null rows.
+            const { data: stageWinners, error: winnersError } = await supabase
+                .from('winners')
+                .select('id')
+                .eq('game_id', gameId)
+                .eq('stage', stageName as WinStage)
+                .or('is_void.is.null,is_void.eq.false')
+                .limit(1);
+
+            if (winnersError) {
+                return failure('toggleBreak', COULD_NOT_READ_GAME_ERROR, winnersError);
+            }
+            if (stageWinners && stageWinners.length > 0) {
+                logActionFailure('toggleBreak', 'refused: stage_already_won');
+                return {
+                    success: false,
+                    error: `${stageName} has already been won. Continue to the next stage, with a break if you want one.`,
+                    code: 'stage_already_won',
+                };
+            }
+        }
     }
 
     // Deliberately does NOT touch last_call_at. It used to be bumped here to
@@ -888,13 +930,16 @@ export async function toggleBreak(gameId: string, onBreak: boolean): Promise<Act
         display_winner_name: null,
     };
     // The update binds everything the prechecks asserted, so a break cannot
-    // commit after another device took control or ended the game.
+    // commit after another device took control or ended the game, or after a
+    // claim pause or stage change the winner check above did not see.
     const { data: rows, error: updateError } = await supabase
         .from('game_states')
         .update(breakUpdate)
         .eq('game_id', gameId)
         .eq('controlling_host_id', controlResult.user!.id)
         .eq('status', 'in_progress')
+        .eq('current_stage_index', gameState.current_stage_index)
+        .eq('paused_for_validation', gameState.paused_for_validation)
         .select('*');
 
     if (updateError) {

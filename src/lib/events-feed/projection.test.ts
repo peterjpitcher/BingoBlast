@@ -23,8 +23,10 @@ import {
   DETAIL_TIMEOUT_MS,
   LIST_TIMEOUT_MS,
   MAX_PROJECTION_AGE_MS,
+  REFRESH_FAIL_FAST_MS,
   buildEventsProjection,
   createProjectionMemo,
+  createProjectionRefresher,
   getEventsProjection,
   resolveEventsProjection,
   type CachedEventsProjection,
@@ -173,6 +175,31 @@ test('a malformed event is dropped alone and reported by count', async () => {
   assert.doesNotMatch(seen[0].message, /soon/, 'the report carries a count, not the data');
 });
 
+// A refresh that "succeeded" with every event dropped used to cache an empty
+// list over a good one. It now fails, so the cache keeps its last good value.
+test('a list in which every event is malformed fails the refresh with a parse error', async () => {
+  const malformed = (events: Array<Record<string, unknown>>) => () =>
+    listResponse(events.map((event) => ({ ...event, startDate: 'soon' })));
+  for (const [path, events, what] of [
+    [GENERAL_PATH, [QUIZ_OCT_7, MUSIC_BINGO_OCT_16], 'general list'],
+    [BINGO_PATH, [BINGO_NOV_18, BINGO_DEC_16], 'bingo-night list'],
+  ] as const) {
+    const api = managementApi({ [path]: malformed([...events]) });
+    await assert.rejects(
+      buildEventsProjection({ fetchJson: api.fetchJson, todayIso: TODAY, now: () => NOW }),
+      (err: unknown) => err instanceof EventsFeedError && err.code === 'parse' && !/soon/.test(err.message),
+      what,
+    );
+  }
+});
+
+test('a list that is genuinely empty is not an error', async () => {
+  const api = managementApi({ [GENERAL_PATH]: () => listResponse([]), [BINGO_PATH]: () => listResponse([]) });
+  const projection = await buildEventsProjection({ fetchJson: api.fetchJson, todayIso: TODAY, now: () => NOW });
+  assert.deepEqual(projection.events, []);
+  assert.deepEqual(projection.bingoNights, []);
+});
+
 test('without a bingo-night category, bingo nights come from the general list and it is reported', async () => {
   const api = managementApi({
     '/event-categories': () => categoriesResponse(ALL_CATEGORIES.filter((c) => c.slug !== 'bingo-night')),
@@ -225,6 +252,98 @@ test('the whole refresh is bounded to 8 seconds; details that no longer fit use 
   assert.equal(calls.filter((c) => c.path.startsWith('/events/')).length, 0, 'no time left for details');
   assert.ok(projection.events.every((e) => e.qrPre === eventIdLink(e.id, 'pre_event_screen')));
   assert.deepEqual(seen.map((r) => r.scope), ['events-feed:details']);
+});
+
+// ---------------------------------------------------------------------------
+// One refresh at a time, and a pause after a failure
+// ---------------------------------------------------------------------------
+
+test('concurrent refreshes share the one in flight, and the next one after it starts afresh', async () => {
+  const api = managementApi();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fetchJson: FetchJson = async (path, options) => {
+    await gate;
+    return api.fetchJson(path, options);
+  };
+  const refresh = createProjectionRefresher({ fetchJson, todayIso: () => TODAY, now: () => NOW });
+
+  const pending = [refresh(), refresh(), refresh()];
+  release();
+  const [a, b, c] = await Promise.all(pending);
+  assert.equal(a, b);
+  assert.equal(b, c);
+  assert.equal(api.calls.filter((call) => call.path === GENERAL_PATH).length, 1, 'one refresh, not three');
+
+  await refresh();
+  assert.equal(api.calls.filter((call) => call.path === GENERAL_PATH).length, 2);
+});
+
+test('after a failure, refreshes fail at once for a minute without asking the management app again', async () => {
+  let clock = NOW;
+  let down = true;
+  let fetches = 0;
+  const api = managementApi();
+  const fetchJson: FetchJson = async (path, options) => {
+    fetches += 1;
+    if (down) throw new EventsFeedError('The management API could not be reached for /events', 'network');
+    return api.fetchJson(path, options);
+  };
+  const { report, seen } = reports();
+  const refresh = createProjectionRefresher({ fetchJson, todayIso: () => TODAY, now: () => clock, report });
+
+  const first: unknown = await refresh().catch((err: unknown) => err);
+  assert.ok(first instanceof EventsFeedError);
+  const fetchesAfterFirst = fetches;
+
+  // Concurrent callers during the pause all fail at once with the same error.
+  clock += REFRESH_FAIL_FAST_MS - 1;
+  const during = await Promise.all([refresh(), refresh()].map((p) => p.catch((err: unknown) => err)));
+  assert.ok(during.every((err) => err === first), 'the same failure, straight away');
+  assert.equal(fetches, fetchesAfterFirst, 'the management app is not asked again during the pause');
+  assert.deepEqual(seen.map((r) => r.scope), ['events-feed:refresh'], 'the failure is reported once');
+
+  // A cold page during the pause answers 'error' at once, and does not report it again.
+  const cold = await resolveEventsProjection({
+    configured: true,
+    load: refresh,
+    report,
+    alreadyReported: (err) => err === first,
+  });
+  assert.deepEqual(cold, { status: 'error', fetchedAt: null, events: [], bingoNights: [] });
+  assert.equal(fetches, fetchesAfterFirst);
+  assert.equal(seen.length, 1);
+
+  // Once the pause is over, the next refresh tries again, and succeeds.
+  down = false;
+  clock += 1;
+  const projection = await refresh();
+  assert.ok(fetches > fetchesAfterFirst);
+  assert.ok(projection.events.length > 0);
+});
+
+test('a refresh that fails while others wait on it fails them all, once', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let fetches = 0;
+  const fetchJson: FetchJson = async () => {
+    fetches += 1;
+    await gate;
+    throw new EventsFeedError('The management API did not answer /events within 5000ms', 'timeout');
+  };
+  const { report, seen } = reports();
+  const refresh = createProjectionRefresher({ fetchJson, todayIso: () => TODAY, now: () => NOW, report });
+
+  const waiting = [refresh(), refresh(), refresh()].map((p) => p.catch((err: unknown) => err));
+  release();
+  const errors = await Promise.all(waiting);
+  assert.ok(errors.every((err) => err === errors[0] && err instanceof EventsFeedError));
+  assert.equal(fetches, 2, 'one refresh: the general list and the category lookup, once each');
+  assert.deepEqual(seen.map((r) => r.scope), ['events-feed:refresh']);
 });
 
 // ---------------------------------------------------------------------------
