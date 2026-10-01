@@ -40,3 +40,10 @@ export function tvText(size: TvTextSize, ...classes: ClassValue[]): string {
   const rest = cn(...classes);
   return rest ? `${TV_TEXT_CLASS[size]} ${rest}` : TV_TEXT_CLASS[size];
 }
+
+/**
+ * The label that keeps the part of the night in view on a slide that is about
+ * something else, for example "Break time" on the rules or on an event. One
+ * treatment, so the room reads it the same way wherever it appears.
+ */
+export const TV_STATUS_LABEL_CLASS = tvText('xs', 'font-bold uppercase tracking-[0.12em] text-[#f3d59d]');

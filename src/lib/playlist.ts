@@ -12,7 +12,10 @@
 //     next bingo night, the events, and thanks or review again after every two.
 //   - idle (/display with no session): "Bingo nights at The Anchor", the next
 //     bingo night, the events.
-//   - the break and between-games screens alternate with the rules.
+//   - a break in a game: the break screen, the next bingo night, the events
+//     two at a time with the break screen again after every two, and the rules
+//     once a loop.
+//   - between games: the next game, alternating with the rules.
 // With no events (none, an error, or no key), each falls back to its own short
 // loop. The TV never shows an error about events.
 import type { InGameSubState, NightPhase } from './night-phase';
@@ -58,7 +61,7 @@ export interface PlainSlide extends SlideBase {
 export interface EventBearingSlide extends SlideBase {
   kind: EventSlideKind;
   event: ScreenEvent;
-  /** The QR target for this phase: qrPre before the night, qrPost after it and on the idle screen. */
+  /** The QR target for the moment the slide shows in (see eventLinkForPhase). */
   qrUrl: string;
 }
 
@@ -104,12 +107,24 @@ export function getUsableEvents(
 }
 
 /**
- * Where an event's QR or "View event" link points in a phase: the
- * pre_event_screen link before the night starts, and the post_event_screen
- * link once it is over and on the idle screen (spec 5.5).
+ * Where an event's QR or "View event" link points, for the TV and the phones
+ * alike. The one place that decides it:
+ *   - before the night starts: the pre_event_screen link (qrPre);
+ *   - on a break in a game: the in_game_screen link (qrInGame);
+ *   - once the night is over, and on the idle screen: the post_event_screen
+ *     link (qrPost), spec 5.5.
+ * Between games counts as mid-night too (qrInGame); nothing shows events then
+ * yet, see buildPlaylist. A game that is not on a break shows no events, and
+ * keeps the answer it always had (qrPost).
  */
-export function eventLinkForPhase(event: ScreenEvent, phase: PlaylistPhase): string {
-  return phase === 'before_start' ? event.qrPre : event.qrPost;
+export function eventLinkForPhase(
+  event: ScreenEvent,
+  phase: PlaylistPhase,
+  inGameSubState: InGameSubState | null = null
+): string {
+  if (phase === 'before_start') return event.qrPre;
+  if (phase === 'between_games' || (phase === 'in_game' && inGameSubState === 'break')) return event.qrInGame;
+  return event.qrPost;
 }
 
 export interface PhoneEventItem {
@@ -157,6 +172,9 @@ function readScreenEvent(value: unknown): ScreenEvent | null {
     category: isString(raw.category) ? raw.category : null,
     image,
     qrPre: raw.qrPre,
+    // A response cached before qrInGame existed has none: that event uses its
+    // pre-event link on a break, so a rollout never drops the list.
+    qrInGame: isString(raw.qrInGame) ? raw.qrInGame : raw.qrPre,
     qrPost: raw.qrPost,
   };
 }
@@ -212,7 +230,7 @@ export const REVIEW_MS = 20_000;
 export const IDLE_BINGO_MS = 20_000;
 
 export interface BuildPlaylistOptions {
-  /** For the in_game phase: only a break loops (break screen, then the rules). */
+  /** For the in_game phase: only a break loops (the break screen, the events and the rules). */
   inGameSubState?: InGameSubState | null;
   /**
    * Whether the review invitation is switched on (isReviewInviteEnabled() in
@@ -235,13 +253,19 @@ function createSlideList() {
     plain(kind: PlainSlideKind, durationMs: number) {
       slides.push({ key: nextKey(kind), kind, durationMs });
     },
-    event(kind: EventSlideKind, event: ScreenEvent, durationMs: number, phase: PlaylistPhase) {
+    event(
+      kind: EventSlideKind,
+      event: ScreenEvent,
+      durationMs: number,
+      phase: PlaylistPhase,
+      inGameSubState: InGameSubState | null = null
+    ) {
       slides.push({
         key: nextKey(`${kind}-${event.id}`),
         kind,
         durationMs,
         event,
-        qrUrl: eventLinkForPhase(event, phase),
+        qrUrl: eventLinkForPhase(event, phase, inGameSubState),
       });
     },
   };
@@ -325,6 +349,63 @@ function buildIdle(usable: UsableEvents): Slide[] {
   return list.slides;
 }
 
+/** Nothing to show: what a pause in the night loops through without events. */
+const NO_EVENTS: UsableEvents = { events: [], nextBingo: null };
+
+/**
+ * A pause in the night with its own status screen: a break in a game ('break')
+ * or the gap between games ('next_game'). The status screen (20 s), the next
+ * bingo night if there is one (12 s), then the events two at a time (12 s
+ * each) with the status screen again between every two, and the rules (20 s)
+ * once a loop, last, so the loop runs straight back to the status screen.
+ *
+ * With nothing to show it is the status screen and the rules, exactly as
+ * before events were added (no preload field either).
+ */
+function buildPause(
+  status: 'break' | 'next_game',
+  usable: UsableEvents,
+  phase: PlaylistPhase,
+  inGameSubState: InGameSubState | null
+): Slide[] {
+  const list = createSlideList();
+  list.plain(status, STATUS_SLIDE_MS);
+  if (usable.events.length === 0 && !usable.nextBingo) {
+    list.plain('rules', RULES_MS);
+    return list.slides;
+  }
+  if (usable.nextBingo) list.event('next_bingo', usable.nextBingo, NEXT_BINGO_MS, phase, inGameSubState);
+  inPairs(usable.events).forEach((pair, index) => {
+    // Between pairs only: after the last pair come the rules, then the loop is
+    // back at the status screen.
+    if (index > 0) list.plain(status, STATUS_SLIDE_MS);
+    for (const event of pair) list.event('event', event, EVENT_MS, phase, inGameSubState);
+  });
+  list.plain('rules', RULES_MS);
+  return withPreloads(list.slides);
+}
+
+/**
+ * True for a slide that shows a QR code of its own. The TV hides its corner
+ * follow-along QR while one of these is up, so there is never more than one
+ * code on screen to scan.
+ */
+export function slideCarriesQr(kind: SlideKind): boolean {
+  switch (kind) {
+    case 'event':
+    case 'next_bingo':
+    case 'follow_along':
+    case 'review':
+    case 'idle_bingo':
+      return true;
+    case 'rules':
+    case 'break':
+    case 'next_game':
+    case 'thanks':
+      return false;
+  }
+}
+
 /**
  * The loop for a phase. An empty list means the screen shows its own fixed
  * layout (a game being called, a claim being checked, a win).
@@ -343,16 +424,15 @@ export function buildPlaylist(
     case 'before_start':
       return withPreloads(buildBeforeStart(getUsableEvents(projection, now, sessionDate)));
     case 'between_games':
-      return [
-        { key: 'next_game-0', kind: 'next_game', durationMs: STATUS_SLIDE_MS },
-        { key: 'rules-0', kind: 'rules', durationMs: RULES_MS },
-      ];
+      // No events between games. To show them here as on a break, replace
+      // NO_EVENTS with getUsableEvents(projection, now, sessionDate): that one
+      // argument is the whole change to the TV (eventLinkForPhase already
+      // gives the in-game link, and the TV labels and clears the corner QR for
+      // any event slide). The phone would still need its list adding.
+      return buildPause('next_game', NO_EVENTS, phase, null);
     case 'in_game':
       return opts.inGameSubState === 'break'
-        ? [
-            { key: 'break-0', kind: 'break', durationMs: STATUS_SLIDE_MS },
-            { key: 'rules-0', kind: 'rules', durationMs: RULES_MS },
-          ]
+        ? buildPause('break', getUsableEvents(projection, now, sessionDate), phase, 'break')
         : [];
     case 'night_over':
       return withPreloads(buildNightOver(getUsableEvents(projection, now, sessionDate), opts.reviewEnabled === true));

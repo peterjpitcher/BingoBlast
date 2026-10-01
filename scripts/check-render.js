@@ -11,14 +11,20 @@
 // The file is one assignment, so evaluating it also returns the function:
 // `eval(source)({ floorPx: 32 })`.
 //
-// It returns { smallText, overlaps, badText }:
+// It returns { smallText, overlaps, badText, lowContrast }:
 //   - smallText: visible text whose computed font size is below the floor,
 //     as { text, px }, one entry per distinct text and size;
 //   - overlaps: pairs of elements marked `data-check-overlap` whose boxes
 //     intersect, as { a, b } (the attribute's value, or a short description).
 //     An element that is entirely covered by something else (the corner QR
 //     under the claim overlay, say) is not on screen, so it is left out;
-//   - badText: visible text containing "undefined", "NaN" or "Invalid Date".
+//   - badText: visible text containing "undefined", "NaN" or "Invalid Date";
+//   - lowContrast: visible text that cannot be told from what is behind it, as
+//     { text, ratio }: a contrast ratio below 3 (the WCAG floor for large
+//     text) between its colour and the background colours of the elements it
+//     sits inside. White event text on a white book's screen went out to
+//     review this way. It only reads background colours: text over a
+//     background image or gradient is left out, as it cannot be judged here.
 //
 // "Visible" means rendered with a size, not display:none, not
 // visibility:hidden, not transparent and not clipped away like screen-reader
@@ -79,10 +85,68 @@ globalThis.checkRender = function checkRender(options) {
     return rects.some((r) => r.width > 0 && r.height > 0);
   }
 
+  // Any CSS colour syntax (rgb, oklab, a name) read back as [r, g, b, alpha]
+  // by painting it on a 1x1 canvas.
+  const colourCanvas = document.createElement('canvas');
+  colourCanvas.width = 1;
+  colourCanvas.height = 1;
+  const colourContext = colourCanvas.getContext('2d', { willReadFrequently: true });
+  const colourCache = new Map();
+  function readColour(css) {
+    if (colourCache.has(css)) return colourCache.get(css);
+    colourContext.clearRect(0, 0, 1, 1);
+    colourContext.fillStyle = css;
+    colourContext.fillRect(0, 0, 1, 1);
+    const data = colourContext.getImageData(0, 0, 1, 1).data;
+    const colour = [data[0], data[1], data[2], data[3] / 255];
+    colourCache.set(css, colour);
+    return colour;
+  }
+
+  function blend(top, under) {
+    const alpha = top[3];
+    return [0, 1, 2].map((i) => top[i] * alpha + under[i] * (1 - alpha)).concat(1);
+  }
+
+  function luminance(colour) {
+    const [r, g, b] = [0, 1, 2].map((i) => {
+      const channel = colour[i] / 255;
+      return channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  // The colour behind an element's text: the background colours of the
+  // element and everything it sits inside, painted from the page (white) up.
+  // Null when one of them has a background image, which cannot be read here.
+  function backgroundBehind(el) {
+    const chain = [];
+    for (let node = el; node; node = node.parentElement) chain.push(node);
+    let colour = [255, 255, 255, 1];
+    for (let i = chain.length - 1; i >= 0; i -= 1) {
+      const style = getComputedStyle(chain[i]);
+      if (style.backgroundImage && style.backgroundImage !== 'none') return null;
+      colour = blend(readColour(style.backgroundColor), colour);
+    }
+    return colour;
+  }
+
+  const MIN_CONTRAST = 3;
+  function contrastRatio(el) {
+    const background = backgroundBehind(el);
+    if (!background) return null;
+    const text = blend(readColour(getComputedStyle(el).color), background);
+    const a = luminance(text);
+    const b = luminance(background);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  }
+
   const smallSeen = new Set();
   const smallText = [];
   const badSeen = new Set();
   const badText = [];
+  const contrastSeen = new Set();
+  const lowContrast = [];
 
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -106,6 +170,14 @@ globalThis.checkRender = function checkRender(options) {
     if (BAD_TEXT.test(text) && !badSeen.has(text)) {
       badSeen.add(text);
       badText.push(text);
+    }
+    const ratio = contrastRatio(parent);
+    if (ratio !== null && ratio < MIN_CONTRAST) {
+      const short = text.length > 80 ? text.slice(0, 77) + '...' : text;
+      if (!contrastSeen.has(short)) {
+        contrastSeen.add(short);
+        lowContrast.push({ text: short, ratio: Math.round(ratio * 100) / 100 });
+      }
     }
   }
 
@@ -144,5 +216,5 @@ globalThis.checkRender = function checkRender(options) {
     }
   }
 
-  return { smallText, overlaps, badText };
+  return { smallText, overlaps, badText, lowContrast };
 };

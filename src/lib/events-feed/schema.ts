@@ -15,7 +15,8 @@
 // - GET /events and /events?category_id=...: { success, data: { events, meta } }
 // - GET /events/{id}: { success, data: { ..., qr_short_links, marketing_short_links } },
 //   where both link maps are keyed by channel ('pre_event_screen',
-//   'post_event_screen', ...) and hold l.the-anchor.pub short links.
+//   'in_game_screen', 'post_event_screen', ...) and hold l.the-anchor.pub
+//   short links.
 // - GET /event-categories: { success, data: { categories: [{ id, slug, ... }] } }
 
 import { z } from 'zod';
@@ -175,6 +176,7 @@ export function parseScreenShortLinks(json: unknown): Required<ScreenShortLinks>
   const maps = [envelope.data.data.qr_short_links, envelope.data.data.marketing_short_links];
   return {
     pre_event_screen: pickLink(maps, 'pre_event_screen'),
+    in_game_screen: pickLink(maps, 'in_game_screen'),
     post_event_screen: pickLink(maps, 'post_event_screen'),
   };
 }

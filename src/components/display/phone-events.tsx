@@ -1,9 +1,10 @@
 // src/components/display/phone-events.tsx
 //
 // Upcoming events on a phone (spec 5.5, D5): at the start and end of the
-// night on /player, and on /play when no bingo is running. The same events as
-// the TV, next bingo night first, each with a "View event" link that opens in
-// a new tab. Also the review button (spec 5.6), shown only when switched on.
+// night and under the break card on /player, and on /play when no bingo is
+// running. The same events as the TV, next bingo night first, each with a
+// "View event" link that opens in a new tab. Also the review button (spec
+// 5.6), shown only when switched on.
 //
 // The labels ("Tonight", "7pm") need the phone's clock, so the list appears
 // once the page is running in the browser; the server render leaves it out
@@ -23,6 +24,7 @@ import {
   type ScreenEventImage,
 } from '@/lib/playlist';
 import { formatEventWhenAndTime } from '@/lib/dates';
+import type { InGameSubState } from '@/lib/night-phase';
 import { REVIEW_URL, isReviewInviteEnabled } from '@/lib/venue-links';
 
 const LINK_CLASS =
@@ -47,12 +49,18 @@ interface PhoneEventsProps {
   projection: EventsProjection | null;
   /** The phone's session date, so tonight's own bingo night is left out; null on /play. */
   sessionDate: string | null;
-  /** Picks the pre- or post-event link: before_start, night_over, or idle on /play. */
+  /**
+   * With `inGameSubState`, picks the link (eventLinkForPhase): pre-event at
+   * before_start, in-game on a break, post-event at night_over and when idle
+   * on /play.
+   */
   phase: PlaylistPhase;
+  /** For the in_game phase: 'break' is the only sub-state that lists events. */
+  inGameSubState?: InGameSubState | null;
   className?: string;
 }
 
-export function PhoneEvents({ projection, sessionDate, phase, className }: PhoneEventsProps) {
+export function PhoneEvents({ projection, sessionDate, phase, inGameSubState = null, className }: PhoneEventsProps) {
   const minuteMs = useMinuteClock();
   if (minuteMs === 0) return null;
   const items = getPhoneEventList(projection, new Date(minuteMs), sessionDate);
@@ -75,7 +83,7 @@ export function PhoneEvents({ projection, sessionDate, phase, className }: Phone
                   <p className="text-base font-bold leading-snug text-white">{event.title}</p>
                   {whenLine && <p className="text-base text-white">{whenLine}</p>}
                   <a
-                    href={eventLinkForPhase(event, phase)}
+                    href={eventLinkForPhase(event, phase, inGameSubState)}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={`View event: ${event.title} (opens in a new tab)`}

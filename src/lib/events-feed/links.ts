@@ -4,8 +4,8 @@
 // tests.
 //
 // The QR prefers the event's own screen short link from the management app
-// (`pre_event_screen` before the night, `post_event_screen` after it), which is
-// tracked. Without one it falls back to the website's event-id link, which
+// (`pre_event_screen` before the night, `in_game_screen` on a break during it,
+// `post_event_screen` after it), which is tracked. Without one it falls back to the website's event-id link, which
 // works but loses its tags to the website's canonical redirect (spec A6).
 //
 // Deliberately never the API's `url`, `offers.url` or `bookingUrl`: `url` and

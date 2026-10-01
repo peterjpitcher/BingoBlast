@@ -13,8 +13,13 @@
  */
 export type EventsProjectionStatus = 'ok' | 'no_events' | 'error' | 'missing_config';
 
-/** The management app's QR channels for the pub screens. */
-export type ScreenChannel = 'pre_event_screen' | 'post_event_screen';
+/**
+ * The management app's QR channels this app's screens use: before the night,
+ * during it (a break in a game) and after it. The names and their utm_source
+ * values match the management app's channel table (its
+ * src/lib/short-links/channels.ts).
+ */
+export type ScreenChannel = 'pre_event_screen' | 'in_game_screen' | 'post_event_screen';
 
 export interface ScreenEventImage {
   /** An https URL in the event-images bucket (see image-host.ts). */
@@ -40,6 +45,8 @@ export interface ScreenEvent {
   image: ScreenEventImage | null;
   /** QR target before the night starts (pre_event_screen short link, else the id link). */
   qrPre: string;
+  /** QR target while the night is under way, on a break (in_game_screen short link, else the id link). */
+  qrInGame: string;
   /** QR target once the night is over (post_event_screen short link, else the id link). */
   qrPost: string;
 }

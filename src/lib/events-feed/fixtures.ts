@@ -108,7 +108,10 @@ export function categoriesResponse(categories: Array<{ id: string; name: string;
 
 export const ALL_CATEGORIES = [QUIZ, MUSIC_BINGO, PARTIES, BINGO_CATEGORY];
 
-/** GET /events/{id}, with the link maps keyed by channel. */
+/**
+ * GET /events/{id}, with the link maps keyed by channel (for the screens:
+ * pre_event_screen, in_game_screen and post_event_screen).
+ */
 export function detailResponse(id: string, links: Record<string, string> = {}): unknown {
   return {
     success: true,
