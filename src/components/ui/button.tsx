@@ -25,11 +25,7 @@ interface ButtonStyleOptions {
 
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    Omit<ButtonStyleOptions, "className" | "variant"> {
-  // TEMPORARY: 'secondary' and 'danger' are the old palette's variants. They
-  // render as `outline` while each screen is moved to the three brand
-  // variants, and are removed once no screen uses them.
-  variant?: ButtonVariant | "secondary" | "danger";
+    Omit<ButtonStyleOptions, "className"> {
   isLoading?: boolean;
 }
 
@@ -78,10 +74,9 @@ export function buttonClass({
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, block, tone, isLoading, children, disabled, ...props }, ref) => {
-    const brandVariant = variant === "secondary" || variant === "danger" ? "outline" : variant;
     return (
       <button
-        className={buttonClass({ variant: brandVariant, size, block, tone, className })}
+        className={buttonClass({ variant, size, block, tone, className })}
         ref={ref}
         disabled={disabled || isLoading}
         {...props}

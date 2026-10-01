@@ -27,8 +27,6 @@ interface BingoBallProps {
   surface?: "card" | "deep";
   className?: string;
   style?: React.CSSProperties;
-  /** TEMPORARY: the old size presets. Ignored; removed once no screen passes it. */
-  variant?: "normal" | "active" | "called" | "mini";
 }
 
 /**

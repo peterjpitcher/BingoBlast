@@ -11,13 +11,13 @@
 ## Waves
 
 - [x] **Wave 0, foundations** (orchestrator): fonts, tokens, Tailwind names, primitives, page shell, host header, landing, sign in, pending, banners.
-- [ ] **Wave 1, in parallel, one agent each, no shared files:**
-  - [ ] A. Host console (`/host`)
-  - [ ] B. Host live game (`/host/[sessionId]/[gameId]`)
-  - [ ] C. TV display (`/display`, `/display/[sessionId]`) and the shared claim panel
-  - [ ] D. Phone follower (`/play`, `/player/[sessionId]`)
-  - [ ] E. Admin back office (`/admin/*`)
-- [ ] **Wave 2, orchestrator:** remove the temporary compatibility props, sweep for old palette classes, full gate (`lint`, `typecheck`, `test`, `test:utc`, `build`), browser check of every screen and state on a local Supabase stack with `scripts/check-render.js`, update `CLAUDE.md`.
+- [x] **Wave 1, in parallel, one agent each, no shared files:**
+  - [x] A. Host console (`/host`)
+  - [x] B. Host live game (`/host/[sessionId]/[gameId]`)
+  - [x] C. TV display (`/display`, `/display/[sessionId]`) and the shared claim panel
+  - [x] D. Phone follower (`/play`, `/player/[sessionId]`)
+  - [x] E. Admin back office (`/admin/*`)
+- [x] **Wave 2, orchestrator:** remove the temporary compatibility props, sweep for old palette classes, full gate (`lint`, `typecheck`, `test`, `test:utc`, `build`), browser check of every screen and state on a local Supabase stack with `scripts/check-render.js`, update `CLAUDE.md`.
 
 ## Foundations (what wave 1 builds on)
 
@@ -67,6 +67,22 @@ Primitives in `src/components/ui`:
 - **The copyright year** is the London year at render, not a typed 2026.
 - **The phone status bar padding** (54px in the prototypes) is `env(safe-area-inset-top)` plus the design's own 10 to 12px, since the prototype's figure is the iPhone frame.
 
+- **Where the handoff's README and its prototype disagree, the prototype wins**, as it is what was looked at and signed off. The host console's game rows are the case in point: round number discs and the labels Resume, Start, Re-open, Locked and Finished (the README says Open, Review and Waiting, but "Review" re-opens a finished game).
+- **Copy that follows the design:** "Game 2 of 10 · Blue book" (was a comma), "Last number called · 22" (was a colon), and the win headline in sentence case through `formatWinHeadline()` in `src/lib/win-headline.ts`, since the database writes it in capitals.
+- **Kept from the old screens where the design is silent:** every dialog, error, empty state and warning, restyled in the same language. The host's "Given" badge can still be tapped to undo a prize marked by mistake.
+- **TV sizes held to the floors rather than the drawing** where they clash: the game and colour line is 44px (the design draws 36px, under the key-information floor), event titles are 70px (drawn at 96px) so real two-line titles fit at 720p, and claim and win balls step down by row so a Full House fits.
+- **The admin layout makes one new read** (is a session running, for the header badge) plus the signed-in email. A failed read leaves the badge or email out and never redirects.
+
 ## Results
 
-(Filled in as each wave lands.)
+- **Gate (1 Oct 2026):** `npm run lint` clean, `npm run typecheck` clean, `npm test` and `npm run test:utc` 457 passed and 1 skipped, the same under Node 22 (the CI version), `npm run build` clean.
+- **Logic check:** hooks, effects and their dependency arrays, awaited calls, setters and handlers were counted before and after in the seven largest files. They match, apart from the winners sheet's duplicate Close button (removed) and the last-ball question, which moved from a stacked dialog into the claim sheet.
+- **Browser check on a local Supabase stack** (a seeded night, with a stand-in events feed), at 375x812 for the phones, 1920x1080 and 1280x720 for the TV and 1280 wide for admin:
+  - Landing, sign in (including a refused sign-in) and pending.
+  - Host console: sessions list, expanded session, a running night, locked and finished rows, End the night.
+  - Host live game: briefing, calling, claim sheet (called, tapped, not called, last ball), not a valid claim, last number missing, valid claim, record winner, winner recorded, stage won, winners and prizes, break, end game (standard and snowball), a finished game, the snowball strip, and a snowball Full House with the eligible or not eligible choice (no default; Confirm stays off until one is chosen).
+  - TV: follow along, events, house rules, stage preview, calling, snowball, claim check (a Line and a fifteen-ball Full House), win (a Line and the snowball jackpot), break and its event slides, end of night, idle loop. `scripts/check-render.js` reported nothing at either size.
+  - Phone: calling, win, snowball, break with events, end of night, the rules and called-numbers sheets, and `/play` with nothing running. `check-render` flagged only the design's own 11 to 13px labels.
+  - Admin: sessions, session detail with a winner, snowball pots, winners, and the layout at phone width.
+- **Not seen in a browser:** view-only and takeover, a voided winner row, the manual snowball win, the admin dialogs' submit paths, and the TV's review invitation (off unless `NEXT_PUBLIC_REVIEW_INVITE_ENABLED` is set).
+- **Found, not fixed here:** the admin Backup page's query is ambiguous and always fails (production has the same two foreign keys); and `getColourName()` calls the production lilac and peach books "White" and the orange book "Yellow".
