@@ -844,8 +844,9 @@ export default function DisplayUI({
   // slide at 1280x720. It stays in place under the claim and win overlays, so
   // the ball does not jump sideways when a claim starts. None at night_over.
   // Never two QR codes at once: while a slide with a code of its own is up (an
-  // event or the next bingo night, on a break), the corner QR and its column
-  // go, which also gives the event slide the full width it is laid out for.
+  // event or the next bingo night, on a break or between games), the corner QR
+  // and its column go, which also gives the event slide the full width it is
+  // laid out for.
   const slideHasOwnQr = playlist.length > 0 && activeSlideKind !== null && slideCarriesQr(activeSlideKind);
   const showCornerQr =
     !!followUrl && (hasRenderableGame || nightPhase === 'between_games') && !slideHasOwnQr;
@@ -952,7 +953,8 @@ export default function DisplayUI({
   );
 
   // Keeps the part of the night in view on the slides that are about something
-  // else: the rules, and the events and next bingo night shown on a break.
+  // else: the rules, and the events and next bingo night shown on a break
+  // and between games.
   const pauseStatusLabel =
     nightPhase === 'between_games' ? 'Next game coming up' : inGameSubState === 'break' ? 'Break time' : null;
 
@@ -968,7 +970,7 @@ export default function DisplayUI({
         return renderNextGameSlide();
       default: {
         // Events, next bingo, thanks, review: shared with the idle /display.
-        // On a break the event slides carry the "Break time" label too.
+        // On a break and between games the event slides carry the status label too.
         const promo = <PromoSlide slide={slide} nowMs={slideNowMs} statusLabel={pauseStatusLabel} />;
         // Those slides are white text, drawn for the green screen before and
         // after the night. While the night is paused the screen is the game's

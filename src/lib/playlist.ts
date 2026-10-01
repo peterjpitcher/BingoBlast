@@ -12,10 +12,9 @@
 //     next bingo night, the events, and thanks or review again after every two.
 //   - idle (/display with no session): "Bingo nights at The Anchor", the next
 //     bingo night, the events.
-//   - a break in a game: the break screen, the next bingo night, the events
-//     two at a time with the break screen again after every two, and the rules
-//     once a loop.
-//   - between games: the next game, alternating with the rules.
+//   - a break in a game, and the gap between games: the break (or next game)
+//     screen, the next bingo night, the events two at a time with that screen
+//     again after every two, and the rules once a loop.
 // With no events (none, an error, or no key), each falls back to its own short
 // loop. The TV never shows an error about events.
 import type { InGameSubState, NightPhase } from './night-phase';
@@ -110,12 +109,12 @@ export function getUsableEvents(
  * Where an event's QR or "View event" link points, for the TV and the phones
  * alike. The one place that decides it:
  *   - before the night starts: the pre_event_screen link (qrPre);
- *   - on a break in a game: the in_game_screen link (qrInGame);
+ *   - on a break in a game, and between games: the in_game_screen link
+ *     (qrInGame);
  *   - once the night is over, and on the idle screen: the post_event_screen
  *     link (qrPost), spec 5.5.
- * Between games counts as mid-night too (qrInGame); nothing shows events then
- * yet, see buildPlaylist. A game that is not on a break shows no events, and
- * keeps the answer it always had (qrPost).
+ * A game that is not on a break shows no events, and keeps the answer it
+ * always had (qrPost).
  */
 export function eventLinkForPhase(
   event: ScreenEvent,
@@ -349,9 +348,6 @@ function buildIdle(usable: UsableEvents): Slide[] {
   return list.slides;
 }
 
-/** Nothing to show: what a pause in the night loops through without events. */
-const NO_EVENTS: UsableEvents = { events: [], nextBingo: null };
-
 /**
  * A pause in the night with its own status screen: a break in a game ('break')
  * or the gap between games ('next_game'). The status screen (20 s), the next
@@ -424,12 +420,9 @@ export function buildPlaylist(
     case 'before_start':
       return withPreloads(buildBeforeStart(getUsableEvents(projection, now, sessionDate)));
     case 'between_games':
-      // No events between games. To show them here as on a break, replace
-      // NO_EVENTS with getUsableEvents(projection, now, sessionDate): that one
-      // argument is the whole change to the TV (eventLinkForPhase already
-      // gives the in-game link, and the TV labels and clears the corner QR for
-      // any event slide). The phone would still need its list adding.
-      return buildPause('next_game', NO_EVENTS, phase, null);
+      // The gap between games shows the events as a break does, around the
+      // "next game" screen, with the in-game links.
+      return buildPause('next_game', getUsableEvents(projection, now, sessionDate), phase, null);
     case 'in_game':
       return opts.inGameSubState === 'break'
         ? buildPause('break', getUsableEvents(projection, now, sessionDate), phase, 'break')

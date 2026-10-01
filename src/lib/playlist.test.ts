@@ -397,14 +397,42 @@ test('events are for a break only: a game being called, a claim or a win still h
   assert.deepEqual(buildPlaylist('in_game', fullProjection(), NOW, SESSION_DATE), []);
 });
 
-test('between games is unchanged by events: the next game, then the rules', () => {
+test('between games with nothing to show is the next game and the rules, as before', () => {
   const expected = [
     { key: 'next_game-0', kind: 'next_game', durationMs: 20_000 },
     { key: 'rules-0', kind: 'rules', durationMs: 20_000 },
   ];
-  assert.deepEqual(buildPlaylist('between_games', null, NOW, SESSION_DATE), expected);
-  assert.deepEqual(buildPlaylist('between_games', fullProjection(), NOW, SESSION_DATE), expected);
-  assert.deepEqual(buildPlaylist('between_games', fullProjection(), NOW, SESSION_DATE, onBreak), expected);
+  for (const proj of [
+    null,
+    projection(),
+    projection({ status: 'error', events: upcomingEvents(2), bingoNights: [NEXT_BINGO] }),
+    projection({ status: 'missing_config', events: upcomingEvents(2), bingoNights: [NEXT_BINGO] }),
+    projection({ events: [event('past', '2026-11-18T18:00:00Z')], bingoNights: [TONIGHTS_BINGO] }),
+  ]) {
+    assert.deepEqual(buildPlaylist('between_games', proj, NOW, SESSION_DATE), expected, proj?.status ?? 'null');
+  }
+});
+
+test('between games shows the events as a break does, around the next game screen', () => {
+  const slides = buildPlaylist('between_games', fullProjection(3), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), [
+    'next_game', 'next_bingo:bingo-next', 'event:e1', 'event:e2',
+    'next_game', 'event:e3',
+    'rules',
+  ]);
+  assert.deepEqual(durations(slides), [20_000, 12_000, 12_000, 12_000, 20_000, 12_000, 20_000]);
+  assert.equal(new Set(slides.map((slide) => slide.key)).size, slides.length);
+  assert.equal(slides.some((slide) => slide.kind === 'break'), false);
+  // The break option belongs to a game: it changes nothing between games.
+  assert.deepEqual(buildPlaylist('between_games', fullProjection(3), NOW, SESSION_DATE, onBreak), slides);
+});
+
+test('between games the event QR codes are the in-game links', () => {
+  const eventSlides = buildPlaylist('between_games', fullProjection(3), NOW, SESSION_DATE).filter((slide) => 'event' in slide);
+  assert.equal(eventSlides.length, 4);
+  for (const slide of eventSlides) {
+    if ('event' in slide) assert.equal(slide.qrUrl, slide.event.qrInGame);
+  }
 });
 
 test('the break option changes nothing before the start, after the night or when idle', () => {

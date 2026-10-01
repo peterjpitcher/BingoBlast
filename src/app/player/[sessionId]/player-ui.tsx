@@ -911,28 +911,36 @@ export default function PlayerUI({
           </>
         )}
 
-        {/* Between games (spec 5.1): the same words as the TV. */}
+        {/* Between games (spec 5.1): the same words as the TV, then what else
+            is on, as on a break and with the same in-game links. */}
         {nightPhase === 'between_games' && (
-          <Card className="bg-[#003f27] border-[#1f7c58]">
-            <CardContent className="p-6 text-center">
-              <h2 className="text-xl font-bold text-white">Next game coming up</h2>
-              {nextGame && (
-                <>
-                  <p className="mt-2 text-xl font-bold text-white">{nextGame.name}</p>
-                  {nextIdentity && (
-                    <p className="mt-1 flex items-center justify-center gap-2 text-base font-semibold text-[#f3d59d]">
-                      <span
-                        aria-hidden
-                        className="inline-block h-4 w-4 shrink-0 rounded-full border-2 border-white"
-                        style={{ backgroundColor: nextGame.background_colour }}
-                      />
-                      {nextIdentity}
-                    </p>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
+          <>
+            <Card className="bg-[#003f27] border-[#1f7c58]">
+              <CardContent className="p-6 text-center">
+                <h2 className="text-xl font-bold text-white">Next game coming up</h2>
+                {nextGame && (
+                  <>
+                    <p className="mt-2 text-xl font-bold text-white">{nextGame.name}</p>
+                    {nextIdentity && (
+                      <p className="mt-1 flex items-center justify-center gap-2 text-base font-semibold text-[#f3d59d]">
+                        <span
+                          aria-hidden
+                          className="inline-block h-4 w-4 shrink-0 rounded-full border-2 border-white"
+                          style={{ backgroundColor: nextGame.background_colour }}
+                        />
+                        {nextIdentity}
+                      </p>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+            <PhoneEvents
+              projection={initialEvents}
+              sessionDate={currentSession.start_date ?? null}
+              phase="between_games"
+            />
+          </>
         )}
 
         {isOnBreak && (

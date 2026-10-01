@@ -45,7 +45,7 @@ export interface ScreenEvent {
   image: ScreenEventImage | null;
   /** QR target before the night starts (pre_event_screen short link, else the id link). */
   qrPre: string;
-  /** QR target while the night is under way, on a break (in_game_screen short link, else the id link). */
+  /** QR target while the night is under way, on a break or between games (in_game_screen short link, else the id link). */
   qrInGame: string;
   /** QR target once the night is over (post_event_screen short link, else the id link). */
   qrPost: string;
