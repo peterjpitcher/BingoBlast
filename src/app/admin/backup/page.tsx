@@ -27,7 +27,11 @@ export default async function AdminBackupPage() {
     redirect('/host');
   }
 
-  // Fetch all games with their number sequence and associated session name
+  // Fetch all games with their number sequence and associated session name.
+  // The sessions embed must name its foreign key: games and sessions are joined
+  // twice (games.session_id and sessions.active_game_id), and PostgREST refuses
+  // an unhinted embed between them as ambiguous, which left this page showing
+  // only its error state.
   const { data: games, error } = await supabase
     .from('games')
     .select(`
@@ -35,9 +39,13 @@ export default async function AdminBackupPage() {
       game_index,
       name,
       game_states:game_states (number_sequence),
-      sessions:sessions (name, start_date)
+      sessions:sessions!games_session_id_fkey (name, start_date)
     `)
-    .order('start_date', { ascending: false, foreignTable: 'sessions' }) // Order by session date (latest first)
+    // Order by session date (latest first). This has to be the related-column
+    // form: `foreignTable: 'sessions'` sorts the rows inside the embed, which
+    // is a no-op for a single session and left the list in game_index order.
+    .order('sessions(start_date)', { ascending: false })
+    .order('session_id', { ascending: true }) // Keep two sessions on one date apart
     .order('game_index', { ascending: true }); // Order by game index within a session
 
 
