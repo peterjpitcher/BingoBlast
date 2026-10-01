@@ -479,7 +479,7 @@ Asked for after the release: "We should also show the events during breaks".
 - [x] TV break loop: break screen (20 s), next bingo night (12 s), events two at a time (12 s each) with the break screen back after every two, rules (20 s) once a loop. With no usable events it is the break screen and the rules, exactly as before.
 - [x] Event slides on a break carry the "Break time" label, and the corner follow-along QR goes while a slide with its own QR is up, so there is never more than one code to scan.
 - [x] Phone: the events list sits under the "On Break" card with the in-game links.
-- [x] Between games is unchanged (next game, then the rules). Showing events there is one argument in `buildPlaylist`; waiting on the owner.
+- [x] Between games: left unchanged in this piece; the owner said yes the same day, see "Events between games" below.
 
 **Found in the browser, not by the tests:** the event slides are white text drawn for the green screen before and after the night. On a break the screen is the game's book colour, so on a white book the title, eyebrow and "Scan for details" were white on white. They now sit on the rules slide's dark panel whenever the night is paused. `scripts/check-render.js` gained a `lowContrast` result (ratio under 3 against the background colours behind the text) so the render check catches this next time. The phone header was an 80 percent tint, and the list's text showed through it while scrolling; it is solid now.
 
@@ -489,3 +489,18 @@ Asked for after the release: "We should also show the events during breaks".
 - Resume Session mid-slide: the TV went straight back to the ball with the corner QR.
 
 **Assumptions:** break screen first and again after every two events, so a late look at the TV still says the game is paused within about 24 seconds; the same 12 s per event as before the night.
+
+**Released:** PR #21, production deployment `dpl_CbuQggPzBoZGwm2u1pmfsU5EYq8X`, commit `1828a6f`. `/api/build` reported that commit, and the live feed answered `ok` with an `in_game_screen` short link on all 8 events. The break screen itself was not exercised on production (it needs a running game).
+
+## Events between games (1 October 2026)
+
+The owner said yes to showing events in the gap between games too.
+
+- [x] `buildPlaylist('between_games')` now passes the usable events to the same pause loop as a break: next game screen (20 s), next bingo night (12 s), events two at a time (12 s each) with the next game screen back after every two, rules (20 s) once a loop. With no usable events it is the next game screen and the rules, exactly as before.
+- [x] Event slides carry the "Next game coming up" label and the in-game links; the corner QR goes while a slide with its own QR is up.
+- [x] Phone: the events list sits under the "Next game coming up" card, with the in-game links.
+
+**Verified locally** through the real host flow (start game 1, call a ball, End Game): a whole loop at 1280x720 and the first slides at 1920x1080 with no small text, overlaps, low contrast or clipping and one QR at a time; the phone at 375x812 with nine in-game links and 44 px targets; starting game 2 mid-slide took the TV straight to the game with the corner QR back.
+
+**Test trap:** a background tab in the browser pane does not paint, so a slide's image looked blank in a capture although it had loaded. Front the tab before trusting a screenshot.
+

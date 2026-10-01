@@ -868,7 +868,7 @@ Asked for by the owner the day after the release. It reverses the non-goal in se
 - **Backing panel:** during a game the screen is the game's book colour (section 3), which can be white. Event slides are white text drawn for the green screen, so while the night is paused they sit on the rules slide's dark panel. This was found in the browser test, not by the unit tests; the render check (`scripts/check-render.js`) now also reports low contrast.
 - **Phones:** the events list of section 5.5 appears under the "On Break" card.
 - **Links:** a third link per event, `qrInGame`, from the management app's `in_game_screen` channel, with the same id-link fallback as the other two, so scans from a break are counted apart. `eventLinkForPhase` picks it: pre-event before the night, in-game on a break, post-event after the night and on the idle screen. A cached feed response from before the field existed falls back to the pre-event link.
-- **Between games:** unchanged (the next game, then the rules). Showing events there is a one-argument change, waiting on the owner.
+- **Between games:** the same loop around the "Next game coming up" screen, with that label on the event slides and the in-game links; the phone lists the events under its next-game card. Approved by the owner on 1 October 2026 and released separately from the break loop.
 
 ## Appendix A: backlog status re-verified on 30 September 2026
 

@@ -9,8 +9,9 @@
 //     screen's clock (src/lib/dates.ts), never sent by the server (R10).
 //   - The QR is level M and at least 40% of the screen height; the playlist
 //     has already picked the pre-event, in-game or post-event link.
-//   - On a break in a game it carries a "Break time" label, the same one as
-//     the rules slide, so the room can always see the game is paused.
+//   - On a break or between games it carries a status label ("Break time",
+//     "Next game coming up"), the same one as the rules slide, so the room can
+//     always see where the night is.
 'use client';
 
 import React, { useState } from 'react';

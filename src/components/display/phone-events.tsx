@@ -1,8 +1,8 @@
 // src/components/display/phone-events.tsx
 //
 // Upcoming events on a phone (spec 5.5, D5): at the start and end of the
-// night and under the break card on /player, and on /play when no bingo is
-// running. The same events as the TV, next bingo night first, each with a
+// night, under the break card and between games on /player, and on /play when
+// no bingo is running. The same events as the TV, next bingo night first, each with a
 // "View event" link that opens in a new tab. Also the review button (spec
 // 5.6), shown only when switched on.
 //
@@ -51,8 +51,8 @@ interface PhoneEventsProps {
   sessionDate: string | null;
   /**
    * With `inGameSubState`, picks the link (eventLinkForPhase): pre-event at
-   * before_start, in-game on a break, post-event at night_over and when idle
-   * on /play.
+   * before_start, in-game on a break and between games, post-event at
+   * night_over and when idle on /play.
    */
   phase: PlaylistPhase;
   /** For the in_game phase: 'break' is the only sub-state that lists events. */
