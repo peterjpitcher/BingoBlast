@@ -78,10 +78,79 @@ export function formatShortDateTimeInLondon(value: string | Date | null | undefi
   }).format(date).replace(' at ', ', ');
 }
 
-/** Today's date in London as 'YYYY-MM-DD', for writing to a `date` column. */
-export function getTodayIsoDateInLondon(): string {
+/**
+ * The London calendar date of an instant, as 'YYYY-MM-DD'. Empty for anything
+ * that is not a valid date, never "Invalid Date".
+ */
+export function getLondonIsoDate(value: string | number | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
   // en-CA renders as YYYY-MM-DD, which is the shape a Postgres `date` wants.
   return new Intl.DateTimeFormat('en-CA', {
     year: 'numeric', month: '2-digit', day: '2-digit', timeZone: LONDON,
-  }).format(new Date());
+  }).format(date);
+}
+
+/**
+ * Today's date in London as 'YYYY-MM-DD', for writing to a `date` column or
+ * comparing with one. `now` is for tests; callers leave it out.
+ */
+export function getTodayIsoDateInLondon(now: Date = new Date()): string {
+  return getLondonIsoDate(now);
+}
+
+interface LondonClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+}
+
+function readLondonClock(date: Date): LondonClock {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric',
+    hourCycle: 'h23', timeZone: LONDON,
+  }).formatToParts(date);
+  const read = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  return { year: read('year'), month: read('month'), day: read('day'), hour: read('hour') };
+}
+
+const FOUR_AM = 4;
+
+/**
+ * The first 04:00 London time strictly after `fromIso`, as an ISO timestamp.
+ * Null when `fromIso` is not a date.
+ *
+ * The pub TV stays on its end-of-night screen until then (spec A3), so a night
+ * that ends at 21:37 holds until 04:00 the next morning, and one that ends at
+ * 00:30 holds until 04:00 the same morning.
+ *
+ * Works on London wall-clock time, never on "add 24 hours": across the clock
+ * change on 25 October the night is 25 hours long, and 04:00 is 04:00 GMT, not
+ * 03:00. 04:00 always exists exactly once in London (the clocks change at 01:00
+ * and 02:00), so one of the two candidate offsets always matches.
+ */
+export function nextLondonFourAm(fromIso: string): string | null {
+  const from = new Date(fromIso);
+  if (Number.isNaN(from.getTime())) return null;
+
+  const now = readLondonClock(from);
+  // Before 04:00 the next 04:00 is later the same calendar day; from 04:00 on
+  // it is tomorrow's. Date.UTC rolls the day over months and years.
+  const dayOffset = now.hour < FOUR_AM ? 0 : 1;
+  const target = new Date(Date.UTC(now.year, now.month - 1, now.day + dayOffset));
+  const year = target.getUTCFullYear();
+  const month = target.getUTCMonth() + 1;
+  const day = target.getUTCDate();
+
+  // London is UTC+0 (GMT) or UTC+1 (BST).
+  for (const offsetHours of [0, 1]) {
+    const candidate = new Date(Date.UTC(year, month - 1, day, FOUR_AM - offsetHours));
+    const clock = readLondonClock(candidate);
+    if (clock.hour === FOUR_AM && clock.day === day && clock.month === month && clock.year === year) {
+      return candidate.toISOString();
+    }
+  }
+  return null;
 }

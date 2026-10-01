@@ -16,6 +16,16 @@ import {
   getSnowballWindowStatus,
 } from '@/lib/snowball';
 import { isFreshGameState } from '@/lib/game-state-version';
+import {
+  PUBLIC_GAME_COLUMNS,
+  PUBLIC_GAME_STATE_COLUMNS,
+  PUBLIC_SESSION_COLUMNS,
+  isFreshSession,
+} from '@/lib/public-selectors';
+import { getInGameSubState, getNightPhase, pickNextGame } from '@/lib/night-phase';
+import { getClaimPanelState } from '@/lib/claim-panel';
+import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
+import { formatGameIdentity, getGamePosition, getHouseRules } from '@/lib/house-rules';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
@@ -25,6 +35,9 @@ import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
 import { useClockOffset } from '@/hooks/use-clock-offset';
 import { useBuildCheck } from '@/hooks/use-build-check';
 import { ConnectionBanner } from '@/components/connection-banner';
+import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
+import { PhoneRules } from '@/components/display/phone-rules';
+import { useSessionOverview } from '@/components/display/use-session-overview';
 import { logError } from '@/lib/log-error';
 
 // Define types for props
@@ -50,22 +63,23 @@ interface PlayerUIProps {
 }
 
 /**
- * What the screen is showing right now. Kept deliberately identical to the pub
- * TV at /display so the phone and the big screen can never disagree in front of
- * guests.
+ * Whether the screen can show the night yet. 'ready' screens are then chosen by
+ * the part of the night (getNightPhase in src/lib/night-phase.ts), exactly as on
+ * the pub TV at /display, so the phone and the big screen can never disagree in
+ * front of guests.
  *
  * This replaces the old "have we loaded yet" boolean, which was initialised to
  * `initialGameState != null` and could therefore never turn true before the host
  * started a game: there is no `game_states_public` row yet, so the follower sat
  * on "Connecting to game..." for the whole pre-game period.
  */
-type LoadPhase = 'loading' | 'waiting' | 'active' | 'completed' | 'failed';
+type LoadPhase = 'loading' | 'ready' | 'failed';
 
 /**
- * The only part of the phase that is real client state. 'waiting', 'active' and
- * 'completed' are all functions of the session status and of whether we hold a
- * renderable game state, so storing them separately would duplicate state and
- * let the screen disagree with itself.
+ * The only part of the screen choice that is real client state. The part of
+ * the night is a function of the session and of the game state we hold, so
+ * storing it separately would duplicate state and let the screen disagree with
+ * itself.
  */
 type ConnectionPhase = 'loading' | 'ready' | 'failed';
 
@@ -104,14 +118,6 @@ const adoptRevealCount = (serverCount: number) => Math.max(0, serverCount - 1);
 const readCalledNumbers = (state: GameState | null): number[] =>
   state && Array.isArray(state.called_numbers) ? state.called_numbers : [];
 
-// Explicit narrow column lists keep public surfaces from leaking unintended
-// fields and document exactly what the UI consumes from each table.
-const SESSION_SELECT = 'id, name, status, active_game_id';
-const GAME_SELECT =
-  'id, session_id, game_index, name, type, stage_sequence, background_colour, prizes, snowball_pot_id';
-const GAME_STATE_PUBLIC_SELECT =
-  'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
-
 const POLL_INTERVAL_MS = 3000;
 const LOG_SCOPE = 'player';
 
@@ -126,11 +132,11 @@ async function fetchGameWithState(
   gameId: string,
   signal?: AbortSignal,
 ): Promise<{ game: Game; state: GameState }> {
-  const gameQuery = client.from('games').select(GAME_SELECT).eq('id', gameId);
+  const gameQuery = client.from('games').select(PUBLIC_GAME_COLUMNS).eq('id', gameId);
   const { data: game, error: gameError } = await (signal ? gameQuery.abortSignal(signal) : gameQuery).single<Game>();
   if (gameError || !game) throw gameError ?? new Error('Active game lookup returned no row');
 
-  const stateQuery = client.from('game_states_public').select(GAME_STATE_PUBLIC_SELECT).eq('game_id', game.id);
+  const stateQuery = client.from('game_states_public').select(PUBLIC_GAME_STATE_COLUMNS).eq('game_id', game.id);
   const { data: state, error: stateError } = await (signal ? stateQuery.abortSignal(signal) : stateQuery).single<GameState>();
   if (stateError || !state) throw stateError ?? new Error('Active game state lookup returned no row');
 
@@ -150,7 +156,7 @@ async function fetchPublicSnapshot(
 ): Promise<PublicSnapshot> {
   const { data: session, error: sessionError } = await client
     .from('sessions')
-    .select(SESSION_SELECT)
+    .select(PUBLIC_SESSION_COLUMNS)
     .eq('id', sessionId)
     .abortSignal(signal)
     .single<Session>();
@@ -171,7 +177,7 @@ async function fetchPublicSnapshot(
     game = knownGame;
     const { data: freshState, error: stateError } = await client
       .from('game_states_public')
-      .select(GAME_STATE_PUBLIC_SELECT)
+      .select(PUBLIC_GAME_STATE_COLUMNS)
       .eq('game_id', game.id)
       .abortSignal(signal)
       .single<GameState>();
@@ -232,6 +238,7 @@ export default function PlayerUI({
   // previous game's pot can never be shown against this one.
   const [latestPot, setLatestPot] = useState<SnowballPot | null>(null);
   const [showFullHistory, setShowFullHistory] = useState(false);
+  const [showRules, setShowRules] = useState(false);
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>(
     initialLoadStatus === 'failed' ? 'failed' : initialActiveGameState ? 'ready' : 'loading'
   );
@@ -283,6 +290,16 @@ export default function PlayerUI({
   useEffect(() => {
     currentActiveGameRef.current = currentActiveGame;
   }, [currentActiveGame]);
+
+  // The version of the session row on screen. A session snapshot older than
+  // this is dropped (isFreshSession, R09): sessions.state_version is bumped by
+  // trigger on every update, so a late poll can no longer put an ended night
+  // back to running, or a finished game back on screen.
+  const sessionVersionRef = useRef<{ state_version?: number | null }>({ state_version: session.state_version });
+  const applySession = useCallback((incoming: Session) => {
+    sessionVersionRef.current = { state_version: incoming.state_version };
+    setCurrentSession(incoming);
+  }, []);
 
   const { isLocked: isWakeLockActive } = useWakeLock();
 
@@ -337,8 +354,9 @@ export default function PlayerUI({
         { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
         async (payload) => {
           if (!isCurrent()) return;
+          if (!isFreshSession(sessionVersionRef.current, payload.new)) return;
           pollRunnerRef.current?.invalidate();
-          setCurrentSession(payload.new);
+          applySession(payload.new);
           const result = await refreshActiveGame(payload.new.active_game_id);
           if (result.status === 'failed') {
             setConnectionPhase('failed');
@@ -459,10 +477,14 @@ export default function PlayerUI({
     pollRunnerRef.current = runner;
 
     const applySnapshot = (snapshot: PublicSnapshot) => {
-      setCurrentSession(snapshot.session);
+      // An older session row than the one on screen is dropped, and so is the
+      // game switch read from it: both would move the screen backwards.
+      const sessionIsFresh = isFreshSession(sessionVersionRef.current, snapshot.session);
+      if (sessionIsFresh) applySession(snapshot.session);
 
       const incoming = snapshot.state;
       if (snapshot.gameChanged) {
+        if (!sessionIsFresh) return;
         // Supersede any slower switch started by a Realtime session event, then
         // change game and state in the same render.
         refreshSeqRef.current += 1;
@@ -525,7 +547,7 @@ export default function PlayerUI({
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [supabase, session.id, markPollSuccess, markPollFailure]);
+  }, [supabase, session.id, markPollSuccess, markPollFailure, applySession]);
 
   const serverNumbers = useMemo<number[]>(
     () => readCalledNumbers(currentGameState),
@@ -646,16 +668,20 @@ export default function PlayerUI({
   const currentNumberDelayed = revealedCallCount > 0 ? delayedNumbers[revealedCallCount - 1] : null;
 
   // --- UI States ---
-  const isSessionCompleted = currentSession.status === 'completed';
   /**
-   * A game counts as active once this surface has something to render for it.
-   * The phone has its own "Game Over" card, so a completed game is renderable
-   * here even though on the pub TV it falls through to the waiting screen.
+   * The part of the night (src/lib/night-phase.ts), from the session and the
+   * active game's state, exactly as on the pub TV. A finished game is not a
+   * game in play: between games the phone says what is coming next.
    */
-  const hasRenderableGame =
-    currentActiveGame !== null &&
-    currentGameState !== null &&
-    (currentGameState.status === 'in_progress' || currentGameState.status === 'completed');
+  const activeStateForPhase =
+    currentActiveGame && currentGameState && currentGameState.game_id === currentActiveGame.id
+      ? currentGameState
+      : null;
+  const nightPhase = getNightPhase({ session: currentSession, activeGameState: activeStateForPhase });
+  const inGameSubState =
+    nightPhase === 'in_game' && currentGameState ? getInGameSubState(currentGameState) : null;
+  const isNightOver = nightPhase === 'night_over';
+  const hasRenderableGame = nightPhase === 'in_game';
 
   /**
    * The full-screen "Reconnecting" card needs the same 10 second unhealthy
@@ -666,25 +692,24 @@ export default function PlayerUI({
   const hasFailedLongEnough = connectionPhase === 'failed' && health.shouldShowBanner;
 
   /**
-   * Phase precedence, in order and for a reason:
-   *  - a completed session is terminal, so the thank-you card always wins;
-   *  - a renderable game beats 'failed', because a single query blip must never
+   * Screen precedence, in order and for a reason:
+   *  - the end of the night is terminal, so the thank-you card always wins;
+   *  - a game in play beats 'failed', because a single query blip must never
    *    rip a live game off the screen. The ConnectionBanner covers that case;
-   *  - 'failed' (after the grace period) beats 'waiting' and 'loading', so an
-   *    outage is never dressed up as "the host has not started yet". It
-   *    recovers on the next good read;
+   *  - 'failed' (after the grace period) beats the pre-game and between-games
+   *    screens, so an outage is never dressed up as "the host has not started
+   *    yet". It recovers on the next good read;
    *  - inside the grace period a phone that has never had a good read shows
    *    "Connecting", and one that has keeps showing what it had.
    */
-  const loadPhase: LoadPhase = isSessionCompleted
-    ? 'completed'
-    : hasRenderableGame
-      ? 'active'
+  const loadPhase: LoadPhase =
+    isNightOver || hasRenderableGame
+      ? 'ready'
       : hasFailedLongEnough
         ? 'failed'
         : connectionPhase === 'loading' || (connectionPhase === 'failed' && !hasBeenReady)
           ? 'loading'
-          : 'waiting';
+          : 'ready';
 
   // New releases: reload by itself, but never over a claim check or a win.
   useBuildCheck({
@@ -695,11 +720,55 @@ export default function PlayerUI({
       (!currentGameState.paused_for_validation && !currentGameState.display_win_type),
   });
 
-  const isWaiting = !isSessionCompleted && !hasRenderableGame;
-  const isOnBreak = currentGameState?.on_break;
-  const isCompleted = currentGameState?.status === 'completed';
-  const isValidating = currentGameState?.paused_for_validation;
-  const isWin = !!currentGameState?.display_win_type;
+  // The rest of the night: game numbers, the next game and the rules' pot.
+  const overview = useSessionOverview({
+    supabase,
+    sessionId: session.id,
+    refreshKey: `${currentSession.state_version ?? ''}:${currentSession.active_game_id ?? ''}:${currentSession.status}`,
+    logScope: LOG_SCOPE,
+  });
+
+  // Rule 8 uses the live pot during a snowball game, else the night's first snowball pot.
+  const houseRules = getHouseRules(currentSnowballPot ?? overview?.rulesPot ?? null);
+
+  const activePosition = overview ? getGamePosition(overview.games, currentActiveGame?.id) : null;
+  const activeIdentity = currentActiveGame
+    ? formatGameIdentity({
+        number: activePosition?.number ?? currentActiveGame.game_index,
+        total: activePosition?.total ?? null,
+        colourHex: currentActiveGame.background_colour,
+      })
+    : '';
+  const nextGame = overview ? pickNextGame(overview.games, overview.statusByGameId) : null;
+  const nextPosition = nextGame && overview ? getGamePosition(overview.games, nextGame.id) : null;
+  const nextIdentity = nextGame
+    ? formatGameIdentity({
+        number: nextPosition?.number ?? nextGame.game_index,
+        total: nextPosition?.total ?? null,
+        colourHex: nextGame.background_colour,
+      })
+    : '';
+
+  const currentStageName =
+    currentActiveGame && currentGameState
+      ? currentActiveGame.stage_sequence[currentGameState.current_stage_index] ?? null
+      : null;
+  // The live claim (spec 5.2), as on the TV.
+  const claimPanel =
+    hasRenderableGame && currentGameState
+      ? getClaimPanelState({
+          paused: currentGameState.paused_for_validation,
+          claimNumbers: Array.isArray(currentGameState.claim_numbers) ? currentGameState.claim_numbers : null,
+          claimResult: currentGameState.claim_result ?? null,
+          calledNumbers: serverNumbers,
+          stageName: currentStageName,
+          requiredCount: currentStageName ? getRequiredSelectionCountForStage(currentStageName) : null,
+        })
+      : null;
+
+  const isOnBreak = inGameSubState === 'break';
+  const isValidating = inGameSubState === 'claim_check';
+  const isWin = inGameSubState === 'win';
 
   const backgroundColor = currentActiveGame?.background_colour || '#005131';
   const isSnowballGame = currentActiveGame?.type === 'snowball';
@@ -714,8 +783,8 @@ export default function PlayerUI({
     : null;
 
   // First server answer not in yet. Deliberately brief: unlike the old boolean
-  // gate this can always be left, because the poll above resolves the phase to
-  // waiting, active, completed or failed on its first response.
+  // gate this can always be left, because the poll above resolves the phase on
+  // its first response.
   if (loadPhase === 'loading') {
     return (
       <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
@@ -726,7 +795,7 @@ export default function PlayerUI({
   }
 
   // Recoverable outage. Polling continues, and the next good read moves the
-  // screen straight on to the waiting or active phase with no reload.
+  // screen straight on with no reload.
   if (loadPhase === 'failed') {
     return (
       <div
@@ -753,18 +822,33 @@ export default function PlayerUI({
       style={{ backgroundColor: backgroundColor }}
     >
       <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
-      {/* Header */}
-      <div className="bg-[#003f27]/80 p-4 border-b border-[#1f7c58] flex items-center justify-between sticky top-0 z-20 shadow-md">
-        <div>
-          <h1 className="font-bold text-lg leading-none text-white">{currentSession.name}</h1>
-          {currentActiveGame && <p className="text-sm text-white">{currentActiveGame.name}</p>}
+      {/* Header. The Rules button is here in every part of the night, during
+          play included (spec 5.3). */}
+      <div className="bg-[#003f27]/80 p-4 border-b border-[#1f7c58] flex items-center justify-between gap-3 sticky top-0 z-20 shadow-md">
+        <div className="min-w-0">
+          <h1 className="font-bold text-lg leading-tight text-white">{currentSession.name}</h1>
+          {hasRenderableGame && currentActiveGame && (
+            <p className="text-sm text-white">
+              {[activeIdentity, currentActiveGame.name].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </div>
-        {currentGameState && (
-          <div className="bg-[#005131] px-3 py-1 rounded border border-[#1f7c58]">
-            <span className="text-xs text-white uppercase block">Calls</span>
-            <span className="font-mono font-bold text-xl leading-none">{revealedCallCount}</span>
-          </div>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-[44px] px-3 text-base"
+            onClick={() => setShowRules(true)}
+          >
+            Rules
+          </Button>
+          {hasRenderableGame && currentGameState && (
+            <div className="bg-[#005131] px-3 py-1 rounded border border-[#1f7c58]">
+              <span className="text-xs text-white uppercase block">Calls</span>
+              <span className="font-mono font-bold text-xl leading-none">{revealedCallCount}</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Solid, not a tint. This used to be bg-[#a57626]/20 painted straight over
@@ -781,7 +865,7 @@ export default function PlayerUI({
       <div className="p-4 space-y-4">
 
         {/* Status Banners */}
-        {isSessionCompleted && (
+        {isNightOver && (
           <Card className="bg-[#003f27]/80 border-[#1f7c58]">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2">🙏</div>
@@ -791,17 +875,50 @@ export default function PlayerUI({
           </Card>
         )}
 
-        {isWaiting && (
-          <Card className="bg-[#003f27]/80 border-[#1f7c58]">
+        {nightPhase === 'before_start' && (
+          <>
+            <Card className="bg-[#003f27]/80 border-[#1f7c58]">
+              <CardContent className="p-6 text-center">
+                <div className="text-4xl mb-2">⏳</div>
+                <h2 className="text-xl font-bold text-white">Waiting for Host</h2>
+                <p className="text-white">Game will start soon...</p>
+              </CardContent>
+            </Card>
+            {/* The rules inline before the first game (spec 5.3). */}
+            <Card className="bg-[#003f27] border-[#1f7c58]">
+              <CardContent className="p-5">
+                <h2 className="text-xl font-bold text-white mb-3">House rules</h2>
+                <PhoneRules rules={houseRules} />
+              </CardContent>
+            </Card>
+          </>
+        )}
+
+        {/* Between games (spec 5.1): the same words as the TV. */}
+        {nightPhase === 'between_games' && (
+          <Card className="bg-[#003f27] border-[#1f7c58]">
             <CardContent className="p-6 text-center">
-              <div className="text-4xl mb-2">⏳</div>
-              <h2 className="text-xl font-bold text-white">Waiting for Host</h2>
-              <p className="text-white">Game will start soon...</p>
+              <h2 className="text-xl font-bold text-white">Next game coming up</h2>
+              {nextGame && (
+                <>
+                  <p className="mt-2 text-xl font-bold text-white">{nextGame.name}</p>
+                  {nextIdentity && (
+                    <p className="mt-1 flex items-center justify-center gap-2 text-base font-semibold text-[#f3d59d]">
+                      <span
+                        aria-hidden
+                        className="inline-block h-4 w-4 shrink-0 rounded-full border-2 border-white"
+                        style={{ backgroundColor: nextGame.background_colour }}
+                      />
+                      {nextIdentity}
+                    </p>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
         )}
 
-        {isOnBreak && !isCompleted && (
+        {isOnBreak && (
           <Card className="bg-yellow-900/20 border-yellow-600">
             <CardContent className="p-6 text-center">
               <div className="text-4xl mb-2 animate-bounce">☕️</div>
@@ -811,30 +928,11 @@ export default function PlayerUI({
           </Card>
         )}
 
-        {isCompleted && !isSessionCompleted && (
-          <Card className="bg-green-900/20 border-green-600">
-            <CardContent className="p-6 text-center">
-              <div className="text-4xl mb-2">🏁</div>
-              <h2 className="text-2xl font-bold text-white">Game Over</h2>
-              <p className="text-white">Thanks for playing!</p>
-            </CardContent>
-          </Card>
-        )}
-
-        {isValidating && !isWin && (
-          <Card className="bg-blue-900/20 border-blue-500 animate-pulse">
-            <CardContent className="p-6 text-center">
-              <div className="text-4xl mb-2">🎫</div>
-              <h2 className="text-2xl font-bold text-white">Checking Claim</h2>
-              <p className="text-white">Please wait...</p>
-              {/* The claim is validated against the last called ball, and the
-                  reveal queue snaps to the server state while paused, so this is
-                  always the true last call. */}
-              {currentNumberDelayed !== null && (
-                <p className="mt-2 text-lg font-bold text-white">
-                  Claim must include: {currentNumberDelayed}
-                </p>
-              )}
+        {/* The live claim (spec 5.2), replacing the old "Checking Claim" card. */}
+        {isValidating && claimPanel && (
+          <Card className="bg-[#003f27] border-[#a57626]">
+            <CardContent className="p-5">
+              <ClaimPanel state={claimPanel} variant="phone" />
             </CardContent>
           </Card>
         )}
@@ -847,19 +945,25 @@ export default function PlayerUI({
               {currentGameState?.display_winner_name && (
                 <p className="text-xl mt-2 font-medium">{currentGameState.display_winner_name}</p>
               )}
+              {/* The claimed balls stay on screen under the win. */}
+              {claimPanel && claimPanel.balls.length > 0 && (
+                <div className="mt-4">
+                  <ClaimBalls balls={claimPanel.balls} variant="phone" />
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
 
         {/* Active Game Display */}
-        {!isSessionCompleted && !isWaiting && !isCompleted && !isOnBreak && (
+        {hasRenderableGame && !isOnBreak && (
           <>
             {/* Info Cards */}
             <div className="grid grid-cols-2 gap-3">
               <div className={cn("bg-[#003f27]/80 p-3 rounded-lg border border-[#1f7c58]", !currentPrizeText && "col-span-2")}>
                 <span className="text-xs text-white uppercase block">Playing For</span>
                 <span className="font-bold text-white text-lg leading-tight">
-                  {currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0]}
+                  {currentStageName}
                 </span>
               </div>
               {/* Hidden when empty: "Prize not set" is for the host screen
@@ -1000,6 +1104,16 @@ export default function PlayerUI({
         </div>
         <div className="mt-4 text-center">
           <Button variant="secondary" className="w-full" onClick={() => setShowFullHistory(false)}>Close</Button>
+        </div>
+      </Modal>
+
+      {/* House rules, available all night (spec 5.3). */}
+      <Modal isOpen={showRules} onClose={() => setShowRules(false)} title="House rules">
+        <PhoneRules rules={houseRules} />
+        <div className="mt-4">
+          <Button variant="secondary" className="w-full min-h-[44px] text-base" onClick={() => setShowRules(false)}>
+            Close
+          </Button>
         </div>
       </Modal>
 

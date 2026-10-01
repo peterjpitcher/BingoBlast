@@ -5,15 +5,29 @@ import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
-import { QRCodeSVG } from 'qrcode.react';
 import {
   formatPounds,
   getSnowballCallsLabel,
   getSnowballCallsRemaining,
   getSnowballWindowStatus,
 } from '@/lib/snowball';
-import { HOUSE_RULES, CALL_RESPONSES } from '@/lib/house-rules';
+import {
+  formatGameIdentity,
+  getGamePosition,
+  getHouseRules,
+} from '@/lib/house-rules';
 import { isFreshGameState } from '@/lib/game-state-version';
+import {
+  PUBLIC_GAME_COLUMNS,
+  PUBLIC_GAME_STATE_COLUMNS,
+  PUBLIC_SESSION_COLUMNS,
+  isFreshSession,
+} from '@/lib/public-selectors';
+import { getInGameSubState, getNightPhase, pickNextGame } from '@/lib/night-phase';
+import { getClaimPanelState } from '@/lib/claim-panel';
+import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
+import { buildPlaylist, type Slide } from '@/lib/playlist';
+import { buildFollowUrl } from '@/lib/follow-link';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
@@ -23,7 +37,16 @@ import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
 import { useClockOffset } from '@/hooks/use-clock-offset';
 import { useBuildCheck } from '@/hooks/use-build-check';
+import { useWakeLock } from '@/hooks/wake-lock';
 import { ConnectionBanner } from '@/components/connection-banner';
+import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
+import { FollowAlongSlide, FollowQrBadge } from '@/components/display/follow-qr';
+import { RulesSlide } from '@/components/display/rules-slide';
+import { SlideLoop } from '@/components/display/slide-loop';
+import { useMinuteClock, useWindowOrigin } from '@/components/display/screen-hooks';
+import { useSessionOverview } from '@/components/display/use-session-overview';
+import { useDisplayLifecycle } from '@/components/display/use-display-lifecycle';
+import { TV_TEXT_KEY } from '@/components/display/tv-text';
 import { logError } from '@/lib/log-error';
 
 // Define types for props
@@ -46,11 +69,17 @@ interface DisplayUIProps {
   initialGameState: GameState | null;
   initialPrizeText: string;
   initialLoadStatus: InitialLoadStatus;
-  playerJoinUrl: string;
+  /** The public origin for the follow-along QR (getSiteOrigin); null falls back to this page's own origin. */
+  followOrigin: string | null;
+  /** Whether /play would pick this session by itself, per the server's first read. */
+  initialIsUniqueSession: boolean;
+  /** `?rehearsal=1`: test sessions count, and the TV returns to the rehearsal lobby. */
+  rehearsal: boolean;
 }
 
 /**
- * What the screen is showing right now.
+ * Whether the screen can show the night yet. 'ready' screens are then chosen by
+ * the part of the night (getNightPhase in src/lib/night-phase.ts).
  *
  * This replaces the old "have we loaded yet" boolean, which was initialised to
  * `initialGameState != null` and could therefore never turn true before the host
@@ -58,14 +87,13 @@ interface DisplayUIProps {
  * "Connecting to game..." for the whole pre-game period instead of showing the
  * waiting screen with the House Rules.
  */
-type LoadPhase = 'loading' | 'waiting' | 'active' | 'completed' | 'failed';
+type LoadPhase = 'loading' | 'ready' | 'failed';
 
 /**
- * The only part of the phase that is real client state. 'waiting', 'active' and
- * 'completed' are all functions of the session status and of whether we hold a
- * renderable game state, so storing them separately would duplicate state and
- * let the screen disagree with itself, which is exactly how the old boolean
- * stranded the TV on a spinner.
+ * The only part of the screen choice that is real client state. The part of
+ * the night is a function of the session and of the game state we hold, so
+ * storing it separately would duplicate state and let the screen disagree with
+ * itself, which is exactly how the old boolean stranded the TV on a spinner.
  */
 type ConnectionPhase = 'loading' | 'ready' | 'failed';
 
@@ -113,14 +141,6 @@ const adoptRevealCount = (serverCount: number) => Math.max(0, serverCount - 1);
 const readCalledNumbers = (state: GameState | null): number[] =>
   state && Array.isArray(state.called_numbers) ? state.called_numbers : [];
 
-// Explicit narrow column lists keep public surfaces from leaking unintended
-// fields and document exactly what the UI consumes from each table.
-const SESSION_SELECT = 'id, name, status, active_game_id';
-const GAME_SELECT =
-  'id, session_id, game_index, name, type, stage_sequence, background_colour, prizes, snowball_pot_id';
-const GAME_STATE_PUBLIC_SELECT =
-  'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
-
 const POLL_INTERVAL_MS = 3000;
 const LOG_SCOPE = 'display';
 
@@ -135,11 +155,11 @@ async function fetchGameWithState(
   gameId: string,
   signal?: AbortSignal,
 ): Promise<{ game: Game; state: GameState }> {
-  const gameQuery = client.from('games').select(GAME_SELECT).eq('id', gameId);
+  const gameQuery = client.from('games').select(PUBLIC_GAME_COLUMNS).eq('id', gameId);
   const { data: game, error: gameError } = await (signal ? gameQuery.abortSignal(signal) : gameQuery).single<Game>();
   if (gameError || !game) throw gameError ?? new Error('Active game lookup returned no row');
 
-  const stateQuery = client.from('game_states_public').select(GAME_STATE_PUBLIC_SELECT).eq('game_id', game.id);
+  const stateQuery = client.from('game_states_public').select(PUBLIC_GAME_STATE_COLUMNS).eq('game_id', game.id);
   const { data: state, error: stateError } = await (signal ? stateQuery.abortSignal(signal) : stateQuery).single<GameState>();
   if (stateError || !state) throw stateError ?? new Error('Active game state lookup returned no row');
 
@@ -159,7 +179,7 @@ async function fetchPublicSnapshot(
 ): Promise<PublicSnapshot> {
   const { data: session, error: sessionError } = await client
     .from('sessions')
-    .select(SESSION_SELECT)
+    .select(PUBLIC_SESSION_COLUMNS)
     .eq('id', sessionId)
     .abortSignal(signal)
     .single<Session>();
@@ -180,7 +200,7 @@ async function fetchPublicSnapshot(
     game = knownGame;
     const { data: freshState, error: stateError } = await client
       .from('game_states_public')
-      .select(GAME_STATE_PUBLIC_SELECT)
+      .select(PUBLIC_GAME_STATE_COLUMNS)
       .eq('game_id', game.id)
       .abortSignal(signal)
       .single<GameState>();
@@ -218,7 +238,9 @@ export default function DisplayUI({
   initialGameState: initialActiveGameState,
   initialPrizeText,
   initialLoadStatus,
-  playerJoinUrl,
+  followOrigin,
+  initialIsUniqueSession,
+  rehearsal,
 }: DisplayUIProps) {
   // One client for the life of the screen. Held in state rather than a ref so
   // it can be passed to hooks during render.
@@ -293,6 +315,19 @@ export default function DisplayUI({
     currentActiveGameRef.current = currentActiveGame;
   }, [currentActiveGame]);
 
+  // The version of the session row on screen. A session snapshot older than
+  // this is dropped (isFreshSession, R09): sessions.state_version is bumped by
+  // trigger on every update, so a late poll can no longer put an ended night
+  // back to running, or a finished game back on screen.
+  const sessionVersionRef = useRef<{ state_version?: number | null }>({ state_version: session.state_version });
+  const applySession = useCallback((incoming: Session) => {
+    sessionVersionRef.current = { state_version: incoming.state_version };
+    setCurrentSession(incoming);
+  }, []);
+
+  // A TV is left on all night: keep the screen awake.
+  useWakeLock();
+
   const currentActiveGameId = currentActiveGame ? currentActiveGame.id : null;
   const activePotId =
     currentActiveGame?.type === 'snowball' && currentActiveGame.snowball_pot_id
@@ -343,8 +378,9 @@ export default function DisplayUI({
         { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
         async (payload) => {
           if (!isCurrent()) return;
+          if (!isFreshSession(sessionVersionRef.current, payload.new)) return;
           pollRunnerRef.current?.invalidate();
-          setCurrentSession(payload.new);
+          applySession(payload.new);
           const result = await refreshActiveGame(payload.new.active_game_id);
           if (result.status === 'failed') {
             setConnectionPhase('failed');
@@ -464,10 +500,14 @@ export default function DisplayUI({
     pollRunnerRef.current = runner;
 
     const applySnapshot = (snapshot: PublicSnapshot) => {
-      setCurrentSession(snapshot.session);
+      // An older session row than the one on screen is dropped, and so is the
+      // game switch read from it: both would move the screen backwards.
+      const sessionIsFresh = isFreshSession(sessionVersionRef.current, snapshot.session);
+      if (sessionIsFresh) applySession(snapshot.session);
 
       const incoming = snapshot.state;
       if (snapshot.gameChanged) {
+        if (!sessionIsFresh) return;
         // Supersede any slower switch started by a Realtime session event, then
         // change game and state in the same render.
         refreshSeqRef.current += 1;
@@ -530,7 +570,7 @@ export default function DisplayUI({
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [supabase, session.id, markPollSuccess, markPollFailure]);
+  }, [supabase, session.id, markPollSuccess, markPollFailure, applySession]);
 
   const serverNumbers = useMemo<number[]>(
     () => readCalledNumbers(currentGameState),
@@ -649,17 +689,21 @@ export default function DisplayUI({
     latestPot && activePotId && latestPot.id === activePotId ? latestPot : null;
   const currentNumberDelayed = revealedCallCount > 0 ? delayedNumbers[revealedCallCount - 1] : null;
 
-  const isSessionCompletedState = currentSession.status === 'completed';
   /**
-   * A game only counts as active once this screen has something to put in the
-   * main area. A row that is 'not_started' or 'completed' renders nothing here,
-   * so it must fall through to the waiting screen rather than leave the pub TV
-   * blank between games.
+   * The part of the night (src/lib/night-phase.ts), from the session and the
+   * active game's state. A state row that is 'not_started' or 'completed'
+   * does not count as a game in play, so the TV falls through to the
+   * between-games screen rather than being left blank.
    */
-  const hasRenderableGame =
-    currentActiveGame !== null &&
-    currentGameState !== null &&
-    currentGameState.status === 'in_progress';
+  const activeStateForPhase =
+    currentActiveGame && currentGameState && currentGameState.game_id === currentActiveGame.id
+      ? currentGameState
+      : null;
+  const nightPhase = getNightPhase({ session: currentSession, activeGameState: activeStateForPhase });
+  const inGameSubState =
+    nightPhase === 'in_game' && currentGameState ? getInGameSubState(currentGameState) : null;
+  const isNightOver = nightPhase === 'night_over';
+  const hasRenderableGame = nightPhase === 'in_game';
 
   /**
    * The full-screen "Reconnecting" page needs the same 10 second unhealthy
@@ -672,25 +716,24 @@ export default function DisplayUI({
   const hasFailedLongEnough = connectionPhase === 'failed' && health.shouldShowBanner;
 
   /**
-   * Phase precedence, in order and for a reason:
-   *  - a completed session is terminal, so the thank-you screen always wins;
-   *  - a renderable game beats 'failed', because a single query blip must never
+   * Screen precedence, in order and for a reason:
+   *  - the end of the night is terminal, so the thank-you screen always wins;
+   *  - a game in play beats 'failed', because a single query blip must never
    *    rip a live game off the TV. The ConnectionBanner covers that case;
-   *  - 'failed' (after the grace period) beats 'waiting' and 'loading', so an
-   *    outage is never dressed up as "the host has not started yet". It
-   *    recovers on the next good read;
+   *  - 'failed' (after the grace period) beats the pre-game and between-games
+   *    screens, so an outage is never dressed up as "the host has not started
+   *    yet". It recovers on the next good read;
    *  - inside the grace period a screen that has never had a good read shows
    *    "Connecting", and one that has keeps showing what it had.
    */
-  const loadPhase: LoadPhase = isSessionCompletedState
-    ? 'completed'
-    : hasRenderableGame
-      ? 'active'
+  const loadPhase: LoadPhase =
+    isNightOver || hasRenderableGame
+      ? 'ready'
       : hasFailedLongEnough
         ? 'failed'
         : connectionPhase === 'loading' || (connectionPhase === 'failed' && !hasBeenReady)
           ? 'loading'
-          : 'waiting';
+          : 'ready';
 
   // New releases: reload by itself, but never over a claim check or a win.
   useBuildCheck({
@@ -701,16 +744,90 @@ export default function DisplayUI({
       (!currentGameState.paused_for_validation && !currentGameState.display_win_type),
   });
 
-  const isWaitingState = loadPhase === 'waiting';
-  // Every game overlay hangs off hasRenderableGame, so the waiting screen and
-  // the live-game screens are mutually exclusive: a stale on_break or
-  // paused_for_validation flag on a finished game can never stack a break or
-  // claim-check overlay on top of the waiting screen.
-  const showActiveGame = hasRenderableGame && !currentGameState?.on_break && !isSessionCompletedState && !currentGameState?.display_win_type && !currentGameState?.paused_for_validation;
-  const showBreak = hasRenderableGame && !!currentGameState?.on_break && !isSessionCompletedState;
-  const showPausedForValidation = hasRenderableGame && !!currentGameState?.paused_for_validation && !isSessionCompletedState;
-  const showWinState = hasRenderableGame && !!currentGameState?.display_win_type && !isSessionCompletedState;
-  const showServiceState = !!((isWaitingState && !isSessionCompletedState) || showBreak || isSessionCompletedState);
+  // The rest of the night: game numbers, the next game and the rules' pot.
+  // Re-read whenever the session row moves on (a game starts or finishes).
+  const overview = useSessionOverview({
+    supabase,
+    sessionId: session.id,
+    refreshKey: `${currentSession.state_version ?? ''}:${currentSession.active_game_id ?? ''}:${currentSession.status}`,
+    logScope: LOG_SCOPE,
+  });
+
+  // Keeps the QR payload right, and moves the TV on after the night (A3).
+  const { isUniqueSession } = useDisplayLifecycle({
+    supabase,
+    sessionId: session.id,
+    rehearsal,
+    nightPhase: loadPhase === 'ready' ? nightPhase : null,
+    completedAt: currentSession.completed_at ?? null,
+    clockOffsetMs,
+    initialIsUniqueSession,
+    logScope: LOG_SCOPE,
+  });
+
+  const windowOrigin = useWindowOrigin();
+  const qrOrigin = followOrigin ?? windowOrigin;
+  const followUrl = qrOrigin ? buildFollowUrl({ origin: qrOrigin, sessionId: session.id, isUniqueSession }) : '';
+
+  const minuteMs = useMinuteClock();
+  const sessionDate = currentSession.start_date ?? null;
+  const playlist = useMemo(
+    () => buildPlaylist(nightPhase, null, new Date(minuteMs), sessionDate, { inGameSubState }),
+    [nightPhase, minuteMs, sessionDate, inGameSubState]
+  );
+
+  // Rule 8 uses the live pot during a snowball game, else the night's first snowball pot.
+  const houseRules = getHouseRules(currentSnowballPot ?? overview?.rulesPot ?? null);
+
+  const activePosition = overview ? getGamePosition(overview.games, currentActiveGame?.id) : null;
+  const activeIdentity = currentActiveGame
+    ? formatGameIdentity({
+        number: activePosition?.number ?? currentActiveGame.game_index,
+        total: activePosition?.total ?? null,
+        colourHex: currentActiveGame.background_colour,
+      })
+    : '';
+  const nextGame = overview ? pickNextGame(overview.games, overview.statusByGameId) : null;
+  const nextPosition = nextGame && overview ? getGamePosition(overview.games, nextGame.id) : null;
+  const nextIdentity = nextGame
+    ? formatGameIdentity({
+        number: nextPosition?.number ?? nextGame.game_index,
+        total: nextPosition?.total ?? null,
+        colourHex: nextGame.background_colour,
+      })
+    : '';
+
+  const currentStageName =
+    currentActiveGame && currentGameState
+      ? currentActiveGame.stage_sequence[currentGameState.current_stage_index] ?? null
+      : null;
+  // The live claim (spec 5.2), from the public claim fields checked against
+  // the public called numbers. Pausing snaps the reveal to the server, so the
+  // full called list is what the room has seen.
+  const claimPanel =
+    hasRenderableGame && currentGameState
+      ? getClaimPanelState({
+          paused: currentGameState.paused_for_validation,
+          claimNumbers: Array.isArray(currentGameState.claim_numbers) ? currentGameState.claim_numbers : null,
+          claimResult: currentGameState.claim_result ?? null,
+          calledNumbers: serverNumbers,
+          stageName: currentStageName,
+          requiredCount: currentStageName ? getRequiredSelectionCountForStage(currentStageName) : null,
+        })
+      : null;
+
+  const showActiveGame = inGameSubState === 'calling';
+  const showPausedForValidation = inGameSubState === 'claim_check';
+  const showWinState = inGameSubState === 'win';
+  // The footer carries the stage, prize and recent calls, so it shows while a
+  // game is being called, checked or won. Everywhere else it is hidden and the
+  // slides get its height.
+  const showFooter = hasRenderableGame && inGameSubState !== 'break';
+  // The corner QR has a column of its own, so it can never cover the ball or a
+  // slide at 1280x720. It stays in place under the claim and win overlays, so
+  // the ball does not jump sideways when a claim starts. None at night_over.
+  const showCornerQr = !!followUrl && (hasRenderableGame || nightPhase === 'between_games');
+
   const isSnowballGame = currentActiveGame?.type === 'snowball';
   const snowballCallsLabel = currentSnowballPot && currentGameState
     ? getSnowballCallsLabel(revealedCallCount, currentSnowballPot.current_max_calls)
@@ -721,37 +838,15 @@ export default function DisplayUI({
   const snowballWindowStatus = currentSnowballPot && currentGameState
     ? getSnowballWindowStatus(revealedCallCount, currentSnowballPot.current_max_calls)
     : null;
-  const resolvedJoinUrl = playerJoinUrl.startsWith('http')
-    ? playerJoinUrl
-    : `${typeof window !== 'undefined' ? window.location.origin : ''}/player/${session.id}`;
 
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
   const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
-  // This panel is height-constrained: it lives in a fixed-height main area and is
-  // overflow-hidden, so anything that does not fit is clipped silently rather
-  // than scrolled. Sizing off vw alone (the old approach) therefore clipped the
-  // closing rule on shorter screens. These scales take min() of a width term and
-  // a height term so the binding constraint wins, and they now have to carry the
-  // Join in grid as well. Do not raise them without re-checking 1280x720 AND
-  // 1920x1080 on all three screens that render this panel.
-  // Budget: 100vh - 6rem top bar - 10rem footer - 3rem main padding. That is
-  // 416px at 1280x720, 464px at 1366x768, 776px at 1920x1080. Modelled height of
-  // this panel with the coefficients below: 402px / 421px / 550px. The previous
-  // coefficients modelled at 515px / 512px / 708px, so 720p and 768p both clipped.
-  const houseRulesTitleClass = "text-[min(2.9vw,4.4vh)] font-bold text-white mb-2 border-b border-[#1f7c58] pb-1.5";
-  // space-y-1.5 rather than space-y-2: the tighter list buys back the room the
-  // "Join in" grid needs, because this panel clips instead of scrolling.
-  const houseRulesListClass = "space-y-1.5 text-[min(2.35vw,2.85vh)] leading-[1.2] text-white";
-  // The waiting, break and session-complete screens share one left column, sized
-  // against the same budget. Break and Session Complete stack three blocks in
-  // there and modelled at 525px off vw alone, so the third card was clipped with
-  // no visual cue. Each scale now takes min() of the width term and a height
-  // term, so the shorter screen wins. Every vh term is chosen so 1080p still
-  // lands on its clamp maximum and is pixel-identical to before, and the spacing
-  // only tightens below 2xl, so 1080p is untouched. Modelled column height:
-  // 379px at 720p, 393px at 768p, 512px (unchanged) at 1080p.
-  const serviceColumnClass = "col-span-12 xl:col-span-6 flex flex-col justify-center gap-4 2xl:gap-6";
+  // The break, between-games and end-of-night screens share one centred
+  // column. Each scale takes min() of a width term and a height term, so the
+  // shorter screen wins; every vh term is chosen so 1080p lands on its clamp
+  // maximum.
+  const serviceColumnClass = "mx-auto flex h-full w-full max-w-4xl flex-col justify-center gap-4 2xl:gap-6 text-center";
   const serviceCardPadClass = "p-4 2xl:p-5";
   const serviceEyebrowClass = "text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold";
   const serviceHeadlineClass = "text-[clamp(2rem,min(4.6vw,6.5vh),4.2rem)] font-black uppercase tracking-[0.07em] text-white mt-1";
@@ -777,76 +872,74 @@ export default function DisplayUI({
     stagePrizePreview.length > 0
   );
 
-  const renderHouseRulesPanel = () => (
-    <div className="bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl p-5 text-left backdrop-blur-md overflow-hidden">
-      <h3 className={houseRulesTitleClass}>House Rules</h3>
-      <ul className={houseRulesListClass}>
-        {HOUSE_RULES.map((rule, i) => (
-          <li
-            key={i}
-            className={cn(
-              'flex gap-4 items-start',
-              rule.variant === 'closing' && 'pt-1'
-            )}
-          >
-            <span
-              className={
-                rule.variant === 'closing'
-                  ? 'text-[clamp(1.7rem,2.3vw,2.4rem)]'
-                  : 'text-white mt-1'
-              }
-            >
-              {rule.icon}
-            </span>
-            {rule.variant === 'closing' ? (
-              <span className="font-bold italic">
-                {rule.segments.map((seg, j) =>
-                  seg.bold ? (
-                    <span key={j} className="font-bold">{seg.text}</span>
-                  ) : (
-                    <React.Fragment key={j}>{seg.text}</React.Fragment>
-                  )
-                )}
-              </span>
-            ) : (
-              <span>
-                {rule.segments.map((seg, j) =>
-                  seg.bold ? (
-                    <span key={j} className="font-bold">{seg.text}</span>
-                  ) : (
-                    <React.Fragment key={j}>{seg.text}</React.Fragment>
-                  )
-                )}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+  const renderKitchenCard = () => (
+    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl backdrop-blur-sm", serviceCardPadClass)}>
+      <h2 className={servicePromoTitleClass}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</h2>
+      <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
+    </div>
+  );
 
-      {/* Call-and-response nudges. Two columns and three rows, deliberately
-          smaller than the rules and tightly spaced: the panel is
-          overflow-hidden, so anything that does not fit is clipped silently. */}
-      <div className="mt-2 border-t border-[#1f7c58] pt-1.5">
-        <h4 className="text-[min(1.35vw,1.95vh)] font-bold uppercase tracking-[0.12em] text-white mb-1.5">
-          Join in
-        </h4>
-        <div className="grid grid-cols-2 gap-x-5 gap-y-0.5">
-          {CALL_RESPONSES.map((item) => (
-            <p
-              key={item.number}
-              className="text-[min(1.6vw,2.1vh)] leading-tight text-white"
-            >
-              <span className="font-bold text-[#f3d59d]">{item.number}</span> {item.response}
-            </p>
-          ))}
-        </div>
+  const renderBreakSlide = () => (
+    <div className={serviceColumnClass}>
+      <div>
+        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+        <h1 className={serviceHeadlineClass}>Break Time</h1>
+        <p className={serviceSubheadClass}>Please hold your tickets, we will resume shortly.</p>
+      </div>
+      {renderKitchenCard()}
+      <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl backdrop-blur-md", serviceCardPadClass)}>
+        <h3 className={serviceCardTitleClass}>We&apos;ll be back in a moment</h3>
+        <p className={serviceCardBodyClass}>Keep your tickets handy for the next call.</p>
       </div>
     </div>
   );
 
+  // Between games (spec 5.1): "Next game coming up", with the next game's
+  // name and colour once the game list is in.
+  const renderNextGameSlide = () => (
+    <div className={serviceColumnClass}>
+      <div>
+        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+        <h1 className={serviceHeadlineClass}>Next game coming up</h1>
+        {nextGame && (
+          <div className="mt-[2vh] space-y-[1vh]">
+            <p className={cn(TV_TEXT_KEY, 'font-bold text-white')}>{nextGame.name}</p>
+            {nextIdentity && (
+              <p className={cn(TV_TEXT_KEY, 'flex items-center justify-center gap-[0.4em] font-bold text-[#f3d59d]')}>
+                <span
+                  aria-hidden
+                  className="inline-block shrink-0 rounded-full border-2 border-white"
+                  style={{ backgroundColor: nextGame.background_colour, width: '0.8em', height: '0.8em' }}
+                />
+                {nextIdentity}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+      {renderKitchenCard()}
+    </div>
+  );
+
+  const rulesStatusLabel =
+    nightPhase === 'between_games' ? 'Next game coming up' : inGameSubState === 'break' ? 'Break time' : null;
+
+  const renderSlide = (slide: Slide) => {
+    switch (slide.kind) {
+      case 'follow_along':
+        return followUrl ? <FollowAlongSlide url={followUrl} /> : null;
+      case 'rules':
+        return <RulesSlide rules={houseRules} statusLabel={rulesStatusLabel} />;
+      case 'break':
+        return renderBreakSlide();
+      case 'next_game':
+        return renderNextGameSlide();
+    }
+  };
+
   // First server answer not in yet. Deliberately brief: unlike the old boolean
-  // gate this can always be left, because the poll below resolves the phase to
-  // waiting, active, completed or failed on its first response.
+  // gate this can always be left, because the poll below resolves the phase on
+  // its first response.
   if (loadPhase === 'loading') {
     return (
       <div className="flex h-screen items-center justify-center text-white" style={{ backgroundColor: '#005131' }}>
@@ -857,7 +950,7 @@ export default function DisplayUI({
   }
 
   // Recoverable outage. Polling continues, and the next good read moves the
-  // screen straight on to the waiting or active phase with no reload.
+  // screen straight on with no reload.
   if (loadPhase === 'failed') {
     return (
       <div
@@ -889,7 +982,7 @@ export default function DisplayUI({
     >
       <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Top Bar */}
-      <div className="h-24 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10">
+      <div className="h-24 shrink-0 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10">
          <div className="flex items-center gap-4 shrink-0">
              <div className="relative w-64 h-20">
                  <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
@@ -897,20 +990,125 @@ export default function DisplayUI({
          </div>
          {/* min-w-0 lets this column shrink inside the flex row, and truncate
              keeps a long session or game name to one line instead of pushing
-             out of the 6rem bar (X12f). */}
+             out of the 6rem bar (X12f). During play the second line leads with
+             the game number and book colour (spec 5.3). */}
          <div className="min-w-0 flex-1 pl-6 text-right">
              <h2 className="truncate text-[36px] font-bold tracking-tight">{currentSession.name}</h2>
-             {currentActiveGame && <p className={cn("truncate text-[27px] font-medium uppercase tracking-wider", dimTextColor)}>{currentActiveGame.name}</p>}
+             {hasRenderableGame && currentActiveGame && (
+               <p className={cn("truncate text-[27px] font-medium uppercase tracking-wider", dimTextColor)}>
+                 {[activeIdentity, currentActiveGame.name].filter(Boolean).join(' · ')}
+               </p>
+             )}
          </div>
       </div>
 
       {/* Main Content Area */}
-      <div className={cn("flex-1 flex items-center justify-center relative p-6 overflow-hidden", showServiceState && "xl:pl-44")}>
+      <div className="flex-1 min-h-0 flex gap-6 relative p-6 overflow-hidden">
+
+          {showCornerQr && (
+            <div className="flex shrink-0 items-end" data-check-overlap>
+              <FollowQrBadge url={followUrl} />
+            </div>
+          )}
+
+          <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center" data-check-overlap>
+            {playlist.length > 0 && (
+              <SlideLoop className="h-full w-full" slides={playlist} renderSlide={renderSlide} />
+            )}
+
+            {isNightOver && (
+              <div className={serviceColumnClass}>
+                  <div>
+                      <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
+                      <h1 className={serviceHeadlineClass}>Thanks For Coming!</h1>
+                      <p className={serviceSubheadClass}>Please book your table for our next bingo event before you leave.</p>
+                  </div>
+
+                  <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl backdrop-blur-sm", serviceCardPadClass)}>
+                      <h2 className={servicePromoTitleClass}>Book For Our Next Event</h2>
+                      <p className={servicePromoBodyClass}>Don&apos;t miss out. Reserve your table at the bar tonight.</p>
+                  </div>
+
+                  <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl backdrop-blur-md", serviceCardPadClass)}>
+                      <h3 className={serviceCardTitleClass}>Bring friends for the next one</h3>
+                      <p className={serviceCardBodyClass}>Ask the team about dates and get booked in early.</p>
+                  </div>
+              </div>
+            )}
+
+            {showActiveGame && (
+              <div className="flex flex-col items-center justify-center h-full w-full">
+                {currentNumberDelayed ? (
+                  <div className="relative animate-in zoom-in duration-300">
+                     {/* Massive Main Number.
+                        The 19rem subtracted below is the real vertical chrome:
+                        h-24 top bar (6rem) + h-40 footer (10rem) + the main area's
+                        p-6 top and bottom (3rem) = 19rem. It used to say 18rem,
+                        which is exactly 1rem short, so at 1280x720 the calc asked
+                        for 432px against 416px available and flat-topped the ball
+                        by 8px top and bottom. Masked at 1080p only because the
+                        68vh term binds first there. */}
+                    <div
+                      className="relative bg-[#005131] border-4 border-white rounded-full flex items-center justify-center overflow-hidden"
+                      style={{
+                        ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 19rem))',
+                        width: 'var(--display-ball-size)',
+                        height: 'var(--display-ball-size)',
+                      } as React.CSSProperties}
+                    >
+                        <span
+                          className="block font-bold text-white text-center select-none leading-none"
+                          style={{
+                            fontSize: 'calc(var(--display-ball-size) * 0.73)',
+                            fontVariantNumeric: 'tabular-nums lining-nums',
+                          }}
+                        >
+                            {currentNumberDelayed}
+                        </span>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {showPreCallStagePreview ? (
+                      <div className="w-full max-w-4xl bg-[#005131]/92 border border-[#a57626] rounded-3xl p-8 text-white animate-in fade-in duration-500">
+                        <p className="text-[clamp(1rem,1.5vw,1.2rem)] uppercase tracking-[0.2em] font-semibold text-[#f3d59d] text-center animate-pulse">
+                          Game Stages & Prizes
+                        </p>
+                        <div className="mt-5 space-y-3">
+                          {stagePrizePreview.map((item) => (
+                            <div
+                              key={`${item.stageLabel}-${item.index}`}
+                              className="grid grid-cols-[1fr_auto] gap-4 items-center bg-[#003f27]/75 border border-[#1f7c58] rounded-2xl px-5 py-4 animate-pulse"
+                              style={{ animationDelay: `${item.index * 180}ms` }}
+                            >
+                              <p className="text-[clamp(1.2rem,2vw,1.8rem)] font-bold tracking-wide">
+                                Stage {item.index + 1}: {item.stageLabel}
+                              </p>
+                              {/* An empty prize is a setup gap for the host to
+                                  fix, not something to put in front of guests
+                                  (X12e): the host screen still flags it. */}
+                              {item.prizeLabel && (
+                                <p className="text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold text-[#f3d59d]">
+                                  {item.prizeLabel}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <h1 className="text-[72px] font-bold opacity-40 animate-pulse">READY...</h1>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Snowball countdown badge. Top right so it can never collide with
-              the bottom-left join QR, and static so it needs no
-              prefers-reduced-motion opt-out. The z-70 validation overlay and
-              the z-80 win overlay cover it as they cover everything else. */}
+              the corner QR, and static so it needs no prefers-reduced-motion
+              opt-out. The z-70 claim overlay and the z-80 win overlay cover it
+              as they cover everything else. */}
           {isSnowballGame && (showActiveGame || showPausedForValidation) && currentSnowballPot && snowballWindowStatus && (
             <div className="absolute top-4 right-4 z-40 rounded-3xl border border-[#a57626] bg-[#005131]/92 px-6 py-4 text-center backdrop-blur-sm">
               {snowballWindowStatus === 'open' ? (
@@ -942,185 +1140,28 @@ export default function DisplayUI({
             </div>
           )}
 
-          {isWaitingState && !isSessionCompletedState && (
-            <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
-                <div className={serviceColumnClass}>
-                    <div className="text-center xl:text-left">
-                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
-                        <h1 className={serviceHeadlineClass}>Session Starts Shortly</h1>
-                        <p className={serviceSubheadClass}>Please have your tickets ready and watch the screen for the first call.</p>
-                    </div>
-
-                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
-                        <h2 className={servicePromoTitleClass}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</h2>
-                        <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
-                    </div>
-                </div>
-
-                <div className="col-span-12 xl:col-span-6">
-                    {renderHouseRulesPanel()}
+          {/* The live claim (spec 5.2): each number as the caller reads it,
+              ticked or crossed, then the server's verdict. It replaced the old
+              "Checking Claim" card. */}
+          {showPausedForValidation && claimPanel && (
+            <div className="absolute inset-0 z-[70] flex items-center justify-center overflow-hidden bg-[#003f27]/95 backdrop-blur-md p-[1.5vh]">
+                <div className="w-full max-w-[1500px] rounded-3xl border border-[#a57626] bg-[#005131]/90 p-[2vh]">
+                    <ClaimPanel state={claimPanel} variant="tv" />
                 </div>
             </div>
           )}
 
-          {showBreak && (
-            <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in zoom-in duration-500 items-center overflow-hidden">
-                <div className={serviceColumnClass}>
-                    <div className="text-center xl:text-left">
-                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
-                        <h1 className={serviceHeadlineClass}>Break Time</h1>
-                        <p className={serviceSubheadClass}>Please hold your tickets, we will resume shortly.</p>
-                    </div>
-
-                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
-                        <h2 className={servicePromoTitleClass}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</h2>
-                        <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
-                    </div>
-
-                    <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl text-center xl:text-left backdrop-blur-md", serviceCardPadClass)}>
-                        <h3 className={serviceCardTitleClass}>We&apos;ll be back in a moment</h3>
-                        <p className={serviceCardBodyClass}>Keep your tickets handy for the next call.</p>
-                    </div>
-                </div>
-
-                <div className="col-span-12 xl:col-span-6">
-                    {renderHouseRulesPanel()}
-                </div>
-            </div>
-          )}
-
-                  {isSessionCompletedState && (
-            <div className="w-full h-full max-w-[1500px] mx-auto grid grid-cols-12 gap-6 animate-in fade-in duration-700 items-center overflow-hidden">
-                <div className={cn(serviceColumnClass, "text-center xl:text-left")}>
-                    <div>
-                        <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
-                        <h1 className={serviceHeadlineClass}>Thanks For Coming!</h1>
-                        <p className={serviceSubheadClass}>Please book your table for our next bingo event before you leave.</p>
-                    </div>
-
-                    <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
-                        <h2 className={servicePromoTitleClass}>Book For Our Next Event</h2>
-                        <p className={servicePromoBodyClass}>Don&apos;t miss out. Reserve your table at the bar tonight.</p>
-                    </div>
-
-                    <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl text-center xl:text-left backdrop-blur-md", serviceCardPadClass)}>
-                        <h3 className={serviceCardTitleClass}>Bring friends for the next one</h3>
-                        <p className={serviceCardBodyClass}>Ask the team about dates and get booked in early.</p>
-                    </div>
-                </div>
-
-                <div className="col-span-12 xl:col-span-6">
-                    {renderHouseRulesPanel()}
-                </div>
-            </div>
-          )}
-
-          {showPausedForValidation && (
-            <div className="absolute inset-0 z-[70] flex items-center justify-center bg-[#003f27]/95 backdrop-blur-md p-8 text-center animate-in fade-in duration-300">
-                <div className="w-full max-w-6xl bg-[#005131]/90 border border-[#a57626] rounded-3xl p-8 flex flex-col lg:flex-row items-center justify-center gap-8">
-                    <div className="text-center lg:text-left">
-                      <p className="text-[clamp(1rem,2vw,1.5rem)] uppercase tracking-[0.18em] font-bold text-[#f3d59d]">Validation In Progress</p>
-                      <h1 className="text-[clamp(2.7rem,7.2vw,6.5rem)] leading-[1.02] font-black uppercase tracking-[0.08em] text-white mt-2">Checking Claim</h1>
-                      <p className="text-[clamp(1.1rem,2.4vw,2rem)] leading-tight text-white/90 mt-3">Please hold all calls while the ticket is verified.</p>
-                    </div>
-                    {/* The claim is validated against the last called ball, and the
-                        reveal queue snaps to the server state while paused, so this
-                        is always the true last call. */}
-                    {currentNumberDelayed !== null && (
-                      <div className="flex flex-col items-center gap-2 shrink-0">
-                        <p className="text-[clamp(0.9rem,1.5vw,1.3rem)] uppercase tracking-[0.16em] font-bold text-[#f3d59d]">Claim must include</p>
-                        <div
-                          className="flex items-center justify-center rounded-full bg-[#005131] border-4 border-white font-bold text-white leading-none shrink-0"
-                          style={{
-                            width: 'clamp(4rem,12vw,10rem)',
-                            height: 'clamp(4rem,12vw,10rem)',
-                            fontSize: 'clamp(2rem,6vw,5rem)',
-                            fontVariantNumeric: 'tabular-nums lining-nums',
-                          }}
-                        >
-                          {currentNumberDelayed}
-                        </div>
-                      </div>
-                    )}
-                </div>
-            </div>
-          )}
-
-          {showActiveGame && (
-            <div className="flex flex-col items-center justify-center h-full w-full">
-              {currentNumberDelayed ? (
-                <div className="relative animate-in zoom-in duration-300">
-                   {/* Massive Main Number.
-                      The 19rem subtracted below is the real vertical chrome:
-                      h-24 top bar (6rem) + h-40 footer (10rem) + the main area's
-                      p-6 top and bottom (3rem) = 19rem. It used to say 18rem,
-                      which is exactly 1rem short, so at 1280x720 the calc asked
-                      for 432px against 416px available and flat-topped the ball
-                      by 8px top and bottom. Masked at 1080p only because the
-                      68vh term binds first there. */}
-                  <div
-                    className="relative bg-[#005131] border-4 border-white rounded-full flex items-center justify-center overflow-hidden"
-                    style={{
-                      ['--display-ball-size' as string]: 'min(68vh, calc(100vw - 6rem), calc(100vh - 19rem))',
-                      width: 'var(--display-ball-size)',
-                      height: 'var(--display-ball-size)',
-                    } as React.CSSProperties}
-                  >
-                      <span
-                        className="block font-bold text-white text-center select-none leading-none"
-                        style={{
-                          fontSize: 'calc(var(--display-ball-size) * 0.73)',
-                          fontVariantNumeric: 'tabular-nums lining-nums',
-                        }}
-                      >
-                          {currentNumberDelayed}
-                      </span>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {showPreCallStagePreview ? (
-                    <div className="w-full max-w-4xl bg-[#005131]/92 border border-[#a57626] rounded-3xl p-8 text-white animate-in fade-in duration-500">
-                      <p className="text-[clamp(1rem,1.5vw,1.2rem)] uppercase tracking-[0.2em] font-semibold text-[#f3d59d] text-center animate-pulse">
-                        Game Stages & Prizes
-                      </p>
-                      <div className="mt-5 space-y-3">
-                        {stagePrizePreview.map((item) => (
-                          <div
-                            key={`${item.stageLabel}-${item.index}`}
-                            className="grid grid-cols-[1fr_auto] gap-4 items-center bg-[#003f27]/75 border border-[#1f7c58] rounded-2xl px-5 py-4 animate-pulse"
-                            style={{ animationDelay: `${item.index * 180}ms` }}
-                          >
-                            <p className="text-[clamp(1.2rem,2vw,1.8rem)] font-bold tracking-wide">
-                              Stage {item.index + 1}: {item.stageLabel}
-                            </p>
-                            {/* An empty prize is a setup gap for the host to
-                                fix, not something to put in front of guests
-                                (X12e): the host screen still flags it. */}
-                            {item.prizeLabel && (
-                              <p className="text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold text-[#f3d59d]">
-                                {item.prizeLabel}
-                              </p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <h1 className="text-[72px] font-bold opacity-40 animate-pulse">READY...</h1>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-
-          {/* WIN OVERLAY */}
+          {/* WIN OVERLAY. The claimed balls stay on screen under the win, so
+              the room can see what won; the headline steps down a size when
+              they are there, so a Full House still fits at 1280x720. */}
           {showWinState && currentGameState && (
-            <div className="absolute inset-0 z-[80] flex flex-col items-center justify-center bg-[#003f27]/95 backdrop-blur-md animate-in fade-in duration-300 p-8 text-center">
+            <div className="absolute inset-0 z-[80] flex flex-col items-center justify-center gap-[3vh] overflow-hidden bg-[#003f27]/95 backdrop-blur-md animate-in fade-in duration-300 p-[2vh] text-center">
               <h1
                 className={cn(
-                    "text-[clamp(3rem,10vw,9rem)] leading-[0.9] font-black mb-8",
-                    "text-white"
+                    claimPanel && claimPanel.balls.length > 0
+                      ? "text-[clamp(2.5rem,min(7vw,11vh),8rem)]"
+                      : "text-[clamp(3rem,10vw,9rem)]",
+                    "leading-[0.9] font-black text-white"
                 )}
               >
                   {currentGameState.display_win_text}
@@ -1131,6 +1172,7 @@ export default function DisplayUI({
                       <h2 className="text-[clamp(2.2rem,6vw,5rem)] font-black text-white break-words">{currentGameState.display_winner_name}</h2>
                   </div>
               )}
+              {claimPanel && <ClaimBalls balls={claimPanel.balls} variant="tv" />}
             </div>
           )}
       </div>
@@ -1138,68 +1180,52 @@ export default function DisplayUI({
       {/* Footer Info Bar. h-40 rather than h-32 to clear the enlarged recent
           calls strip. Its 10rem is one of the three terms in the main ball's
           calc(100vh - 19rem) above (6rem top bar + 10rem footer + 3rem main
-          padding), and it also sets where the QR badge sits (bottom-44).
-          Change this height and you must re-do that subtraction. */}
-      <div className="h-40 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10">
-            <div className="flex flex-col justify-center border-r border-white/10 pr-8">
-                {(showActiveGame || showPausedForValidation) && (
-                  <>
+          padding). Change this height and you must re-do that subtraction. It
+          only shows while a game is being called, checked or won. */}
+      {showFooter && (
+        <div className="h-40 shrink-0 bg-[#005131] border-t border-[#1f7c58] grid grid-cols-2 px-8 z-10">
+              <div className="flex flex-col justify-center border-r border-white/10 pr-8">
+                  <p className={footerLeftTextClass}>
+                    Playing for: {formatStageLabel(currentStageName ?? undefined)}
+                  </p>
+                  {/* Hidden when empty: "Prize not set" is for the host
+                      screen only (X12e). */}
+                  {currentPrizeText && (
                     <p className={footerLeftTextClass}>
-                      Playing for: {formatStageLabel(currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0])}
+                      Prize: {currentPrizeText}
                     </p>
-                    {/* Hidden when empty: "Prize not set" is for the host
-                        screen only (X12e). */}
-                    {currentPrizeText && (
-                      <p className={footerLeftTextClass}>
-                        Prize: {currentPrizeText}
-                      </p>
-                    )}
-                    {isSnowballGame && (
-                      <p className={footerLeftTextClass}>
-                        {currentSnowballPot
-                          ? `Snowball: £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}`
-                          : 'Snowball: countdown unavailable (no linked snowball pot)'}
-                      </p>
-                    )}
-                  </>
-                )}
-            </div>
+                  )}
+                  {isSnowballGame && (
+                    <p className={footerLeftTextClass}>
+                      {currentSnowballPot
+                        ? `Snowball: £${formatPounds(Number(currentSnowballPot.current_jackpot_amount))}`
+                        : 'Snowball: countdown unavailable (no linked snowball pot)'}
+                    </p>
+                  )}
+              </div>
 
-            <div className="flex flex-col justify-center pl-8 overflow-hidden">
-                {(showActiveGame || showPausedForValidation) && delayedNumbers.length > 0 && (
-                    <>
-                      <div className="flex justify-between items-end mb-2">
-                          <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
-                          <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {revealedCallCount}</span>
-                      </div>
-                      <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
-                          {delayedNumbers.slice().reverse().map((num, idx) => (
-                              <div key={idx} className={cn(
-                                  "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
-                                  idx === 0 ? "w-[5.6rem] h-[5.6rem] text-[50px] border-4 border-white" : "w-[4.2rem] h-[4.2rem] text-[38px] opacity-70"
-                              )}>
-                                  {num}
-                              </div>
-                          ))}
-                      </div>
-                    </>
-                )}
-            </div>
-        </div>
-
-      {/* Player Join QR Code */}
-      <div className="absolute bottom-44 left-8 bg-[#005131] border border-white/30 p-4 rounded-xl flex flex-col items-center gap-2 animate-in slide-in-from-left duration-1000 z-40">
-          <div className="bg-white p-2 rounded-lg">
-             <QRCodeSVG
-                value={resolvedJoinUrl}
-                size={100}
-                level="H"
-                fgColor="#005131"
-                bgColor="#FFFFFF"
-             />
+              <div className="flex flex-col justify-center pl-8 overflow-hidden">
+                  {delayedNumbers.length > 0 && (
+                      <>
+                        <div className="flex justify-between items-end mb-2">
+                            <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Recent Calls</span>
+                            <span className={cn("text-[16px] uppercase tracking-widest font-bold", dimTextColor)}>Total Calls: {revealedCallCount}</span>
+                        </div>
+                        <div className="flex items-center gap-3 overflow-hidden mask-linear-fade">
+                            {delayedNumbers.slice().reverse().map((num, idx) => (
+                                <div key={idx} className={cn(
+                                    "flex items-center justify-center rounded-full bg-[#005131] border border-white/60 font-bold text-white shrink-0",
+                                    idx === 0 ? "w-[5.6rem] h-[5.6rem] text-[50px] border-4 border-white" : "w-[4.2rem] h-[4.2rem] text-[38px] opacity-70"
+                                )}>
+                                    {num}
+                                </div>
+                            ))}
+                        </div>
+                      </>
+                  )}
+              </div>
           </div>
-          <p className="text-white font-bold text-[21px] uppercase tracking-wider">Play Along</p>
-      </div>
+      )}
     </div>
   );
 }
