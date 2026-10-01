@@ -10,9 +10,10 @@
 // next.config.ts imports this file directly, so it must stay free of path
 // aliases, imports and TypeScript-only runtime syntax (enums, namespaces).
 //
-// Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin falls back to
-// the request headers) and SUPABASE_SERVICE_ROLE_KEY (production does not set
-// it; startGame falls back without it until a later slice removes that path).
+// Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin comes from
+// src/lib/site-origin.ts, which falls back to Vercel's own production or
+// preview address) and SUPABASE_SERVICE_ROLE_KEY (production does not set it;
+// only /api/setup uses it).
 
 /**
  * Whether production builds need the management API key for the events feed.

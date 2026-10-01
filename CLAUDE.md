@@ -25,7 +25,7 @@ npm run verify           # lint, typecheck, test, build
 A **90-ball pub bingo control system** for The Anchor. Players use paper books: no digital cards, no per-player marking, no "join a card" QR flow, no 75-ball mode, no audio.
 
 - Admin (`profiles.role = 'admin'`): `/admin/*` (sessions, snowball, history, backup). Host (`admin` or `host`): `/host`, `/host/[sessionId]/[gameId]`.
-- Public: `/display[/sessionId]` (pub TV; the root redirects only when exactly one session is ready or running), `/player/[sessionId]` (read-only phone follower).
+- Public: `/display[/sessionId]` (pub TV; the root joins the one session that is running, or ready and dated today or earlier; `?rehearsal=1` also lists test sessions), `/player/[sessionId]` (read-only phone follower), `/play` (permanent follow-along link for QR codes and table cards).
 - Also `/login` (sign-in only), `/pending` (signed in, no staff role), `/api/setup`.
 
 ## Architecture
@@ -39,7 +39,9 @@ A **90-ball pub bingo control system** for The Anchor. Players use paper books: 
 - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`: public.
 - `SUPABASE_SERVICE_ROLE_KEY`: server only; used by `/api/setup` and nothing else. `startGame` no longer has a service-role write client: it calls `start_game` with the cookie client.
 - `SETUP_SECRET`: gates `/api/setup`, which promotes an existing auth user to admin. Unset it once the first admin exists; the route then 404s.
-- `NEXT_PUBLIC_SITE_URL`: public origin, the fallback for the display QR link to `/player/[sessionId]` when request headers are missing.
+- `NEXT_PUBLIC_SITE_URL`: optional override for the QR origin (`src/lib/site-origin.ts`); must be an https origin, and is ignored on Vercel previews so a preview QR never points at production. Without it, production uses `VERCEL_PROJECT_PRODUCTION_URL`, previews `VERCEL_BRANCH_URL`, development the request origin. QR codes point at `/play` (or `/play?s=<id>` when the TV's session is not the unique match), which redirects to `/player/[sessionId]`.
+- `ANCHOR_API_KEY` (server only, required for Vercel production builds), `ANCHOR_API_BASE_URL` (optional): the management app's `read:events` key for the upcoming-events feed (`src/lib/events-feed/`). Previews and local builds without it show `missing_config` and the TV falls back to its non-event slides.
+- `NEXT_PUBLIC_REVIEW_INVITE_ENABLED`: `true` shows the end-of-night review QR and phone button. Leave unset until the management feedback page offers the Google review to every visitor.
 - `ERROR_SINK_URL`, `ERROR_SINK_TOKEN`: optional. `src/lib/report-error.ts` posts redacted failures (message and code only) so they outlive Vercel's logs. Unset means no-op.
 - `LOG_ERRORS`: `logError()` is silent in production unless `true`.
 
