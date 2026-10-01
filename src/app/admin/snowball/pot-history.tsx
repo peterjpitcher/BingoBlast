@@ -1,6 +1,7 @@
 import React from 'react';
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
+import { Badge, type BadgeVariant } from '@/components/ui/badge';
 import { formatPounds } from '@/lib/snowball';
 import { formatShortDateTimeInLondon } from '@/lib/dates';
 import type { Database } from '@/types/database';
@@ -13,6 +14,19 @@ interface PotHistoryProps {
   rows: PotHistoryRow[];
 }
 
+// The admin table (design handoff, section 6): small sage column heads over a
+// gold hairline, 15px cream cells, a hairline between rows and a faint gold
+// wash on hover.
+const TH = "whitespace-nowrap border-b border-line-gold px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-[0.1em] text-anchor-sage";
+const TD = "px-5 py-4 align-middle text-[15px]";
+const ROW = "border-b border-line transition-colors duration-150 last:border-b-0 hover:bg-anchor-gold-bright/[0.05]";
+
+interface ChangeLabel {
+  text: string;
+  variant: BadgeVariant;
+  className?: string;
+}
+
 /**
  * The pot's own audit trail, on screen.
  *
@@ -21,88 +35,86 @@ interface PotHistoryProps {
  * even though the rows to answer it were being created. This is the whole reason
  * the table exists.
  */
-const CHANGE_LABEL: Record<string, { text: string; className: string }> = {
-  rollover: { text: 'Rolled over', className: 'bg-slate-800 text-slate-300 border-slate-700' },
-  jackpot_won: { text: 'Jackpot won', className: 'bg-yellow-900/40 text-yellow-300 border-yellow-800' },
-  manual_update: { text: 'Manual correction', className: 'bg-blue-900/40 text-blue-300 border-blue-800' },
-  manual_reset: { text: 'Manual reset', className: 'bg-red-900/40 text-red-300 border-red-800' },
+const CHANGE_LABEL: Record<string, ChangeLabel> = {
+  rollover: { text: 'Rolled over', variant: 'outline' },
+  jackpot_won: { text: 'Jackpot won', variant: 'gold' },
+  manual_update: { text: 'Manual correction', variant: 'outline' },
+  manual_reset: { text: 'Manual reset', variant: 'danger' },
   // Derived from the pot's own arithmetic long after the fact, not observed at
   // the time. Rendered differently on purpose: a reconstructed row must never
   // read as a recorded one.
-  reconstructed_rollover: { text: 'Rolled over (reconstructed)', className: 'bg-slate-800 text-slate-400 border-dashed border-slate-600' },
+  reconstructed_rollover: { text: 'Rolled over (reconstructed)', variant: 'outline', className: 'border-dashed text-anchor-sage' },
 };
 
 export function PotHistory({ rows }: PotHistoryProps) {
   return (
-    <Card className="bg-slate-900 border-slate-800">
-      <CardHeader>
-        <CardTitle>Pot history</CardTitle>
-        <p className="text-xs text-slate-500 max-w-2xl">
-          Rows marked <span className="text-slate-400">reconstructed</span> were worked out from the
+    <Card className="overflow-hidden">
+      <div className="flex flex-col gap-2 border-b border-line-gold px-5 py-[18px]">
+        <h2 className="text-[26px] leading-none text-anchor-cream-text">Pot history</h2>
+        <p className="max-w-2xl text-[13px] text-anchor-sage">
+          Rows marked <span className="text-anchor-cream-text">reconstructed</span> were worked out from the
           pot&rsquo;s own base and increment figures after the fact, because nothing was recording
           movements before 29 July 2026. They explain how the pot reached its current figure; they
           are not a record made on the night.
         </p>
-      </CardHeader>
-      <CardContent className="p-0">
-        {rows.length === 0 ? (
-          <div className="p-8 text-center text-slate-500">
-            <p>No pot movements recorded yet.</p>
-            <p className="mt-2 text-xs text-slate-600 max-w-lg mx-auto">
-              Movements have only been recorded since 29 July 2026, when the audit table was added.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-slate-800/50 text-slate-400">
-                <tr>
-                  <th className="px-4 py-3 font-medium">When</th>
-                  <th className="px-4 py-3 font-medium">Pot</th>
-                  <th className="px-4 py-3 font-medium">What happened</th>
-                  <th className="px-4 py-3 font-medium">Jackpot</th>
-                  <th className="px-4 py-3 font-medium">Window</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50">
-                {rows.map((row) => {
-                  const label = CHANGE_LABEL[row.change_type ?? ''] ?? {
-                    text: row.change_type ?? 'Unknown',
-                    className: 'bg-slate-800 text-slate-300 border-slate-700',
-                  };
-                  return (
-                    <tr key={row.id} className="hover:bg-slate-800/30 transition-colors">
-                      <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
-                        {formatShortDateTimeInLondon(row.created_at)}
-                      </td>
-                      <td className="px-4 py-3 text-white">{row.pot?.name ?? 'Unknown pot'}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${label.className}`}>
-                          {label.text}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-slate-300 whitespace-nowrap">
-                        {row.old_val_jackpot !== null && row.new_val_jackpot !== null ? (
-                          <>£{formatPounds(Number(row.old_val_jackpot))} → £{formatPounds(Number(row.new_val_jackpot))}</>
-                        ) : (
-                          <span className="text-slate-600">not recorded</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-slate-400 whitespace-nowrap">
-                        {row.old_val_max !== null && row.new_val_max !== null ? (
-                          <>{row.old_val_max} → {row.new_val_max} calls</>
-                        ) : (
-                          <span className="text-slate-600">not recorded</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
+      </div>
+      {rows.length === 0 ? (
+        <div className="flex flex-col gap-1.5 px-5 py-8">
+          <p className="text-[15px] text-anchor-sage">No pot movements recorded yet.</p>
+          <p className="max-w-lg text-[13px] text-anchor-sage">
+            Movements have only been recorded since 29 July 2026, when the audit table was added.
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] border-collapse text-left">
+            <thead>
+              <tr>
+                <th className={TH}>When</th>
+                <th className={TH}>Pot</th>
+                <th className={TH}>What happened</th>
+                <th className={TH}>Jackpot</th>
+                <th className={TH}>Calls</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const label: ChangeLabel = CHANGE_LABEL[row.change_type ?? ''] ?? {
+                  text: row.change_type ?? 'Unknown',
+                  variant: 'outline',
+                };
+                return (
+                  <tr key={row.id} className={ROW}>
+                    <td className={`${TD} whitespace-nowrap text-anchor-sage`}>
+                      {formatShortDateTimeInLondon(row.created_at)}
+                    </td>
+                    <td className={`${TD} font-semibold`}>{row.pot?.name ?? 'Unknown pot'}</td>
+                    <td className={TD}>
+                      <Badge variant={label.variant} className={label.className}>
+                        {label.text}
+                      </Badge>
+                    </td>
+                    <td className={`${TD} whitespace-nowrap tabular-nums`}>
+                      {row.old_val_jackpot !== null && row.new_val_jackpot !== null ? (
+                        <>£{formatPounds(Number(row.old_val_jackpot))} → £{formatPounds(Number(row.new_val_jackpot))}</>
+                      ) : (
+                        <span className="text-anchor-sage">Not recorded</span>
+                      )}
+                    </td>
+                    <td className={`${TD} whitespace-nowrap tabular-nums`}>
+                      {row.old_val_max !== null && row.new_val_max !== null ? (
+                        <>{row.old_val_max} → {row.new_val_max} calls</>
+                      ) : (
+                        <span className="text-anchor-sage">Not recorded</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   );
 }

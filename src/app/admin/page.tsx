@@ -5,10 +5,12 @@ import { signout } from '@/app/login/actions';
 import AdminDashboard from './dashboard';
 import type { Database } from '@/types/database';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Kicker } from '@/components/ui/kicker';
 
 export default async function AdminPage() {
   const supabase = await createClient();
-  
+
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -21,15 +23,18 @@ export default async function AdminPage() {
     .select('role')
     .eq('id', user.id)
     .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
-    
+
   if (profile?.role !== 'admin') {
     return (
-      <div className="min-h-screen-safe flex flex-col items-center justify-center text-center bg-slate-950 text-white p-4">
-        <h1 className="text-3xl font-bold text-red-500 mb-2">Access Denied</h1>
-        <p className="text-slate-400 mb-6">You do not have administrator privileges.</p>
-        <form action={signout}>
-          <Button variant="secondary">Sign Out</Button>
-        </form>
+      <div className="flex flex-1 flex-col items-center justify-center">
+        <Card className="flex w-full max-w-md flex-col items-center gap-3.5 px-5 py-6 text-center">
+          <Kicker>Admin</Kicker>
+          <h1 className="text-[28px] leading-[1.05] text-anchor-cream-text">Access denied</h1>
+          <p className="text-[15px] leading-normal text-anchor-sage">You do not have administrator privileges.</p>
+          <form action={signout} className="mt-2 w-full">
+            <Button variant="outline" size="md" block>Sign out</Button>
+          </form>
+        </Card>
       </div>
     )
   }
@@ -40,30 +45,6 @@ export default async function AdminPage() {
     .select('*')
     .order('created_at', { ascending: false });
 
-  return (
-    <div className="min-h-screen-safe bg-slate-950 text-white pb-20">
-      <header className="bg-slate-900 border-b border-slate-800 p-4 mb-6">
-        <div className="container mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-6">
-            <h1 className="text-xl font-bold text-bingo-primary">Admin Dashboard</h1>
-            <a href="/admin/snowball">
-              <Button variant="secondary" size="sm" className="text-indigo-300 border-indigo-500/30 hover:bg-indigo-900/20">
-                ❄️ Manage Snowballs
-              </Button>
-            </a>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-slate-400 hidden sm:inline-block">{user.email}</span>
-            <form action={signout}>
-              <Button variant="ghost" size="sm" className="text-red-400 hover:bg-red-900/20 hover:text-red-300">Sign Out</Button>
-            </form>
-          </div>
-        </div>
-      </header>
-      
-      <main className="container mx-auto px-4">
-        <AdminDashboard sessions={sessions || []} />
-      </main>
-    </div>
-  );
+  // The header, the footer and the page container come from the admin layout.
+  return <AdminDashboard sessions={sessions || []} />;
 }
