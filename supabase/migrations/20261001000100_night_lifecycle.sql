@@ -25,6 +25,12 @@
 --   run one after the other. No trigger on game_states writes to sessions,
 --   because that would take the locks in the opposite order.
 --
+--   start_game also takes the cash jackpot amount for a 'jackpot' game, and
+--   writes its Full House prize text ("£125 Cash Jackpot") in the same
+--   transaction. games UPDATE is admin only in RLS, so a host could not save
+--   that amount once the service-role client left startGame; this is the one
+--   write to games a host can make, and only on a fresh start.
+--
 -- COMPATIBILITY
 --   Additive. Today's host screen writes game_states and sessions directly, and
 --   still can: nothing here revokes or guards those writes. The trigger stamps
@@ -42,9 +48,19 @@
 --   not_controller           finish_game by a host who does not control it
 --   not_in_progress          finish_game on a game that has not started
 --   game_in_progress         end_night while a game is in progress
+--   invalid_cash_jackpot     start_game given a cash jackpot amount that is not
+--                            a positive, finite number of pounds with at most
+--                            two decimal places
+--   cash_jackpot_not_allowed start_game given a cash jackpot amount for a game
+--                            that is not type 'jackpot', or for a re-open or a
+--                            takeover rather than a fresh start
+--   cash_jackpot_stage_count start_game given a cash jackpot amount for a
+--                            jackpot game whose stage_sequence is not exactly
+--                            one stage
 --
--- IDEMPOTENT: yes. Columns use "if not exists", functions "create or replace",
--- the trigger is dropped and recreated, and the backfill only fills nulls.
+-- IDEMPOTENT: yes. Columns use "if not exists", functions "create or replace"
+-- (start_game drops its earlier two-argument signature first), the trigger is
+-- dropped and recreated, and the backfill only fills nulls.
 --
 -- ROLLBACK: supabase/rollback/20261001000100_night_lifecycle.rollback.sql
 -- restores the functions only. The columns and their data stay.
@@ -145,9 +161,26 @@ $$;
 --                                        in startGame, as it is today.
 -- Then the session is running, active_game_id points here, and started_at is
 -- set if it is still null.
+--
+-- p_cash_jackpot_amount, in pounds, is for a fresh start of a 'jackpot' game
+-- only. The host types it at the start, and it becomes the prize text of the
+-- game's one stage (Full House), in the format formatCashJackpotPrize in
+-- src/lib/jackpot.ts produced: "£125 Cash Jackpot", "£1,250.50 Cash Jackpot".
+-- It is checked before anything is locked, and its applicability (a jackpot
+-- game, a fresh start, one stage) under the game_states lock, so a game started
+-- by another host in the meantime is refused rather than given a new prize.
+-- Null leaves the prizes alone, which is every start that is not a fresh
+-- jackpot start.
+--
+-- Adding the parameter makes a new function rather than replacing the old one,
+-- and two overloads would make a two-argument call ambiguous, so the earlier
+-- two-argument signature is dropped first.
+drop function if exists public.start_game(uuid, integer[]);
+
 create or replace function public.start_game(
   p_game_id uuid,
-  p_number_sequence integer[] default null
+  p_number_sequence integer[] default null,
+  p_cash_jackpot_amount numeric default null
 )
 returns public.game_states
 language plpgsql
@@ -160,12 +193,30 @@ declare
   v_session public.sessions;
   v_state public.game_states;
   v_sequence jsonb;
+  v_fresh boolean;
+  v_jackpot_stage text;
+  v_jackpot_pence numeric;
+  v_jackpot_text text;
 begin
   perform public.assert_is_host();
 
   select * into v_game from public.games where id = p_game_id;
   if v_game.id is null then
     raise exception 'game_not_found' using errcode = 'P0001';
+  end if;
+
+  -- The amount itself: positive, finite, whole pence. The text form catches
+  -- NaN and Infinity, which numeric accepts and which compare oddly.
+  if p_cash_jackpot_amount is not null then
+    if p_cash_jackpot_amount::text in ('NaN', 'Infinity', '-Infinity')
+       or p_cash_jackpot_amount <= 0
+       or p_cash_jackpot_amount <> round(p_cash_jackpot_amount, 2) then
+      raise exception 'invalid_cash_jackpot' using errcode = 'P0001';
+    end if;
+
+    if v_game.type is distinct from 'jackpot'::public.game_type then
+      raise exception 'cash_jackpot_not_allowed' using errcode = 'P0001';
+    end if;
   end if;
 
   -- Lock order: the session first, always.
@@ -207,6 +258,45 @@ begin
     from public.game_states
    where game_id = p_game_id
    for update;
+
+  v_fresh := v_state.id is null
+             or coalesce(v_state.status, 'not_started'::public.game_status) = 'not_started'::public.game_status;
+
+  -- The cash jackpot prize, under both locks. A re-open or a takeover keeps the
+  -- prize the night started with, so an amount there is refused, not ignored:
+  -- the host typed it for a game that another host has started meanwhile.
+  if p_cash_jackpot_amount is not null then
+    if not v_fresh then
+      raise exception 'cash_jackpot_not_allowed' using errcode = 'P0001';
+    end if;
+
+    -- One stage, and the amount belongs to it alone. Writing one amount over
+    -- several stages is what once destroyed an admin's prizes; the admin
+    -- screen forces a jackpot game to Full House only, so this only catches a
+    -- game edited into an impossible shape.
+    if jsonb_typeof(v_game.stage_sequence) is distinct from 'array'
+       or jsonb_array_length(v_game.stage_sequence) <> 1
+       or jsonb_typeof(v_game.stage_sequence -> 0) is distinct from 'string' then
+      raise exception 'cash_jackpot_stage_count' using errcode = 'P0001';
+    end if;
+    v_jackpot_stage := v_game.stage_sequence ->> 0;
+
+    -- formatCashJackpotPrize: pounds grouped in threes, pence only when there
+    -- are some, always two digits.
+    v_jackpot_pence := round(p_cash_jackpot_amount * 100);
+    v_jackpot_text := '£'
+      || regexp_replace(div(v_jackpot_pence, 100)::text, '(\d)(?=(\d{3})+$)', '\1,', 'g')
+      || case when mod(v_jackpot_pence, 100) = 0 then ''
+              else '.' || lpad(mod(v_jackpot_pence, 100)::text, 2, '0') end
+      || ' Cash Jackpot';
+
+    -- Merged onto the prizes as they stand under the row lock, so a stage key
+    -- this does not name is never lost.
+    update public.games
+       set prizes = case when jsonb_typeof(prizes) = 'object' then prizes else '{}'::jsonb end
+                    || jsonb_build_object(v_jackpot_stage, v_jackpot_text)
+     where id = p_game_id;
+  end if;
 
   if v_state.id is null then
     if v_sequence is null then
@@ -291,11 +381,11 @@ begin
 end;
 $function$;
 
-revoke all on function public.start_game(uuid, integer[]) from public, anon;
-grant execute on function public.start_game(uuid, integer[]) to authenticated, service_role;
+revoke all on function public.start_game(uuid, integer[], numeric) from public, anon;
+grant execute on function public.start_game(uuid, integer[], numeric) to authenticated, service_role;
 
-comment on function public.start_game(uuid, integer[]) is
-  'Starts, re-opens or takes over a game under the session lock then the game_states lock. Refuses night_ended and other_game_in_progress. Host or admin; call with the cookie client, it records auth.uid() as the controller.';
+comment on function public.start_game(uuid, integer[], numeric) is
+  'Starts, re-opens or takes over a game under the session lock then the game_states lock. Refuses night_ended and other_game_in_progress. On a fresh start of a jackpot game, p_cash_jackpot_amount (pounds, at most two decimals) becomes its one stage''s prize text, "£125 Cash Jackpot", in the same transaction; refuses invalid_cash_jackpot, cash_jackpot_not_allowed and cash_jackpot_stage_count. Host or admin; call with the cookie client, it records auth.uid() as the controller.';
 
 -- ---------------------------------------------------------------------------
 -- finish_game

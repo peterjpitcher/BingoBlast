@@ -301,3 +301,153 @@ begin
   select * into r from public.settle_snowball_pot('f3000000-0000-4000-8000-000000000001');
   perform t('settle :: a second settlement is already_settled', r.outcome = 'already_settled', r.outcome);
 end $$;
+
+-- ===========================================================================
+-- list_unsettled_snowball_games: the dashboard's Settle list (X6)
+-- ===========================================================================
+-- Settlement history is admin only, so this is also the proof that a host,
+-- through the authenticated role, sees a settled game as settled.
+insert into auth.users (id, email) values
+  ('f1000000-0000-4000-8000-000000000002', 'mo-pending@example.invalid');
+
+insert into public.snowball_pots (
+  id, name, base_max_calls, base_jackpot_amount, calls_increment, jackpot_increment,
+  current_max_calls, current_jackpot_amount
+) values
+  ('f6000000-0000-4000-8000-000000000003', 'Settle list pot', 30, 20, 2, 20, 40, 100.00);
+
+insert into public.sessions (id, name, status, start_date, is_test_session) values
+  ('f2000000-0000-4000-8000-000000000002', 'Settle list night', 'running', '2026-10-02', false),
+  ('f2000000-0000-4000-8000-000000000003', 'Settle list test night', 'running', '2026-10-02', true);
+
+insert into public.games (id, session_id, game_index, name, type, stage_sequence, snowball_pot_id)
+select g.id, g.session_id, g.idx, g.name, g.type::public.game_type, '["Full House"]'::jsonb, g.pot
+  from (values
+          ('f3000000-0000-4000-8000-000000000011'::uuid, 'f2000000-0000-4000-8000-000000000002'::uuid, 1, 'Unsettled', 'snowball', 'f6000000-0000-4000-8000-000000000003'::uuid),
+          ('f3000000-0000-4000-8000-000000000012'::uuid, 'f2000000-0000-4000-8000-000000000002'::uuid, 2, 'Settled', 'snowball', 'f6000000-0000-4000-8000-000000000003'::uuid),
+          ('f3000000-0000-4000-8000-000000000013'::uuid, 'f2000000-0000-4000-8000-000000000002'::uuid, 3, 'Before the cutover', 'snowball', 'f6000000-0000-4000-8000-000000000003'::uuid),
+          ('f3000000-0000-4000-8000-000000000014'::uuid, 'f2000000-0000-4000-8000-000000000002'::uuid, 4, 'After London midnight', 'snowball', 'f6000000-0000-4000-8000-000000000003'::uuid),
+          ('f3000000-0000-4000-8000-000000000015'::uuid, 'f2000000-0000-4000-8000-000000000002'::uuid, 5, 'Still running', 'snowball', 'f6000000-0000-4000-8000-000000000003'::uuid),
+          ('f3000000-0000-4000-8000-000000000016'::uuid, 'f2000000-0000-4000-8000-000000000002'::uuid, 6, 'Plain', 'standard', null::uuid),
+          ('f3000000-0000-4000-8000-000000000017'::uuid, 'f2000000-0000-4000-8000-000000000003'::uuid, 1, 'Test night snowball', 'snowball', 'f6000000-0000-4000-8000-000000000003'::uuid)
+       ) as g(id, session_id, idx, name, type, pot);
+
+-- 13 ended one second before midnight on 1 October, London time. 14 ended at
+-- 00:30 London time, which is still 30 September in UTC, so a UTC cutover
+-- would wrongly leave it out.
+insert into public.game_states (game_id, number_sequence, status, started_at, ended_at)
+select v.id, (select jsonb_agg(n order by n) from generate_series(1, 90) n), v.status::public.game_status,
+       v.ended_at - interval '1 hour', v.ended_at
+  from (values
+          ('f3000000-0000-4000-8000-000000000011'::uuid, 'completed', '2026-10-02 22:00:00+01'::timestamptz),
+          ('f3000000-0000-4000-8000-000000000012'::uuid, 'completed', '2026-10-02 21:00:00+01'::timestamptz),
+          ('f3000000-0000-4000-8000-000000000013'::uuid, 'completed', '2026-09-30 23:59:59+01'::timestamptz),
+          ('f3000000-0000-4000-8000-000000000014'::uuid, 'completed', '2026-10-01 00:30:00+01'::timestamptz),
+          ('f3000000-0000-4000-8000-000000000015'::uuid, 'in_progress', null::timestamptz),
+          ('f3000000-0000-4000-8000-000000000016'::uuid, 'completed', '2026-10-02 20:00:00+01'::timestamptz),
+          ('f3000000-0000-4000-8000-000000000017'::uuid, 'completed', '2026-10-02 22:00:00+01'::timestamptz)
+       ) as v(id, status, ended_at);
+
+do $$
+declare r record;
+begin
+  select * into r from public.settle_snowball_pot('f3000000-0000-4000-8000-000000000012');
+  if r.outcome is distinct from 'settled' then
+    raise exception 'fixture settlement did not settle: %', r.outcome;
+  end if;
+end $$;
+
+do $$
+declare v_ids uuid[]; v_all uuid[]; v_row record;
+begin
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', 'f1000000-0000-4000-8000-000000000001', true);
+  select array_agg(game_id order by ended_at desc) into v_ids
+    from public.list_unsettled_snowball_games('f2000000-0000-4000-8000-000000000002');
+  select array_agg(game_id) into v_all from public.list_unsettled_snowball_games(null);
+  select * into v_row
+    from public.list_unsettled_snowball_games('f2000000-0000-4000-8000-000000000002')
+   where game_id = 'f3000000-0000-4000-8000-000000000011';
+  reset role;
+
+  perform t('unsettled :: a host sees the unsettled finished snowball games of a night, newest first',
+            v_ids = array['f3000000-0000-4000-8000-000000000011',
+                          'f3000000-0000-4000-8000-000000000014']::uuid[],
+            coalesce(v_ids::text, 'none'));
+
+  perform t('unsettled :: a settled game is left out, though the host cannot read the settlement record',
+            not ('f3000000-0000-4000-8000-000000000012' = any (coalesce(v_ids, '{}'))),
+            coalesce(v_ids::text, 'none'));
+
+  perform t('unsettled :: a game that ended before midnight on 1 October, London time, is left out',
+            not ('f3000000-0000-4000-8000-000000000013' = any (coalesce(v_ids, '{}'))),
+            coalesce(v_ids::text, 'none'));
+
+  perform t('unsettled :: a game that ended after London midnight but before UTC midnight is listed',
+            'f3000000-0000-4000-8000-000000000014' = any (coalesce(v_ids, '{}')),
+            coalesce(v_ids::text, 'none'));
+
+  perform t('unsettled :: every night at once, still leaving out running, standard and test-night games',
+            v_all @> array['f3000000-0000-4000-8000-000000000011',
+                           'f3000000-0000-4000-8000-000000000014']::uuid[]
+              and not v_all && array['f3000000-0000-4000-8000-000000000012',
+                                     'f3000000-0000-4000-8000-000000000013',
+                                     'f3000000-0000-4000-8000-000000000015',
+                                     'f3000000-0000-4000-8000-000000000016',
+                                     'f3000000-0000-4000-8000-000000000017']::uuid[],
+            coalesce(v_all::text, 'none'));
+
+  perform t('unsettled :: each row carries the game and its night for the dashboard',
+            v_row.game_name = 'Unsettled' and v_row.game_index = 1
+              and v_row.ended_at = '2026-10-02 22:00:00+01'
+              and v_row.session_id = 'f2000000-0000-4000-8000-000000000002'
+              and v_row.session_name = 'Settle list night'
+              and v_row.session_start_date = '2026-10-02',
+            coalesce(row_to_json(v_row)::text, 'no row'));
+end $$;
+
+do $$
+declare r record; v_ids uuid[];
+begin
+  select * into r from public.settle_snowball_pot('f3000000-0000-4000-8000-000000000011');
+  select array_agg(game_id) into v_ids
+    from public.list_unsettled_snowball_games('f2000000-0000-4000-8000-000000000002');
+  perform t('unsettled :: once settled, a game drops off the list',
+            r.outcome = 'settled' and v_ids = array['f3000000-0000-4000-8000-000000000014']::uuid[],
+            r.outcome || ' / ' || coalesce(v_ids::text, 'none'));
+end $$;
+
+do $$
+declare v_ok boolean; v_detail text;
+begin
+  begin
+    set local role anon;
+    perform * from public.list_unsettled_snowball_games(null);
+    v_ok := false;
+    v_detail := 'anon listed the unsettled games';
+  exception when insufficient_privilege then
+    v_ok := true;
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('unsettled :: anon cannot execute list_unsettled_snowball_games', v_ok, v_detail);
+
+  begin
+    set local role authenticated;
+    perform set_config('request.jwt.claim.sub', 'f1000000-0000-4000-8000-000000000002', true);
+    perform * from public.list_unsettled_snowball_games(null);
+    v_ok := false;
+    v_detail := 'a pending account listed the unsettled games';
+  exception when others then
+    v_ok := sqlerrm like 'unauthorized%';
+    v_detail := sqlerrm;
+  end;
+  reset role;
+  perform t('unsettled :: a pending account is refused by list_unsettled_snowball_games', v_ok, v_detail);
+
+  perform t('unsettled :: authenticated and service_role can execute it, anon cannot',
+            has_function_privilege('authenticated', 'public.list_unsettled_snowball_games(uuid)', 'EXECUTE')
+              and has_function_privilege('service_role', 'public.list_unsettled_snowball_games(uuid)', 'EXECUTE')
+              and not has_function_privilege('anon', 'public.list_unsettled_snowball_games(uuid)', 'EXECUTE'),
+            'grant matrix');
+end $$;

@@ -7,7 +7,7 @@ import { WinStage, UserRole } from '@/types/database'
 import type { ClaimRpcResult, Database } from '@/types/database'
 import type { ActionFailureCode, ActionResult } from '@/types/actions'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
-import { formatCashJackpotPrize, isCashJackpotGame, parseCashJackpotAmount } from '@/lib/jackpot'
+import { isCashJackpotGame, parseCashJackpotAmount } from '@/lib/jackpot'
 import { HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
 import { logActionFailure, logActionLatency } from '@/lib/log-action-failure'
 import { reportError } from '@/lib/report-error'
@@ -19,6 +19,7 @@ import type {
   ClaimSnapshot,
   FinishedGameData,
   SetClaimDraftData,
+  UnsettledSnowballGame,
 } from './claim-action-types'
 
 type GameStateRow = Database['public']['Tables']['game_states']['Row']
@@ -79,6 +80,15 @@ const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
     error: 'A game is still in progress. End that game before ending the night.',
     conflict: true,
     code: 'game_in_progress',
+  },
+  // The cash jackpot amount start_game saves on a fresh start of a jackpot game.
+  invalid_cash_jackpot: { error: 'Please enter a valid cash jackpot amount, in pounds and pence.' },
+  cash_jackpot_not_allowed: {
+    error: 'A jackpot amount can only be set when a jackpot game first starts, and this one has changed. Refreshed now.',
+    conflict: true,
+  },
+  cash_jackpot_stage_count: {
+    error: 'This jackpot game is not set to Full House only, so the cash amount cannot be applied. Ask an admin to set it to Full House only.',
   },
 
   // Claims (begin_claim_check, set_claim_draft, check_claim, the bound undo,
@@ -446,6 +456,62 @@ export async function settleSnowballPotForGame(gameId: string): Promise<ActionRe
 }
 
 /**
+ * The finished snowball games whose pot never settled (X6), for the Settle
+ * buttons on the host dashboard, so a failed settlement survives a reload or
+ * leaving the game page.
+ *
+ * One read through list_unsettled_snowball_games. "Settled" there is exactly
+ * the test settle_snowball_pot uses for already_settled, and only games that
+ * ended on or after midnight on 1 October 2026, London time, are checked:
+ * before then a failed settlement was often put right by a manual pot
+ * correction, which leaves no per-game record, so settling an older game here
+ * could move the pot twice. The function reads the admin-only settlement
+ * history as its owner and returns games only, so a host gets the real list.
+ * The dashboard used to read that history directly, which only an admin could.
+ *
+ * No sessionId lists every night, which is what the dashboard asks for:
+ * finishing the last game completes the night, so the night whose final
+ * settlement failed is no longer among its ready and running sessions.
+ *
+ * Fails closed: a read that failed is a failure, never an empty list, so the
+ * dashboard can say it could not check. Cookie client, like every host call.
+ */
+export async function listUnsettledSnowballGames(
+    sessionId?: string
+): Promise<ActionResult<UnsettledSnowballGame[]>> {
+    const startedAtMs = Date.now();
+    if (sessionId !== undefined && !isUuid(sessionId)) {
+        return failure('listUnsettledSnowballGames', GENERIC_ACTION_ERROR, `invalid sessionId: ${sessionId}`);
+    }
+
+    try {
+        const supabase = await createClient();
+        const { data, error } = await supabase.rpc('list_unsettled_snowball_games', {
+            p_session_id: sessionId ?? null,
+        });
+
+        if (error) {
+            return rpcFailure('listUnsettledSnowballGames', error, startedAtMs);
+        }
+
+        logActionLatency('listUnsettledSnowballGames', startedAtMs);
+        return {
+            success: true,
+            data: (data ?? []).map((row) => ({
+                gameId: row.game_id,
+                gameName: row.game_name,
+                gameIndex: row.game_index,
+                sessionName: row.session_name,
+                sessionStartDate: row.session_start_date,
+                endedAt: row.ended_at,
+            })),
+        };
+    } catch (e) {
+        return failure('listUnsettledSnowballGames', GENERIC_ACTION_ERROR, e);
+    }
+}
+
+/**
  * Finishes a game through finish_game, then settles the snowball pot (X9, X6).
  *
  * finish_game locks the session and then the game state, completes the game,
@@ -511,9 +577,17 @@ async function finishGameAndSettle(
  * service-role write client that used to sit here, with its silent fallback to
  * the cookie client, is gone.
  *
+ * The cash jackpot amount goes to start_game too, which validates it and
+ * writes the Full House prize text ("£125 Cash Jackpot") in the same
+ * transaction. games UPDATE is admin only in RLS, so a host could not save it
+ * from here once the service-role client went; and in one transaction a start
+ * can no longer save a prize for a game that then fails to start, or start a
+ * game whose prize did not save.
+ *
  * What stays in TypeScript: the shuffle (with crypto; the database checks it is
- * a permutation of 1 to 90), the session pairing check, the cash-jackpot prize,
- * and the heartbeat check before a takeover.
+ * a permutation of 1 to 90), the session pairing check, deciding whether to ask
+ * for a cash jackpot amount and reading the typed text as a number, and the
+ * heartbeat check before a takeover.
  */
 export async function startGame(
   sessionId: string,
@@ -528,9 +602,9 @@ export async function startGame(
 
       const { data: gameDetailsForStart, error: gameDetailsError } = await supabase
         .from('games')
-        .select('session_id, name, type, stage_sequence, prizes')
+        .select('session_id, name, type')
         .eq('id', gameId)
-        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'name' | 'type' | 'stage_sequence' | 'prizes'>>();
+        .single<Pick<Database['public']['Tables']['games']['Row'], 'session_id' | 'name' | 'type'>>();
 
       if (gameDetailsError || !gameDetailsForStart) {
         return failure('startGame', COULD_NOT_READ_GAME_ERROR, gameDetailsError ?? 'game not found');
@@ -570,57 +644,17 @@ export async function startGame(
         return { success: true, data: { requiresCashJackpotAmount: true, gameName: gameDetailsForStart.name } };
       }
 
+      // Only a fresh start of a jackpot game sends an amount. start_game
+      // refuses one anywhere else (cash_jackpot_not_allowed), so an amount
+      // typed for a game another host has started meanwhile is refused rather
+      // than written over the prize the night started with. It also checks the
+      // amount is positive with at most two decimals (invalid_cash_jackpot)
+      // and that the game has exactly one stage (cash_jackpot_stage_count).
+      let cashJackpotAmount: number | null = null;
       if (requiresCashJackpotAmount && providedCashJackpotAmount) {
-        const parsedAmount = parseCashJackpotAmount(providedCashJackpotAmount);
-        if (parsedAmount === null) {
-          return failure('startGame', "Please enter a valid cash jackpot amount.");
-        }
-
-        const jackpotStages = (gameDetailsForStart.stage_sequence || []) as WinStage[];
-
-        // A cash jackpot game plays for one stage, and the amount belongs to
-        // that stage only. Refusing a multi-stage jackpot game is deliberate:
-        // writing one amount across several stages is what destroyed the
-        // admin's configuration before, and silently writing it to only one of
-        // them would leave the host guessing which. This is unreachable through
-        // the admin UI, which forces a jackpot game to Full House alone, so it
-        // only catches a game edited into an impossible shape.
-        if (jackpotStages.length !== 1) {
-          return failure(
-            'startGame',
-            'This jackpot game has more than one stage, so the cash amount cannot be applied. Ask an admin to set it to Full House only.',
-            `jackpot game has ${jackpotStages.length} stages`
-          );
-        }
-
-        const jackpotPrizeText = formatCashJackpotPrize(parsedAmount);
-        const updatedPrizes = { ...(gameDetailsForStart.prizes || {}) };
-        updatedPrizes[jackpotStages[0]] = jackpotPrizeText;
-
-        const gamePrizeUpdate: Database['public']['Tables']['games']['Update'] = {
-          prizes: updatedPrizes,
-        };
-        // .select() is what makes this honest. games UPDATE is admin-only in
-        // RLS, and there is no service-role client here any more, so a
-        // host-role account's write matches zero rows and PostgREST answers
-        // with no error and no rows. Without this check the host would be told
-        // the jackpot amount saved while the TV kept showing the old prize. It
-        // fails closed, before the game starts, and says who can do it.
-        const { data: prizeRows, error: gamePrizeError } = await supabase
-          .from('games')
-          .update(gamePrizeUpdate)
-          .eq('id', gameId)
-          .select('id');
-
-        if (gamePrizeError) {
-          return failure('startGame', 'Could not save the jackpot amount. Please try again.', gamePrizeError);
-        }
-        if (!prizeRows || prizeRows.length === 0) {
-          return failure(
-            'startGame',
-            'Could not save the jackpot amount. Ask an admin to start this game.',
-            'games prize update matched no rows: RLS filtered it, or the game id is stale'
-          );
+        cashJackpotAmount = parseCashJackpotAmount(providedCashJackpotAmount);
+        if (cashJackpotAmount === null) {
+          return failure('startGame', 'Please enter a valid cash jackpot amount, in pounds and pence.');
         }
       }
 
@@ -646,6 +680,7 @@ export async function startGame(
       const { error: startError } = await supabase.rpc('start_game', {
         p_game_id: gameId,
         p_number_sequence: isFirstStartAttempt ? generateShuffledNumberSequence() : null,
+        p_cash_jackpot_amount: cashJackpotAmount,
       });
 
       if (startError) {

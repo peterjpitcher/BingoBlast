@@ -10,7 +10,8 @@
 -- WHAT IT DOES NOT DO
 --   It reverses no data. sessions.started_at, completed_at and state_version
 --   stay, with whatever values they hold; nothing in the pre-M1 app reads them.
---   A night that was ended, reset or re-opened stays as it is.
+--   A night that was ended, reset or re-opened stays as it is, and a cash
+--   jackpot prize start_game wrote to games.prizes stays as written.
 --
 -- ORDER
 --   Roll back M2b, M3 and M2a first. The host app must be on the pre-M1 build,
@@ -21,6 +22,11 @@
 -- all four back, and asserts every function definition, ACL and trigger is
 -- exactly what it was before M1.
 
+-- start_game takes the cash jackpot amount as its third argument. The
+-- two-argument form is the signature an earlier draft of M1 created; dropping
+-- it as well costs nothing and leaves no overload behind in a local database
+-- that applied that draft.
+drop function if exists public.start_game(uuid, integer[], numeric);
 drop function if exists public.start_game(uuid, integer[]);
 drop function if exists public.finish_game(uuid);
 drop function if exists public.end_night(uuid);

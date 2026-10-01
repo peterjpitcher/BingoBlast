@@ -1,6 +1,6 @@
 ---
 generated: true
-last_updated: 2026-04-30T00:00:00Z
+last_updated: 2026-10-01T00:00:00Z
 source: session-setup
 project: anchor-bingo
 ---
@@ -14,18 +14,18 @@ project: anchor-bingo
 
 | Document | Status | Last Updated | Description |
 |----------|--------|--------------|-------------|
-| [[overview]] | generated | 2026-04-30 | Stack profile, file counts, integrations, auth model summary |
-| [[routes]] | generated | 2026-04-30 | URL ↔ file map for pages, API routes, layouts; auth flow |
-| [[server-actions]] | generated | 2026-04-30 | All `'use server'` mutations grouped by file with tables and revalidation |
-| [[data-model]] | generated | 2026-04-30 | Tables referenced in code + environment variables (full schema in session-context) |
-| [[relationships]] | generated | 2026-04-30 | Tables → actions, actions → callers, integrations → files, auth flow diagram |
+| [[overview]] | generated | 2026-10-01 | Stack profile, file counts, integrations, auth model summary |
+| [[routes]] | generated | 2026-10-01 | URL ↔ file map for pages, API routes, layouts; auth flow |
+| [[server-actions]] | generated | 2026-10-01 | All `'use server'` mutations grouped by file with tables and revalidation |
+| [[data-model]] | generated | 2026-10-01 | Tables referenced in code + environment variables (full schema in session-context) |
+| [[relationships]] | generated | 2026-10-01 | Tables → actions, actions → callers, integrations → files, auth flow diagram |
 
 ## Project Snapshot
 
 - **Project:** `anchor-bingo` (BingoBlast / OJ-CashBingo)
 - **Stack:** Next.js 16.3.7 + React 19.2.3 + TypeScript + Supabase + Tailwind v4
 - **Test runner:** Node.js native (`node --test --import tsx`)
-- **Code:** 12 pages, 1 layout, 1 API route, 5 server-action files (33 actions), 8 tables + 4 atomic RPCs, 13 migrations
+- **Code:** 14 pages, 1 layout, 4 API routes, 5 server-action files (40 actions), 9 tables, 30 database functions (22 callable by staff), 49 migrations
 
 ## Regeneration
 

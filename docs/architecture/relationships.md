@@ -1,6 +1,6 @@
 ---
 generated: true
-last_updated: 2026-04-30T00:00:00Z
+last_updated: 2026-10-01T00:00:00Z
 source: session-setup
 project: anchor-bingo
 ---
@@ -20,25 +20,29 @@ Cross-references between tables, actions, callers, and integrations.
 | `/admin/snowball` | `snowball_pots`, `profiles` |
 | `/admin/history` | `winners`, `sessions`, `games`, `profiles` |
 | `/admin/backup` | `games`, `game_states`, `sessions`, `profiles` |
-| `/host` | `sessions`, `games`, `game_states`, `profiles` |
+| `/host` | `sessions`, `games`, `game_states`, `profiles`; the Settle list through `list_unsettled_snowball_games` (which reads `snowball_pot_history` as its owner) |
 | `/host/[sessionId]/[gameId]` | `sessions`, `games`, `game_states`, `winners`, `snowball_pots`, `profiles` |
 | `/display/[sessionId]` | `sessions`, `games`, `game_states_public` |
 | `/player/[sessionId]` | `sessions`, `games`, `game_states_public` |
+| `/play` | `sessions` (one lookup, then a redirect to `/player/[sessionId]`) |
 | `/login` | `auth.users` (via Supabase Auth) |
 | `/api/setup` | `auth.users`, `profiles` |
+| `/api/time` | none (the server clock) |
+| `/api/build` | none (the deployment id) |
+| `/api/screen/events` | none in this database; the management app's events feed through `src/lib/events-feed/projection.ts` |
 
 ## Tables → Actions That Touch Them
 
 | Table | Actions |
 |-------|---------|
-| `sessions` | `createSession`, `updateSession`, `deleteSession` (RPC), `duplicateSession`, `updateSessionStatus`, `resetSession` (RPC), `startGame`, `endGame`, `moveToNextGameOnBreak`, `moveToNextGameAfterWin` |
-| `games` | `createGame`, `updateGame` (RPC), `duplicateGame`, `deleteGame` (RPC), `duplicateSession`, `resetSession` (RPC, cascade) |
-| `game_states` | `startGame`, `takeControl`, `sendHeartbeat`, `getCurrentGameState`, `callNextNumber`, `toggleBreak`, `pauseForValidation`, `resumeGame`, `endGame`, `moveToNextGame*`, `validateClaim` (read-only), `announceWin`, `advanceToNextStage`, `skipStage`, `voidLastNumber`, `recordWinner` |
+| `sessions` | `createSession`, `updateSession`, `deleteSession` (RPC), `duplicateSession`, `updateSessionStatus`, `resetSession` (RPC), `startGame` (RPC `start_game`), `endNight` (RPC `end_night`), and every finishing path through RPC `finish_game`: `endGame`, `advanceToNextStage`, `skipStage`, `moveToNextGameOnBreak`, `moveToNextGameAfterWin` |
+| `games` | `createGame`, `updateGame` (RPC), `duplicateGame`, `deleteGame` (RPC), `duplicateSession`, `resetSession` (RPC, cascade), `startGame` (the cash jackpot prize, inside RPC `start_game`; the only `games` write a host can make) |
+| `game_states` | `startGame`, `takeControl`, `sendHeartbeat`, `callNextNumber`, `toggleBreak`, `beginClaimCheck`, `setClaimDraft`, `checkClaim`, `undoLastNumberForClaim`, `resumeGame`, `endGame`, `moveToNextGame*`, `advanceToNextStage`, `skipStage`, `voidLastNumber`, `recordWinner` |
 | `game_states_public` | (none — populated by `sync_game_states_public()` trigger) |
-| `winners` | `recordWinner` (service-role insert), `voidWinner`, `toggleWinnerPrizeGiven`, `resetSession` (RPC, cascade) |
+| `winners` | `recordWinner` (RPC `record_winner_atomic`, keyed on the claim attempt), `voidWinner`, `voidWinnerFromHost`, `toggleWinnerPrizeGiven`, `resetSession` (RPC, cascade) |
 | `profiles` | All admin/host action auth checks (role lookup), `utils/supabase/middleware.ts` (session refresh), `/api/setup` (admin promotion) |
-| `snowball_pots` | `createSnowballPot`, `updateSnowballPot`, `deleteSnowballPot`, `resetSnowballPot`, `recordWinner` |
-| `snowball_pot_history` | `updateSnowballPot`, `resetSnowballPot`, `recordWinner`, `deleteSnowballPot` (cascade) |
+| `snowball_pots` | `createSnowballPot`, `updateSnowballPot`, `deleteSnowballPot`, `resetSnowballPot`, `recordWinner` (reads the pot under its lock), `settleSnowballPotForGame` and every finishing path (RPC `settle_snowball_pot`) |
+| `snowball_pot_history` | `updateSnowballPot`, `resetSnowballPot`, `deleteSnowballPot` (cascade), `settleSnowballPotForGame` and every finishing path (RPC `settle_snowball_pot`), `listUnsettledSnowballGames` (read only, RPC `list_unsettled_snowball_games`) |
 
 ## Actions → Likely Callers
 
@@ -50,15 +54,15 @@ Action files live alongside the page that consumes them, so the immediate caller
 | `src/app/admin/actions.ts` | `src/app/admin/page.tsx` (sessions list) |
 | `src/app/admin/sessions/[id]/actions.ts` | `src/app/admin/sessions/[id]/page.tsx` (session detail / game CRUD) |
 | `src/app/admin/snowball/actions.ts` | `src/app/admin/snowball/page.tsx` |
-| `src/app/host/actions.ts` | `src/app/host/[sessionId]/[gameId]/page.tsx` and its host-control client components (called via heartbeat polling per CLAUDE.md notes) |
+| `src/app/host/actions.ts` | `src/app/host/[sessionId]/[gameId]/game-control.tsx` (the live game), `src/app/host/dashboard.tsx` (start, end the night, settle) and `src/app/host/page.tsx` (`listUnsettledSnowballGames` for the Settle list) |
 
 ## Integrations → Files
 
 | Integration | Files |
 |-------------|-------|
 | `@supabase/ssr` (cookie-based SSR) | `src/utils/supabase/client.ts`, `src/utils/supabase/server.ts`, `src/utils/supabase/middleware.ts` |
-| `@supabase/supabase-js` (service-role admin client + types) | `src/app/api/setup/route.ts`, `src/app/admin/actions.ts`, `src/app/admin/sessions/[id]/actions.ts`, `src/app/admin/snowball/actions.ts`, `src/app/host/actions.ts` |
-| `qrcode.react` | `src/app/display/[sessionId]/display-ui.tsx` — QR points at the public `/player/[sessionId]` follower view, NOT a join-a-card flow |
+| `@supabase/supabase-js` (service-role admin client + types) | `src/app/api/setup/route.ts` (the only service-role client), plus types in `src/app/admin/actions.ts`, `src/app/admin/sessions/[id]/actions.ts`, `src/app/admin/snowball/actions.ts`, `src/app/host/actions.ts`. The host actions use the cookie client only |
+| `qrcode.react` | `src/app/display/[sessionId]/display-ui.tsx`: the QR points at the public follow-along link (`/play`, which redirects to `/player/[sessionId]`), NOT a join-a-card flow |
 | `nosleep.js` | `src/hooks/wake-lock.ts` (consumed by host/display/player game screens) |
 | `zod` | Form validation across server actions (declared in `package.json`) |
 
@@ -71,9 +75,11 @@ These cross-cutting helpers underpin the live-event reliability work and are imp
 | `src/lib/game-state-version.ts` (`isFreshGameState`) | Host control client, `display-ui.tsx`, `player-ui.tsx` — drops out-of-order Realtime/polling payloads using `state_version` |
 | `src/lib/connection-health.ts` | `src/hooks/use-connection-health.ts` — pure reducer for the connection-health state machine |
 | `src/lib/prize-validation.ts` (`validateGamePrizes`) | `src/app/admin/sessions/[id]/actions.ts` (`createGame`, `updateGame`) |
-| `src/lib/win-stages.ts` (`getRequiredSelectionCountForStage`, etc.) | `src/app/host/actions.ts` (`validateClaim`, `recordWinner`) |
+| `src/lib/win-stages.ts` (`getRequiredSelectionCountForStage`, etc.) | `game-control.tsx`, `display-ui.tsx`, `player-ui.tsx`. The claim count itself is decided server-side by `required_claim_count` in `check_claim` |
 | `src/lib/log-error.ts` | Server actions and route handlers — shared error logger |
-| `src/lib/jackpot.ts`, `src/lib/snowball.ts` | Snowball / cash-jackpot eligibility computations in `host/actions.ts` |
+| `src/lib/jackpot.ts`, `src/lib/snowball.ts` | Whether to ask for a cash jackpot amount and reading the typed amount (`host/actions.ts`); `formatCashJackpotPrize` is the format `start_game` writes; snowball window helpers on the host, TV and phone screens |
+| `src/lib/claim-request-id.ts` (`newClaimRequestId`) | `game-control.tsx`: mints the claim attempt, the call key and the manual snowball award key |
+| `src/lib/claim-draft-queue.ts` | `game-control.tsx`: one `setClaimDraft` at a time, newest list wins |
 | `src/hooks/use-connection-health.ts` | `display-ui.tsx`, `player-ui.tsx` — drives the "Reconnecting…" banner |
 | `src/hooks/wake-lock.ts` (`nosleep.js`) | Host control client, `display-ui.tsx`, `player-ui.tsx` |
 | `src/components/connection-banner.tsx` | `display-ui.tsx`, `player-ui.tsx` — shared "Reconnecting…" banner with auto-refresh |
@@ -86,7 +92,7 @@ Browser request
    ▼
 src/proxy.ts (matcher: '/admin/:path*' | '/host/:path*' | '/login')
    │   → updateSession() refreshes Supabase session, redirects auth misses.
-   │   Public routes (/, /display/*, /player/*) BYPASS this entirely.
+   │   Public routes (/, /display/*, /player/*, /play, /api/*) BYPASS this entirely.
    │
    ▼
 src/app/layout.tsx  (Geist fonts, LayoutContent — no auth)

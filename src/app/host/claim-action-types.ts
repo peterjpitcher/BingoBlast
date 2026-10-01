@@ -1,4 +1,5 @@
-// Payload shapes for the host claim and lifecycle actions in ./actions.ts.
+// Payload shapes for the host claim, lifecycle and settlement actions in
+// ./actions.ts.
 //
 // Kept out of the 'use server' module, which may only export async functions,
 // so the host screen can import the types without importing server code.
@@ -55,4 +56,17 @@ export interface FinishedGameData {
   /** The session is completed after this call. */
   sessionCompleted: boolean;
   snowballPotDidNotSettle?: true;
+}
+
+/**
+ * A finished snowball game whose pot never settled (X6), as the host dashboard
+ * lists it. From listUnsettledSnowballGames.
+ */
+export interface UnsettledSnowballGame {
+  gameId: string;
+  gameName: string;
+  gameIndex: number;
+  sessionName: string;
+  sessionStartDate: string | null;
+  endedAt: string | null;
 }

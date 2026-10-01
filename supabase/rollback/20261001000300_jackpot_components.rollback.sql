@@ -5,8 +5,9 @@
 --   Restores recompute_prize_shares, record_winner_atomic, settle_snowball_pot
 --   and set_winner_prize_given, verbatim as pg_get_functiondef printed them
 --   from a replay of every migration up to 20260929103018, with their ACLs and
---   comments, and restores the winners_prize_share_sync trigger to its previous
---   column list. Then it re-derives every stage's amounts and shares under the
+--   comments, restores the winners_prize_share_sync trigger to its previous
+--   column list, and drops list_unsettled_snowball_games, which M3 added and
+--   the pre-M3 app never calls. Then it re-derives every stage's amounts and shares under the
 --   restored rule, because those columns are maintained by the function being
 --   restored and the pre-M3 app totals prize_share_pence alone: without it a
 --   jackpot-only row would keep the M3 ordinary pool of 0 and drop out of the
@@ -110,6 +111,9 @@ $function$
 revoke all on function public.recompute_prize_shares(uuid, public.win_stage) from public;
 revoke all on function public.recompute_prize_shares(uuid, public.win_stage) from anon;
 grant execute on function public.recompute_prize_shares(uuid, public.win_stage) to authenticated, service_role;
+
+-- New in M3 and read only; nothing before M3 calls it.
+drop function if exists public.list_unsettled_snowball_games(uuid);
 
 drop trigger if exists winners_prize_share_sync on public.winners;
 create trigger winners_prize_share_sync

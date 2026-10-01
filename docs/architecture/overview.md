@@ -1,6 +1,6 @@
 ---
 generated: true
-last_updated: 2026-04-30T00:00:00Z
+last_updated: 2026-10-01T00:00:00Z
 source: session-setup
 project: anchor-bingo
 ---
@@ -23,8 +23,8 @@ project: anchor-bingo
 | Metric | Count |
 |--------|------:|
 | Total `.ts` / `.tsx` files in `src/` | ~50 (incl. shared `lib/` helpers added in the live-event reliability work) |
-| App Router pages (`page.tsx`) | 12 |
-| API routes (`route.ts`) | 1 |
+| App Router pages (`page.tsx`) | 14 |
+| API routes (`route.ts`) | 4 |
 | Layouts (`layout.tsx`) | 1 |
 | Server action files (`'use server'`) | 5 |
 | Components (in `src/components/`) | 9 |
@@ -35,10 +35,11 @@ project: anchor-bingo
 src/
 ├── app/             # App Router (pages, route handlers, server actions)
 │   ├── admin/       # Staff-only: sessions, snowball pots, history, backup
-│   ├── api/         # Setup endpoint (SETUP_SECRET-gated)
+│   ├── api/         # setup (SETUP_SECRET-gated), time, build, screen/events
 │   ├── display/     # Public big-screen pub display view
-│   ├── host/        # Host control: start games, call numbers, validate wins
+│   ├── host/        # Host control: start games, call numbers, check claims, settle pots
 │   ├── login/       # Staff login (invite-only)
+│   ├── play/        # Public follow-along link behind the TV QR code
 │   ├── player/      # Public mobile follower view (read-only mirror)
 │   └── page.tsx     # Public landing
 ├── components/      # Shared UI (Header, LayoutContent, ConnectionBanner, ui/)
@@ -56,7 +57,7 @@ src/
 | Library | Purpose |
 |---------|---------|
 | `@supabase/ssr` + `@supabase/supabase-js` | Auth (cookie-based SSR), DB queries, Realtime, service-role admin client |
-| `qrcode.react` (`QRCodeSVG`) | Display QR pointing at the public follower view (`/player/[sessionId]`) — NOT a join-a-card flow |
+| `qrcode.react` (`QRCodeSVG`) | Display QR pointing at the public follow-along link (`/play`, which redirects to `/player/[sessionId]`), NOT a join-a-card flow |
 | `nosleep.js` | Prevent screen dimming during live games (host & display) |
 | `zod` | Input validation (server actions / forms) |
 | `tailwind-merge`, `clsx` | Class composition utilities |
@@ -67,8 +68,8 @@ No `react-player`, no Stripe, no Twilio, no OpenAI/Anthropic, no Resend, no Upst
 
 - **Next.js middleware IS wired** via `src/proxy.ts`, which exports `proxy()` (forwarding to `updateSession()` in `src/utils/supabase/middleware.ts`) and a tightly scoped `config.matcher = ['/admin/:path*', '/host/:path*', '/login']`. Public routes (`/display/*`, `/player/*`, `/`) bypass the middleware entirely so the TV and follower screens stay fast.
 - Defence in depth: every protected page also calls `supabase.auth.getUser()` server-side and `redirect('/login')` if unauthenticated.
-- `host/*` and `admin/*` are protected. `player/*`, `display/*`, `login`, and `/` are public.
-- Server actions in `host/actions.ts` re-verify auth and use a `requireController` pattern; some flows use the service-role key (`SUPABASE_SERVICE_ROLE_KEY`) for privileged DB writes (e.g. winner records).
+- `host/*` and `admin/*` are protected. `player/*`, `display/*`, `/play`, `login`, `/` and the read-only `/api/time`, `/api/build` and `/api/screen/events` are public.
+- Server actions in `host/actions.ts` use the cookie client only and go through security-definer RPCs that check the role (`assert_is_host`) and the controller under their own row locks; direct `game_states` writes use a `requireController` check. No host action uses the service-role key any more: the cash jackpot prize `startGame` used to write with it is written inside `start_game`. `SUPABASE_SERVICE_ROLE_KEY` is used by `/api/setup` only.
 - `/api/setup` is gated by `SETUP_SECRET` (compare-on-server bootstrap endpoint).
 - Public sign-up is disabled at the UI level. The `signup()` server action returns an "invite-only" error for safety in case any caller invokes it.
 
@@ -92,6 +93,15 @@ Recent migration `20260430120300_atomic_admin_mutations.sql` introduces four sec
 Each performs precheck-and-mutate atomically under a row lock so a host cannot start a game (or insert a winner) between the application-layer check and the destructive write.
 
 `20260729231945_atomic_host_mutations.sql` extends the same pattern to the live host path with `assert_is_host`, `call_next_number`, `void_last_number` and `record_winner_atomic`. `20260730120000_atomic_snowball_settlement.sql` adds `settle_snowball_pot` on the same pattern, which also keeps `snowball_pots` and `snowball_pot_history` admin-only in RLS while still letting a host settle a pot. See [[server-actions]] for the action contract and [[data-model]] for the locking behaviour.
+
+The four migrations of 1 October 2026 move the rest of the live night onto the same pattern, with one lock order (session row, then `game_states` row):
+
+- `20261001000100_night_lifecycle.sql`: `start_game`, `finish_game`, `end_night`, plus `sessions.started_at`, `completed_at` and `state_version`. `start_game` also takes the cash jackpot amount for a fresh start of a jackpot game and writes its prize text in the same transaction, because `games` UPDATE is admin only in RLS.
+- `20261001000200_claim_attempts.sql`: the claim attempt (`begin_claim_check`, `set_claim_draft`, `check_claim`, `required_claim_count`), the public `claim_numbers` and `claim_result`, and `void_last_number` bound to the attempt while paused. The attempt replaces the claim key the Record Winner modal used to mint.
+- `20261001000300_jackpot_components.sql`: the snowball jackpot as its own money component on `winners`, `settle_snowball_pot` refusing an unfinished game, and `list_unsettled_snowball_games`, the read-only Settle list on the host dashboard.
+- `20261001000400_claim_enforcement.sql`: `record_winner_atomic` records a new winner only from a checked, valid claim attempt.
+
+They replace the host actions `validateClaim`, `pauseForValidation` and `announceWin`, and the internal `maybeCompleteSession`. See [[server-actions]].
 
 ## Cross-references
 

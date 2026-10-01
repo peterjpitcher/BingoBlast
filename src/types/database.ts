@@ -44,6 +44,22 @@ export interface SnowballSettlementRow {
   new_jackpot_amount: number | null
 }
 
+/**
+ * One row from list_unsettled_snowball_games: a finished snowball game, outside
+ * a test night, that ended on or after 2026-10-01 00:00 Europe/London and has
+ * no settlement record. Defined in
+ * supabase/migrations/20261001000300_jackpot_components.sql.
+ */
+export interface UnsettledSnowballGameRow {
+  game_id: string
+  game_name: string
+  game_index: number
+  ended_at: string
+  session_id: string
+  session_name: string
+  session_start_date: string | null
+}
+
 /** A claim verdict, as stored in game_states.claim_result. */
 export type ClaimResult = 'valid' | 'invalid' | 'late'
 
@@ -747,7 +763,9 @@ export interface Database {
       /**
        * Starts, re-opens or takes over a game, under the session lock then the
        * game_states lock. Raises night_ended, other_game_in_progress,
-       * invalid_sequence, game_not_found, session_not_found. Cookie client only.
+       * invalid_sequence, game_not_found, session_not_found, and for the cash
+       * jackpot amount invalid_cash_jackpot, cash_jackpot_not_allowed and
+       * cash_jackpot_stage_count. Cookie client only.
        * See 20261001000100_night_lifecycle.sql.
        */
       start_game: {
@@ -755,6 +773,13 @@ export interface Database {
           p_game_id: string
           /** A permutation of 1 to 90, shuffled with crypto. Needed for a fresh start. */
           p_number_sequence?: number[] | null
+          /**
+           * The cash jackpot in pounds, at most two decimals, for a fresh start
+           * of a 'jackpot' game only; written as its one stage's prize text
+           * ("£125 Cash Jackpot") in the same transaction. Null on every other
+           * start, which leaves the prizes alone.
+           */
+          p_cash_jackpot_amount?: number | null
         }
         Returns: Database['public']['Tables']['game_states']['Row']
       }
@@ -854,6 +879,16 @@ export interface Database {
       settle_snowball_pot: {
         Args: { p_game_id: string }
         Returns: SnowballSettlementRow[]
+      }
+      /**
+       * The finished snowball games whose pot never settled, newest first: the
+       * host dashboard's Settle list. Reads the admin-only settlement history
+       * for a host and returns games only. One night, or every night when
+       * p_session_id is null. Read only; raises only unauthorized.
+       */
+      list_unsettled_snowball_games: {
+        Args: { p_session_id?: string | null }
+        Returns: UnsettledSnowballGameRow[]
       }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }

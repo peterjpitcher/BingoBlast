@@ -166,10 +166,11 @@ begin
                                    where client_request_id = 'e7400000-0000-4000-8000-000000000022'),
             coalesce(v, 'recorded'));
 end $$;
-select t('staged :: after the full rollback, the lifecycle and claim functions are gone',
+select t('staged :: after the full rollback, the lifecycle, claim and settle-list functions are gone',
          to_regproc('public.start_game') is null and to_regproc('public.finish_game') is null
            and to_regproc('public.end_night') is null and to_regproc('public.begin_claim_check') is null
-           and to_regproc('public.check_claim') is null and to_regproc('public.set_claim_draft') is null,
+           and to_regproc('public.check_claim') is null and to_regproc('public.set_claim_draft') is null
+           and to_regproc('public.list_unsettled_snowball_games') is null,
          'a function survived the rollback');
 select t('staged :: after the full rollback, a jackpot-only row counts its jackpot as the prize again, as pre-M3',
          (select prize_amount_pence = 8000 and prize_share_pence = 8000 from public.winners

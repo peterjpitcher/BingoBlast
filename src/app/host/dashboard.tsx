@@ -5,6 +5,7 @@ import { formatDateInLondon } from '@/lib/dates';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { endNight, settleSnowballPotForGame, startGame } from './actions';
+import type { UnsettledSnowballGame } from './claim-action-types';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -17,19 +18,12 @@ type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   })[];
 };
 
-/** A finished snowball game whose pot never settled (X6). Built by ./page.tsx. */
-export interface UnsettledSnowballGame {
-  gameId: string;
-  gameName: string;
-  gameIndex: number;
-  sessionName: string;
-  sessionStartDate: string | null;
-  endedAt: string | null;
-}
-
 interface HostDashboardProps {
   sessions: SessionWithGames[];
-  /** Admin only; empty for a host, who cannot read the settlement records. */
+  /**
+   * Finished snowball games whose pot never settled (X6), across every night,
+   * from listUnsettledSnowballGames. Hosts and admins alike.
+   */
   unsettledSnowballGames?: UnsettledSnowballGame[];
   /** The settlement check itself failed to read, so the list above is not an answer. */
   settlementCheckFailed?: boolean;

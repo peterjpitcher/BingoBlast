@@ -440,6 +440,131 @@ begin
 end $$;
 
 -- ===========================================================================
+-- The cash jackpot amount. A host starting a jackpot game saves its prize in
+-- start_game, because games UPDATE is admin only and the host has no other
+-- way to write it. Every refusal must leave the game exactly as it was.
+-- ===========================================================================
+insert into public.sessions (id, name, status) values
+  ('c2000000-0000-4000-8000-000000000005', 'Cash jackpot night', 'ready');
+
+insert into public.games (id, session_id, game_index, name, type, stage_sequence, prizes) values
+  ('c3000000-0000-4000-8000-000000000051', 'c2000000-0000-4000-8000-000000000005', 1, 'Jackpot',
+   'jackpot', '["Full House"]', '{"Full House": "TBC"}'),
+  ('c3000000-0000-4000-8000-000000000052', 'c2000000-0000-4000-8000-000000000005', 2, 'Jackpot bad amounts',
+   'jackpot', '["Full House"]', '{"Full House": "£50 Cash"}'),
+  ('c3000000-0000-4000-8000-000000000053', 'c2000000-0000-4000-8000-000000000005', 3, 'Standard',
+   'standard', '["Line", "Two Lines", "Full House"]', '{"Line": "£5", "Two Lines": "£10", "Full House": "£20"}'),
+  ('c3000000-0000-4000-8000-000000000054', 'c2000000-0000-4000-8000-000000000005', 4, 'Jackpot two stages',
+   'jackpot', '["Line", "Full House"]', '{"Line": "£5", "Full House": "£20"}'),
+  ('c3000000-0000-4000-8000-000000000055', 'c2000000-0000-4000-8000-000000000005', 5, 'Jackpot whole pounds',
+   'jackpot', '["Full House"]', '{}');
+
+create temp table cj_before as
+  select id, prizes from public.games where session_id = 'c2000000-0000-4000-8000-000000000005';
+
+-- True when the game's prizes, state and session are untouched by a refusal.
+create or replace function pg_temp.cj_untouched(p_game_id uuid) returns boolean
+language sql as $$
+  select (select g.prizes from public.games g where g.id = p_game_id)
+           is not distinct from (select b.prizes from cj_before b where b.id = p_game_id)
+     and not exists (select 1 from public.game_states where game_id = p_game_id)
+     and (select status = 'ready' from public.sessions where id = 'c2000000-0000-4000-8000-000000000005');
+$$;
+
+do $$
+declare v_msg text; v_amount text;
+begin
+  foreach v_amount in array array['0', '-5', '12.345', 'NaN', 'Infinity'] loop
+    v_msg := pg_temp.err(format(
+      $q$select public.start_game('c3000000-0000-4000-8000-000000000052', pg_temp.seq90(), %L::numeric)$q$,
+      v_amount));
+    perform t('cash jackpot :: an amount of ' || v_amount || ' is refused and nothing is written',
+              v_msg = 'invalid_cash_jackpot' and pg_temp.cj_untouched('c3000000-0000-4000-8000-000000000052'),
+              'message=' || coalesce(v_msg, 'none'));
+  end loop;
+
+  v_msg := pg_temp.err($q$select public.start_game('c3000000-0000-4000-8000-000000000053', pg_temp.seq90(), 100)$q$);
+  perform t('cash jackpot :: an amount on a standard game is refused and nothing is written',
+            v_msg = 'cash_jackpot_not_allowed' and pg_temp.cj_untouched('c3000000-0000-4000-8000-000000000053'),
+            'message=' || coalesce(v_msg, 'none'));
+
+  v_msg := pg_temp.err($q$select public.start_game('c3000000-0000-4000-8000-000000000054', pg_temp.seq90(), 100)$q$);
+  perform t('cash jackpot :: an amount on a jackpot game with two stages is refused and nothing is written',
+            v_msg = 'cash_jackpot_stage_count' and pg_temp.cj_untouched('c3000000-0000-4000-8000-000000000054'),
+            'message=' || coalesce(v_msg, 'none'));
+end $$;
+
+-- A host, not an admin, through the role the app uses: start_game is the only
+-- way that host can write games.prizes.
+do $$
+declare v_seq integer[] := pg_temp.seq90(); v_state public.game_states; v_prizes jsonb; v_status text;
+begin
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub', 'c1000000-0000-4000-8000-000000000001', true);
+  v_state := public.start_game('c3000000-0000-4000-8000-000000000051', v_seq, 1250.5);
+  reset role;
+
+  select prizes into v_prizes from public.games where id = 'c3000000-0000-4000-8000-000000000051';
+  select status::text into v_status from public.sessions where id = 'c2000000-0000-4000-8000-000000000005';
+  perform t('cash jackpot :: a host starts a jackpot game with an amount, and the Full House prize is the exact text',
+            v_prizes = '{"Full House": "£1,250.50 Cash Jackpot"}'::jsonb,
+            'prizes=' || coalesce(v_prizes::text, 'null'));
+  perform t('cash jackpot :: the same call started the game for that host and set the night running',
+            v_state.status = 'in_progress'
+              and v_state.controlling_host_id = 'c1000000-0000-4000-8000-000000000001'
+              and v_status = 'running',
+            'state=' || coalesce(v_state.status::text, 'null') || ' session=' || coalesce(v_status, 'null'));
+end $$;
+
+do $$
+declare v_msg text; v_prizes jsonb; v_state public.game_states;
+begin
+  -- A takeover with an amount: another host typed one for a game already started.
+  perform pg_temp.act_as('c1000000-0000-4000-8000-000000000002');
+  v_msg := pg_temp.err($q$select public.start_game('c3000000-0000-4000-8000-000000000051', null, 200)$q$);
+  perform pg_temp.act_as('c1000000-0000-4000-8000-000000000001');
+  select prizes into v_prizes from public.games where id = 'c3000000-0000-4000-8000-000000000051';
+  select * into v_state from public.game_states where game_id = 'c3000000-0000-4000-8000-000000000051';
+  perform t('cash jackpot :: an amount on a takeover is refused, and the prize and controller stay',
+            v_msg = 'cash_jackpot_not_allowed'
+              and v_prizes = '{"Full House": "£1,250.50 Cash Jackpot"}'::jsonb
+              and v_state.controlling_host_id = 'c1000000-0000-4000-8000-000000000001',
+            'message=' || coalesce(v_msg, 'none') || ' prizes=' || coalesce(v_prizes::text, 'null'));
+
+  perform public.finish_game('c3000000-0000-4000-8000-000000000051');
+
+  v_msg := pg_temp.err($q$select public.start_game('c3000000-0000-4000-8000-000000000051', null, 200)$q$);
+  select prizes into v_prizes from public.games where id = 'c3000000-0000-4000-8000-000000000051';
+  perform t('cash jackpot :: an amount on a re-open is refused, and the game stays finished with its prize',
+            v_msg = 'cash_jackpot_not_allowed'
+              and v_prizes = '{"Full House": "£1,250.50 Cash Jackpot"}'::jsonb
+              and (select status = 'completed' from public.game_states
+                    where game_id = 'c3000000-0000-4000-8000-000000000051'),
+            'message=' || coalesce(v_msg, 'none'));
+end $$;
+
+do $$
+declare v_state public.game_states;
+begin
+  v_state := public.start_game('c3000000-0000-4000-8000-000000000052', pg_temp.seq90(), null);
+  perform t('cash jackpot :: a jackpot game started with no amount keeps its prizes',
+            v_state.status = 'in_progress'
+              and (select prizes = '{"Full House": "£50 Cash"}'::jsonb from public.games
+                    where id = 'c3000000-0000-4000-8000-000000000052'),
+            'status=' || coalesce(v_state.status::text, 'null'));
+  perform public.finish_game('c3000000-0000-4000-8000-000000000052');
+
+  perform public.start_game('c3000000-0000-4000-8000-000000000055', pg_temp.seq90(), 125);
+  perform t('cash jackpot :: whole pounds read without pence, and an empty prize list gains the stage',
+            (select prizes = '{"Full House": "£125 Cash Jackpot"}'::jsonb from public.games
+              where id = 'c3000000-0000-4000-8000-000000000055'),
+            (select prizes::text from public.games where id = 'c3000000-0000-4000-8000-000000000055'));
+  perform public.finish_game('c3000000-0000-4000-8000-000000000055');
+end $$;
+
+drop table cj_before;
+
+-- ===========================================================================
 -- Grants: anon cannot call any of the three, and a pending account is refused
 -- by the role guard. The replay's grant matrix covers the catalogue; these
 -- cover what a caller actually gets.
@@ -484,7 +609,7 @@ begin
               v_ok, v_detail);
   end loop;
 
-  foreach v_sig in array array['public.start_game(uuid, integer[])', 'public.finish_game(uuid)',
+  foreach v_sig in array array['public.start_game(uuid, integer[], numeric)', 'public.finish_game(uuid)',
                                'public.end_night(uuid)'] loop
     perform t('grants :: authenticated and service_role can execute ' || v_sig,
               has_function_privilege('authenticated', v_sig, 'EXECUTE')

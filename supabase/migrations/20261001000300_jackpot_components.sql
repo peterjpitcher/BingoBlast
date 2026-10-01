@@ -36,6 +36,10 @@
 --   settle_snowball_pot refuses unless the game is completed (X7), checked
 --   under a share lock on the game_states row, so a re-open cannot slip in.
 --   set_winner_prize_given refuses a voided winner (X14).
+--   list_unsettled_snowball_games (new, read only) lists the finished snowball
+--   games whose pot never settled, for the Settle buttons on the host
+--   dashboard (X6). snowball_pot_history is admin only in RLS, so a host
+--   reading it directly saw nothing and every finished game looked unsettled.
 --
 -- COMPATIBILITY
 --   record_winner_atomic keeps its signature, its display text and its
@@ -52,12 +56,14 @@
 --   game_not_completed   settle_snowball_pot on a game that is not completed
 --   winner_void          set_winner_prize_given on a voided winner
 --   record_winner_atomic, settle_snowball_pot and set_winner_prize_given keep
---   every key they raised before.
+--   every key they raised before. list_unsettled_snowball_games raises only
+--   the role guard's unauthorized.
 --
 -- IDEMPOTENT: yes.
 --
 -- ROLLBACK: supabase/rollback/20261001000300_jackpot_components.rollback.sql
--- restores the previous functions and trigger. The columns and data stay.
+-- restores the previous functions and trigger and drops
+-- list_unsettled_snowball_games. The columns and data stay.
 
 -- ---------------------------------------------------------------------------
 -- Columns
@@ -619,6 +625,74 @@ grant execute on function public.settle_snowball_pot(uuid) to service_role;
 
 comment on function public.settle_snowball_pot(uuid) is
   'Settles the snowball pot for a finished game: reset if the jackpot was won, rollover if not. Refuses game_not_completed unless the game is completed. Host-callable by design, so RLS on snowball_pots and snowball_pot_history can stay admin-only. Every written value is derived from the locked pot row, never supplied by the caller. Once per game, guarded by snowball_pot_history_pot_game_unique.';
+
+-- ---------------------------------------------------------------------------
+-- list_unsettled_snowball_games: what the host dashboard offers to settle (X6)
+-- ---------------------------------------------------------------------------
+-- A finished snowball game whose pot never moved. "Settled" is exactly the
+-- test settle_snowball_pot makes for already_settled: a snowball_pot_history
+-- row for this game and its pot (snowball_pot_history_pot_game_unique). That
+-- table is admin only in RLS, so this reads it with the owner's rights and
+-- returns the games alone, never a pot figure or a history row. Read only.
+--
+-- Only games that ended on or after midnight at the start of 1 October 2026,
+-- London time. Before the lifecycle and money changes of that date a failed
+-- settlement was often put right by a manual pot correction, which leaves no
+-- per-game record, so an earlier game with no record may well be settled
+-- already, and settling it again would move the pot twice.
+--
+-- Left out, because settle_snowball_pot would move nothing for them: test
+-- sessions (test_session) and games with no pot or not of type snowball
+-- (not_snowball).
+--
+-- p_session_id narrows the list to one night. Null lists every night, which is
+-- what the dashboard asks for: finishing the last game completes the night, so
+-- the night whose final settlement failed is no longer in its session list.
+create or replace function public.list_unsettled_snowball_games(p_session_id uuid default null)
+returns table (
+  game_id uuid,
+  game_name text,
+  game_index integer,
+  ended_at timestamptz,
+  session_id uuid,
+  session_name text,
+  session_start_date date
+)
+language plpgsql
+stable
+security definer
+set search_path = public, pg_catalog
+as $function$
+begin
+  perform public.assert_is_host();
+
+  -- Every column is qualified: the output columns are variables in here.
+  return query
+  select g.id, g.name, g.game_index, gs.ended_at, s.id, s.name, s.start_date
+    from public.games g
+    join public.sessions s on s.id = g.session_id
+    join public.game_states gs on gs.game_id = g.id
+   where (p_session_id is null or g.session_id = p_session_id)
+     and g.type = 'snowball'::public.game_type
+     and g.snowball_pot_id is not null
+     and coalesce(s.is_test_session, false) = false
+     and gs.status = 'completed'::public.game_status
+     and gs.ended_at >= (timestamp '2026-10-01 00:00:00' at time zone 'Europe/London')
+     and not exists (
+       select 1
+         from public.snowball_pot_history h
+        where h.snowball_pot_id = g.snowball_pot_id
+          and h.game_id = g.id
+     )
+   order by gs.ended_at desc, g.game_index;
+end;
+$function$;
+
+revoke all on function public.list_unsettled_snowball_games(uuid) from public, anon;
+grant execute on function public.list_unsettled_snowball_games(uuid) to authenticated, service_role;
+
+comment on function public.list_unsettled_snowball_games(uuid) is
+  'Finished snowball games, outside test sessions, that ended on or after 2026-10-01 00:00 Europe/London and have no settlement record by the test settle_snowball_pot uses for already_settled. One night, or every night when p_session_id is null. Host or admin; read only; returns no pot figures.';
 
 -- ---------------------------------------------------------------------------
 -- set_winner_prize_given: the body from 20260730065446, refusing a voided
