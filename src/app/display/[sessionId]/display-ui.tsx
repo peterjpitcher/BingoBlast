@@ -26,13 +26,13 @@ import {
 import { getInGameSubState, getNightPhase, pickNextGame } from '@/lib/night-phase';
 import { getClaimPanelState } from '@/lib/claim-panel';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
-import { buildPlaylist, type Slide } from '@/lib/playlist';
+import { buildPlaylist, type EventsProjection, type Slide } from '@/lib/playlist';
 import { buildFollowUrl } from '@/lib/follow-link';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
 import { createPollRunner, type PollRunner } from '@/lib/poll-runner';
-import { KITCHEN_OPEN_UNTIL } from '@/lib/venue-links';
+import { KITCHEN_OPEN_UNTIL, isReviewInviteEnabled } from '@/lib/venue-links';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
 import { useClockOffset } from '@/hooks/use-clock-offset';
@@ -43,6 +43,8 @@ import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
 import { FollowAlongSlide, FollowQrBadge } from '@/components/display/follow-qr';
 import { RulesSlide } from '@/components/display/rules-slide';
 import { SlideLoop } from '@/components/display/slide-loop';
+import { PromoSlide, SlidePreload } from '@/components/display/promo-slide';
+import { useEventsProjection } from '@/components/display/use-events-projection';
 import { useMinuteClock, useWindowOrigin } from '@/components/display/screen-hooks';
 import { useSessionOverview } from '@/components/display/use-session-overview';
 import { useDisplayLifecycle } from '@/components/display/use-display-lifecycle';
@@ -75,6 +77,8 @@ interface DisplayUIProps {
   initialIsUniqueSession: boolean;
   /** `?rehearsal=1`: test sessions count, and the TV returns to the rehearsal lobby. */
   rehearsal: boolean;
+  /** The upcoming events as the server page read them (getEventsProjection); refreshed here. */
+  initialEvents: EventsProjection | null;
 }
 
 /**
@@ -241,6 +245,7 @@ export default function DisplayUI({
   followOrigin,
   initialIsUniqueSession,
   rehearsal,
+  initialEvents,
 }: DisplayUIProps) {
   // One client for the life of the screen. Held in state rather than a ref so
   // it can be passed to hooks during render.
@@ -263,14 +268,17 @@ export default function DisplayUI({
   // game's pot (see currentSnowballPot below), so a late read or event for the
   // previous game's pot can never be shown against this one.
   const [latestPot, setLatestPot] = useState<SnowballPot | null>(null);
+  // The server page's read counts as the first good read whenever it did not
+  // fail, with or without a game state. Before the first game there is no
+  // game state at all, and waiting for the first poll instead left the TV on
+  // "Connecting to game…" until it answered, for good if the page was hidden
+  // or Realtime was down.
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>(
-    initialLoadStatus === 'failed' ? 'failed' : initialActiveGameState ? 'ready' : 'loading'
+    initialLoadStatus === 'failed' ? 'failed' : 'ready'
   );
   // Whether this screen has ever had a good read. Before the first one a
   // failure shows "Connecting"; after it, the last good screen stays up.
-  const [hasBeenReady, setHasBeenReady] = useState<boolean>(
-    initialLoadStatus !== 'failed' && initialActiveGameState !== null
-  );
+  const [hasBeenReady, setHasBeenReady] = useState<boolean>(initialLoadStatus !== 'failed');
   // How many balls this client shows, and for which game. planReveal owns the
   // value; the displayed numbers are sliced from it so there is a single source
   // of truth. Keyed by game so a render for a new game never uses the old
@@ -769,11 +777,19 @@ export default function DisplayUI({
   const qrOrigin = followOrigin ?? windowOrigin;
   const followUrl = qrOrigin ? buildFollowUrl({ origin: qrOrigin, sessionId: session.id, isUniqueSession }) : '';
 
+  // Upcoming events (spec 5.5): the server's first read, then every 10
+  // minutes and on each change of phase. Never shown as an error.
+  const events = useEventsProjection(initialEvents, { refreshKey: nightPhase, logScope: LOG_SCOPE });
+
+  // The TV's clock, corrected like the reveal delay, to the minute: enough to
+  // drop events as they start and to say "Tonight". 0 before the browser runs.
   const minuteMs = useMinuteClock();
+  const slideNowMs = minuteMs > 0 ? minuteMs + clockOffsetMs : 0;
   const sessionDate = currentSession.start_date ?? null;
+  const reviewEnabled = isReviewInviteEnabled();
   const playlist = useMemo(
-    () => buildPlaylist(nightPhase, null, new Date(minuteMs), sessionDate, { inGameSubState }),
-    [nightPhase, minuteMs, sessionDate, inGameSubState]
+    () => buildPlaylist(nightPhase, events, new Date(slideNowMs), sessionDate, { inGameSubState, reviewEnabled }),
+    [nightPhase, events, slideNowMs, sessionDate, inGameSubState, reviewEnabled]
   );
 
   // Rule 8 uses the live pot during a snowball game, else the night's first snowball pot.
@@ -842,10 +858,10 @@ export default function DisplayUI({
   const displayBackgroundColor = currentActiveGame?.background_colour || '#005131';
   const dimTextColor = 'text-white';
   const footerLeftTextClass = "text-[clamp(1.1rem,1.9vw,1.8rem)] font-semibold text-white";
-  // The break, between-games and end-of-night screens share one centred
-  // column. Each scale takes min() of a width term and a height term, so the
-  // shorter screen wins; every vh term is chosen so 1080p lands on its clamp
-  // maximum.
+  // The break and between-games screens share one centred column (the end
+  // of the night is a slide loop of its own). Each scale takes min() of a
+  // width term and a height term, so the shorter screen wins; every vh term
+  // is chosen so 1080p lands on its clamp maximum.
   const serviceColumnClass = "mx-auto flex h-full w-full max-w-4xl flex-col justify-center gap-4 2xl:gap-6 text-center";
   const serviceCardPadClass = "p-4 2xl:p-5";
   const serviceEyebrowClass = "text-[clamp(0.95rem,1.2vw,1.1rem)] uppercase tracking-[0.2em] text-white/85 font-semibold";
@@ -924,7 +940,7 @@ export default function DisplayUI({
   const rulesStatusLabel =
     nightPhase === 'between_games' ? 'Next game coming up' : inGameSubState === 'break' ? 'Break time' : null;
 
-  const renderSlide = (slide: Slide) => {
+  const renderSlideContent = (slide: Slide) => {
     switch (slide.kind) {
       case 'follow_along':
         return followUrl ? <FollowAlongSlide url={followUrl} /> : null;
@@ -934,8 +950,18 @@ export default function DisplayUI({
         return renderBreakSlide();
       case 'next_game':
         return renderNextGameSlide();
+      default:
+        // Events, next bingo, thanks, review: shared with the idle /display.
+        return <PromoSlide slide={slide} nowMs={slideNowMs} />;
     }
   };
+
+  const renderSlide = (slide: Slide) => (
+    <>
+      <SlidePreload slide={slide} nowMs={slideNowMs} />
+      {renderSlideContent(slide)}
+    </>
+  );
 
   // First server answer not in yet. Deliberately brief: unlike the old boolean
   // gate this can always be left, because the poll below resolves the phase on
@@ -1014,26 +1040,6 @@ export default function DisplayUI({
           <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center" data-check-overlap>
             {playlist.length > 0 && (
               <SlideLoop className="h-full w-full" slides={playlist} renderSlide={renderSlide} />
-            )}
-
-            {isNightOver && (
-              <div className={serviceColumnClass}>
-                  <div>
-                      <p className={serviceEyebrowClass}>Anchor Bingo Night</p>
-                      <h1 className={serviceHeadlineClass}>Thanks For Coming!</h1>
-                      <p className={serviceSubheadClass}>Please book your table for our next bingo event before you leave.</p>
-                  </div>
-
-                  <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl backdrop-blur-sm", serviceCardPadClass)}>
-                      <h2 className={servicePromoTitleClass}>Book For Our Next Event</h2>
-                      <p className={servicePromoBodyClass}>Don&apos;t miss out. Reserve your table at the bar tonight.</p>
-                  </div>
-
-                  <div className={cn("bg-[#003f27]/85 border border-[#1f7c58] rounded-3xl backdrop-blur-md", serviceCardPadClass)}>
-                      <h3 className={serviceCardTitleClass}>Bring friends for the next one</h3>
-                      <p className={serviceCardBodyClass}>Ask the team about dates and get booked in early.</p>
-                  </div>
-              </div>
             )}
 
             {showActiveGame && (

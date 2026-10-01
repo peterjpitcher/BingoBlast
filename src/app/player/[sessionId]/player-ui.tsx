@@ -37,6 +37,8 @@ import { useBuildCheck } from '@/hooks/use-build-check';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
 import { PhoneRules } from '@/components/display/phone-rules';
+import { PhoneEvents, PhoneReviewButton } from '@/components/display/phone-events';
+import type { EventsProjection } from '@/lib/playlist';
 import { useSessionOverview } from '@/components/display/use-session-overview';
 import { logError } from '@/lib/log-error';
 
@@ -60,6 +62,8 @@ interface PlayerUIProps {
   initialGameState: GameState | null;
   initialPrizeText: string;
   initialLoadStatus: InitialLoadStatus;
+  /** Upcoming events as the server page read them (spec 5.5); phones read them once, on load. */
+  initialEvents: EventsProjection | null;
 }
 
 /**
@@ -215,6 +219,7 @@ export default function PlayerUI({
   initialGameState: initialActiveGameState,
   initialPrizeText,
   initialLoadStatus,
+  initialEvents,
 }: PlayerUIProps) {
   // One client for the life of the screen. Held in state rather than a ref so
   // it can be passed to hooks during render.
@@ -239,14 +244,17 @@ export default function PlayerUI({
   const [latestPot, setLatestPot] = useState<SnowballPot | null>(null);
   const [showFullHistory, setShowFullHistory] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  // The server page's read counts as the first good read whenever it did not
+  // fail, with or without a game state. Before the first game there is no
+  // game state at all, and waiting for the first poll instead left the phone
+  // on "Connecting to game…" until it answered, for good if the page was
+  // hidden or Realtime was down.
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>(
-    initialLoadStatus === 'failed' ? 'failed' : initialActiveGameState ? 'ready' : 'loading'
+    initialLoadStatus === 'failed' ? 'failed' : 'ready'
   );
   // Whether this screen has ever had a good read. Before the first one a
   // failure shows "Connecting"; after it, the last good screen stays up.
-  const [hasBeenReady, setHasBeenReady] = useState<boolean>(
-    initialLoadStatus !== 'failed' && initialActiveGameState !== null
-  );
+  const [hasBeenReady, setHasBeenReady] = useState<boolean>(initialLoadStatus !== 'failed');
   // How many balls this client shows, and for which game. planReveal owns the
   // value; the displayed numbers are sliced from it so there is a single source
   // of truth. Keyed by game so a render for a new game never uses the old
@@ -875,6 +883,15 @@ export default function PlayerUI({
           </Card>
         )}
 
+        {/* The end of the night (spec 5.5, 5.6): the review button when it is
+            switched on, then what is coming up, next bingo night first. */}
+        {isNightOver && (
+          <>
+            <PhoneReviewButton />
+            <PhoneEvents projection={initialEvents} sessionDate={currentSession.start_date ?? null} phase="night_over" />
+          </>
+        )}
+
         {nightPhase === 'before_start' && (
           <>
             <Card className="bg-[#003f27]/80 border-[#1f7c58]">
@@ -891,6 +908,8 @@ export default function PlayerUI({
                 <PhoneRules rules={houseRules} />
               </CardContent>
             </Card>
+            {/* What else is on (spec 5.5), next bingo night first. */}
+            <PhoneEvents projection={initialEvents} sessionDate={currentSession.start_date ?? null} phase="before_start" />
           </>
         )}
 

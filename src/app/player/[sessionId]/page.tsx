@@ -7,6 +7,7 @@ import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
 import { getTodayIsoDateInLondon } from '@/lib/dates';
+import { getEventsProjection } from '@/lib/events-feed/projection';
 import {
   PUBLIC_GAME_COLUMNS,
   PUBLIC_GAME_STATE_COLUMNS,
@@ -35,6 +36,10 @@ export default async function PlayerPage({ params }: PageProps) {
   if (!isUuid(sessionId)) {
     notFound();
   }
+
+  // Upcoming events for the start and end of the night (spec 5.5), read
+  // alongside the session rather than after it. Cached, and never throws.
+  const eventsPromise = getEventsProjection();
 
   const supabase = await createClient();
 
@@ -115,6 +120,8 @@ export default async function PlayerPage({ params }: PageProps) {
     }
   }
 
+  const initialEvents = await eventsPromise;
+
   return (
     <PlayerUI
       session={session}
@@ -122,6 +129,7 @@ export default async function PlayerPage({ params }: PageProps) {
       initialGameState={initialGameState}
       initialPrizeText={prizeText}
       initialLoadStatus={initialLoadStatus}
+      initialEvents={initialEvents}
     />
   );
 }

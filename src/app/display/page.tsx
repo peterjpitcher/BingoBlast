@@ -2,6 +2,7 @@ import React from 'react';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/utils/supabase/server';
 import { getTodayIsoDateInLondon } from '@/lib/dates';
+import { getEventsProjection } from '@/lib/events-feed/projection';
 import {
   CANDIDATE_SESSION_STATUSES,
   RESOLVABLE_SESSION_COLUMNS,
@@ -19,12 +20,16 @@ interface DisplayIndexPageProps {
 /**
  * The pub TV's home (spec 5.8, A3). It joins the one session that qualifies
  * (running, or ready and dated today or earlier in London); otherwise it shows
- * the idle screen or a list, both of which keep checking by themselves.
+ * the idle loop of upcoming events (spec 5.5) or a list, both of which keep
+ * checking by themselves.
  * `?rehearsal=1` also counts test sessions (A4).
  */
 export default async function DisplayIndexPage({ searchParams }: DisplayIndexPageProps) {
   const params = await searchParams;
   const rehearsal = params.rehearsal === '1';
+  // The idle loop's events (spec 5.5), read alongside the sessions. Cached,
+  // and never throws.
+  const eventsPromise = getEventsProjection();
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -37,7 +42,7 @@ export default async function DisplayIndexPage({ searchParams }: DisplayIndexPag
   if (error || !data) {
     // An outage is never shown as "no bingo tonight": the lobby retries.
     logError('display', error ?? new Error('Display lobby lookup returned nothing'));
-    return <DisplayLobby initial={{ kind: 'error' }} rehearsal={rehearsal} />;
+    return <DisplayLobby initial={{ kind: 'error' }} rehearsal={rehearsal} initialEvents={await eventsPromise} />;
   }
 
   const resolution = resolveDisplaySession(data, getTodayIsoDateInLondon(), { includeTest: rehearsal });
@@ -53,6 +58,7 @@ export default async function DisplayIndexPage({ searchParams }: DisplayIndexPag
           : { kind: 'none' }
       }
       rehearsal={rehearsal}
+      initialEvents={await eventsPromise}
     />
   );
 }

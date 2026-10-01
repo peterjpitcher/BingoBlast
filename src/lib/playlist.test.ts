@@ -3,8 +3,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPlaylist,
+  chooseEventsProjection,
+  eventLinkForPhase,
+  getPhoneEventList,
   getUsableEvents,
   playlistSignature,
+  readEventsProjection,
+  type Slide,
 } from './playlist';
 import type { EventsProjection, ScreenEvent } from './events-feed/types';
 
@@ -30,6 +35,30 @@ const projection = (overrides: Partial<EventsProjection> = {}): EventsProjection
 });
 
 const kinds = (slides: { kind: string }[]) => slides.map((slide) => slide.kind);
+
+const BUCKET = 'https://tfcasgxopxegwrabvwat.supabase.co/storage/v1/object/public/event-images/events';
+
+/** E1 to E`count`, a day apart from 20 November, each with a landscape image. */
+const upcomingEvents = (count: number): ScreenEvent[] =>
+  Array.from({ length: count }, (_, i) => ({
+    ...event(`e${i + 1}`, `2026-11-${String(20 + i).padStart(2, '0')}T19:00:00Z`),
+    image: { url: `${BUCKET}/e${i + 1}/landscape.png`, alt: `Event e${i + 1}`, square: false },
+  }));
+
+const TONIGHTS_BINGO = event('bingo-tonight', '2026-11-18T19:30:00Z', 'bingo-night');
+const NEXT_BINGO: ScreenEvent = {
+  ...event('bingo-next', '2026-12-16T19:30:00Z', 'bingo-night'),
+  image: { url: `${BUCKET}/bingo-next/square.png`, alt: 'Cash Bingo', square: true },
+};
+
+const fullProjection = (count = 8): EventsProjection =>
+  projection({ events: upcomingEvents(count), bingoNights: [TONIGHTS_BINGO, NEXT_BINGO] });
+
+/** A readable picture of a loop: kinds, with the event id for event slides. */
+const outline = (slides: Slide[]) =>
+  slides.map((slide) => ('event' in slide ? `${slide.kind}:${slide.event.id}` : slide.kind));
+
+const durations = (slides: Slide[]) => slides.map((slide) => slide.durationMs);
 
 test('before the start with no events: follow-along for 30 seconds, then the rules for 20', () => {
   const slides = buildPlaylist('before_start', null, NOW, SESSION_DATE);
@@ -72,16 +101,16 @@ test('a game being called, a claim or a win has no loop', () => {
   assert.deepEqual(buildPlaylist('in_game', null, NOW, SESSION_DATE), []);
 });
 
-test('the end of the night and the idle page keep their own screens until the events slice', () => {
-  assert.deepEqual(buildPlaylist('night_over', null, NOW, SESSION_DATE), []);
-  assert.deepEqual(buildPlaylist('idle', null, NOW, null), []);
-});
-
 test('slide keys are unique within a loop', () => {
+  const full = fullProjection();
   for (const slides of [
     buildPlaylist('before_start', null, NOW, SESSION_DATE),
     buildPlaylist('between_games', null, NOW, SESSION_DATE),
     buildPlaylist('in_game', null, NOW, SESSION_DATE, { inGameSubState: 'break' }),
+    buildPlaylist('before_start', full, NOW, SESSION_DATE),
+    buildPlaylist('night_over', full, NOW, SESSION_DATE, { reviewEnabled: true }),
+    buildPlaylist('night_over', full, NOW, SESSION_DATE),
+    buildPlaylist('idle', full, NOW, null),
   ]) {
     assert.equal(new Set(slides.map((slide) => slide.key)).size, slides.length);
   }
@@ -141,4 +170,236 @@ test('a missing, empty or failed projection gives nothing to show', () => {
     events: [],
     nextBingo: null,
   });
+});
+
+// ---- before_start (spec 5.5) -------------------------------------------------
+
+test('before the start: follow-along, next bingo, two events, follow-along, rules, two more, and so on', () => {
+  const slides = buildPlaylist('before_start', fullProjection(), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), [
+    'follow_along', 'next_bingo:bingo-next', 'event:e1', 'event:e2',
+    'follow_along', 'rules', 'event:e3', 'event:e4',
+    'follow_along', 'next_bingo:bingo-next', 'event:e5', 'event:e6',
+    'follow_along', 'rules', 'event:e7', 'event:e8',
+  ]);
+  assert.deepEqual(durations(slides).slice(0, 8), [20_000, 12_000, 12_000, 12_000, 20_000, 20_000, 12_000, 12_000]);
+});
+
+test('before the start the event QR codes are the pre-event links', () => {
+  const slides = buildPlaylist('before_start', fullProjection(2), NOW, SESSION_DATE);
+  for (const slide of slides) {
+    if ('event' in slide) assert.equal(slide.qrUrl, slide.event.qrPre);
+  }
+  assert.ok(slides.some((slide) => 'event' in slide));
+});
+
+test('before the start with one event the rules still show once a loop', () => {
+  const slides = buildPlaylist('before_start', fullProjection(1), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), ['follow_along', 'next_bingo:bingo-next', 'event:e1', 'follow_along', 'rules']);
+});
+
+test('before the start with no next bingo night its slot is skipped, not filled', () => {
+  const slides = buildPlaylist('before_start', projection({ events: upcomingEvents(4) }), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), [
+    'follow_along', 'event:e1', 'event:e2',
+    'follow_along', 'rules', 'event:e3', 'event:e4',
+  ]);
+});
+
+test('before the start with only a next bingo night: follow-along, next bingo, follow-along, rules', () => {
+  const slides = buildPlaylist('before_start', projection({ bingoNights: [NEXT_BINGO] }), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), ['follow_along', 'next_bingo:bingo-next', 'follow_along', 'rules']);
+  assert.deepEqual(durations(slides), [20_000, 12_000, 20_000, 20_000]);
+});
+
+test("tonight's own bingo night alone counts as nothing to show before the start", () => {
+  const slides = buildPlaylist('before_start', projection({ bingoNights: [TONIGHTS_BINGO] }), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), ['follow_along', 'rules']);
+  assert.deepEqual(durations(slides), [30_000, 20_000]);
+});
+
+test('before the start, no events, an error and no key all give the fallback loop', () => {
+  for (const status of ['no_events', 'error', 'missing_config'] as const) {
+    const slides = buildPlaylist('before_start', projection({ status, events: upcomingEvents(2) }), NOW, SESSION_DATE);
+    assert.deepEqual(outline(slides), ['follow_along', 'rules'], status);
+    assert.deepEqual(durations(slides), [30_000, 20_000], status);
+  }
+});
+
+// ---- night_over (spec 5.5, 5.6) ----------------------------------------------
+
+test('after the night with review off: thanks, next bingo, events, and thanks again after every two', () => {
+  const slides = buildPlaylist('night_over', fullProjection(), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), [
+    'thanks', 'next_bingo:bingo-next', 'event:e1', 'event:e2',
+    'thanks', 'event:e3', 'event:e4',
+    'thanks', 'event:e5', 'event:e6',
+    'thanks', 'event:e7', 'event:e8',
+  ]);
+  assert.deepEqual(durations(slides).slice(0, 5), [15_000, 12_000, 12_000, 12_000, 15_000]);
+});
+
+test('after the night with review on: thanks, review, next bingo, events, then thanks and review take turns', () => {
+  const slides = buildPlaylist('night_over', fullProjection(), NOW, SESSION_DATE, { reviewEnabled: true });
+  assert.deepEqual(outline(slides), [
+    'thanks', 'review', 'next_bingo:bingo-next', 'event:e1', 'event:e2',
+    'thanks', 'event:e3', 'event:e4',
+    'review', 'event:e5', 'event:e6',
+    'thanks', 'event:e7', 'event:e8',
+  ]);
+  assert.deepEqual(durations(slides).slice(0, 2), [15_000, 20_000]);
+});
+
+test('after the night the event QR codes are the post-event links', () => {
+  const slides = buildPlaylist('night_over', fullProjection(2), NOW, SESSION_DATE);
+  const eventSlides = slides.filter((slide) => 'event' in slide);
+  assert.equal(eventSlides.length, 3);
+  for (const slide of eventSlides) {
+    if ('event' in slide) assert.equal(slide.qrUrl, slide.event.qrPost);
+  }
+});
+
+test('after the night with nothing to show: thanks, then review only when it is on', () => {
+  for (const proj of [null, projection({ status: 'error' }), projection({ status: 'missing_config' }), projection({ status: 'no_events' })]) {
+    assert.deepEqual(outline(buildPlaylist('night_over', proj, NOW, SESSION_DATE)), ['thanks']);
+    assert.deepEqual(outline(buildPlaylist('night_over', proj, NOW, SESSION_DATE, { reviewEnabled: true })), ['thanks', 'review']);
+  }
+});
+
+test("after the night tonight's own bingo night is never the next one", () => {
+  const slides = buildPlaylist('night_over', projection({ bingoNights: [TONIGHTS_BINGO, NEXT_BINGO] }), NOW, SESSION_DATE);
+  assert.deepEqual(outline(slides), ['thanks', 'next_bingo:bingo-next']);
+});
+
+test('the review slide appears in no loop unless it is switched on', () => {
+  const full = fullProjection();
+  for (const phase of ['before_start', 'between_games', 'in_game', 'night_over', 'idle'] as const) {
+    for (const opts of [{}, { reviewEnabled: false }]) {
+      const slides = buildPlaylist(phase, full, NOW, phase === 'idle' ? null : SESSION_DATE, opts);
+      assert.equal(slides.some((slide) => slide.kind === 'review'), false, phase);
+    }
+  }
+  // And only ever after the night, even when it is on.
+  for (const phase of ['before_start', 'between_games', 'idle'] as const) {
+    const slides = buildPlaylist(phase, full, NOW, phase === 'idle' ? null : SESSION_DATE, { reviewEnabled: true });
+    assert.equal(slides.some((slide) => slide.kind === 'review'), false, phase);
+  }
+});
+
+// ---- idle /display (spec 5.5) --------------------------------------------------
+
+test('the idle screen: "Bingo nights at The Anchor", the next bingo night, then the events', () => {
+  const slides = buildPlaylist('idle', fullProjection(3), NOW, null);
+  assert.deepEqual(outline(slides), [
+    'idle_bingo', 'next_bingo:bingo-tonight', 'event:e1', 'event:e2', 'event:e3',
+  ]);
+  assert.deepEqual(durations(slides), [20_000, 12_000, 12_000, 12_000, 12_000]);
+  for (const slide of slides) {
+    if ('event' in slide) assert.equal(slide.qrUrl, slide.event.qrPost);
+  }
+});
+
+test('the idle screen with nothing to show is the "Bingo nights at The Anchor" slide alone', () => {
+  for (const proj of [null, projection({ status: 'error' }), projection({ status: 'missing_config' }), projection()]) {
+    assert.deepEqual(outline(buildPlaylist('idle', proj, NOW, null)), ['idle_bingo']);
+  }
+});
+
+// ---- Preloading and stability --------------------------------------------------
+
+test("every slide carries the next slide's image, wrapping round to the first", () => {
+  const slides = buildPlaylist('idle', projection({ events: upcomingEvents(2), bingoNights: [NEXT_BINGO] }), NOW, null);
+  // idle_bingo, next_bingo (square), e1, e2.
+  assert.equal(slides[0].preloadImage?.url, NEXT_BINGO.image?.url);
+  assert.equal(slides[1].preloadImage?.url, `${BUCKET}/e1/landscape.png`);
+  assert.equal(slides[2].preloadImage?.url, `${BUCKET}/e2/landscape.png`);
+  // The last slide wraps to idle_bingo, which has no image.
+  assert.equal(slides[3].preloadImage, null);
+});
+
+test('a single-slide loop preloads nothing', () => {
+  const [only] = buildPlaylist('night_over', null, NOW, SESSION_DATE);
+  assert.equal(only.preloadImage, null);
+});
+
+test('an event that starts drops out at render time and changes the signature', () => {
+  const proj = fullProjection(2);
+  const before = buildPlaylist('before_start', proj, NOW, SESSION_DATE);
+  const afterE1 = buildPlaylist('before_start', proj, new Date('2026-11-20T19:01:00Z'), SESSION_DATE);
+  assert.ok(outline(before).includes('event:e1'));
+  assert.equal(outline(afterE1).includes('event:e1'), false);
+  assert.notEqual(playlistSignature(before), playlistSignature(afterE1));
+});
+
+test('a refreshed projection with the same events keeps the loop in place', () => {
+  const a = buildPlaylist('before_start', fullProjection(), NOW, SESSION_DATE);
+  const b = buildPlaylist('before_start', fullProjection(), new Date('2026-11-18T18:35:00Z'), SESSION_DATE);
+  assert.equal(playlistSignature(a), playlistSignature(b));
+});
+
+// ---- Links, the phone list and reading the route -------------------------------
+
+test('the link for a phase: pre-event before the start, post-event after it and when idle', () => {
+  const e = event('x', '2026-11-20T19:00:00Z');
+  assert.equal(eventLinkForPhase(e, 'before_start'), e.qrPre);
+  assert.equal(eventLinkForPhase(e, 'night_over'), e.qrPost);
+  assert.equal(eventLinkForPhase(e, 'idle'), e.qrPost);
+});
+
+test('the phone list puts the next bingo night first and leaves out tonight and started events', () => {
+  const proj = projection({
+    events: [event('past', '2026-11-18T18:00:00Z'), ...upcomingEvents(2)],
+    bingoNights: [TONIGHTS_BINGO, NEXT_BINGO],
+  });
+  const list = getPhoneEventList(proj, NOW, SESSION_DATE);
+  assert.deepEqual(list.map((item) => item.event.id), ['bingo-next', 'e1', 'e2']);
+  assert.deepEqual(list.map((item) => item.isNextBingo), [true, false, false]);
+  // With no session (/play), tonight's bingo is the next one.
+  assert.deepEqual(getPhoneEventList(proj, NOW, null).map((item) => item.event.id), ['bingo-tonight', 'e1', 'e2']);
+  // No bingo night to come: just the events, none marked as bingo.
+  assert.deepEqual(
+    getPhoneEventList(projection({ events: upcomingEvents(1) }), NOW, null).map((item) => item.isNextBingo),
+    [false]
+  );
+  assert.deepEqual(getPhoneEventList(projection({ status: 'error' }), NOW, null), []);
+  assert.deepEqual(getPhoneEventList(null, NOW, null), []);
+});
+
+test('the route body is read back into a projection, dropping a malformed event alone', () => {
+  const good = upcomingEvents(1)[0];
+  const read = readEventsProjection({
+    status: 'ok',
+    fetchedAt: '2026-11-18T18:00:00Z',
+    events: [good, { id: 'bad', title: 42 }, null],
+    bingoNights: 'not a list',
+  });
+  assert.deepEqual(read, { status: 'ok', fetchedAt: '2026-11-18T18:00:00Z', events: [good], bingoNights: [] });
+});
+
+test('a body that is not a projection reads as nothing', () => {
+  assert.equal(readEventsProjection(null), null);
+  assert.equal(readEventsProjection('<html>'), null);
+  assert.equal(readEventsProjection({ status: 'teapot', events: [] }), null);
+});
+
+test('a malformed image becomes a text-only card rather than dropping the event', () => {
+  const read = readEventsProjection({
+    status: 'ok',
+    fetchedAt: null,
+    events: [{ ...event('a', '2026-11-20T19:00:00Z'), image: { url: 7 } }],
+    bingoNights: [],
+  });
+  assert.equal(read?.events[0].image, null);
+});
+
+test('an error refresh never replaces a good list; anything else does', () => {
+  const good = fullProjection(2);
+  assert.equal(chooseEventsProjection(good, projection({ status: 'error' })), good);
+  const empty = projection({ status: 'no_events' });
+  assert.equal(chooseEventsProjection(good, empty), empty);
+  const missing = projection({ status: 'missing_config' });
+  assert.equal(chooseEventsProjection(good, missing), missing);
+  const error = projection({ status: 'error' });
+  assert.equal(chooseEventsProjection(null, error), error);
+  assert.equal(chooseEventsProjection(missing, error), error);
 });

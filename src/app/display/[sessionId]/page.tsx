@@ -8,6 +8,7 @@ import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
 import { getTodayIsoDateInLondon } from '@/lib/dates';
+import { getEventsProjection } from '@/lib/events-feed/projection';
 import { getRequestOrigin, getSiteOrigin } from '@/lib/site-origin';
 import {
   CANDIDATE_SESSION_STATUSES,
@@ -44,6 +45,12 @@ export default async function DisplayPage({ params, searchParams }: PageProps) {
   if (!isUuid(sessionId)) {
     notFound();
   }
+
+  // Upcoming events for the start and end of the night (spec 5.5), read
+  // alongside the session rather than after it. Cached, and never throws, so
+  // a management app outage can never stop the TV loading; at worst it waits
+  // for the projection's own 8 second refresh limit on a cold cache.
+  const eventsPromise = getEventsProjection();
 
   const supabase = await createClient();
 
@@ -154,6 +161,8 @@ export default async function DisplayPage({ params, searchParams }: PageProps) {
   // The screen for each part of the night is decided in DisplayUI from the
   // session and the active game's state (getNightPhase), so it follows the
   // night live rather than from this first read.
+  const initialEvents = await eventsPromise;
+
   return (
     <DisplayUI
       session={session}
@@ -164,6 +173,7 @@ export default async function DisplayPage({ params, searchParams }: PageProps) {
       followOrigin={followOrigin}
       initialIsUniqueSession={initialIsUniqueSession}
       rehearsal={rehearsal}
+      initialEvents={initialEvents}
     />
   );
 }

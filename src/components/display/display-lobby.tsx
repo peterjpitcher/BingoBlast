@@ -4,13 +4,14 @@
 // server page redirects straight to a single qualifying session; this covers
 // the rest and keeps checking, so a TV left on /display joins the night by
 // itself:
-//   - none:  the idle screen, re-checked every 60 seconds;
+//   - none:  the idle loop (spec 5.5: "Bingo nights at The Anchor", the next
+//            bingo night and the upcoming events), re-checked every 60 seconds;
 //   - many:  a list for staff to choose from, refreshed every 30 seconds;
 //   - error: a retrying screen, re-checked every 15 seconds.
 // A failed re-check keeps the last good screen rather than flashing an error.
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -26,10 +27,15 @@ import {
   type ResolvableSession,
 } from '@/lib/session-resolution';
 import { logError } from '@/lib/log-error';
+import { buildPlaylist, type EventsProjection, type Slide } from '@/lib/playlist';
 import { useBuildCheck } from '@/hooks/use-build-check';
 import { useWakeLock } from '@/hooks/wake-lock';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PromoSlide, SlidePreload } from './promo-slide';
+import { useMinuteClock } from './screen-hooks';
+import { SlideLoop } from './slide-loop';
 import { TV_TEXT_BODY, TV_TEXT_TITLE } from './tv-text';
+import { useEventsProjection } from './use-events-projection';
 
 export interface LobbySession extends ResolvableSession {
   name: string;
@@ -49,9 +55,11 @@ const RECHECK_MS: Record<LobbyState['kind'], number> = {
 interface DisplayLobbyProps {
   initial: LobbyState;
   rehearsal: boolean;
+  /** The upcoming events as the server page read them (getEventsProjection); refreshed here. */
+  initialEvents: EventsProjection | null;
 }
 
-export function DisplayLobby({ initial, rehearsal }: DisplayLobbyProps) {
+export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobbyProps) {
   const [supabase] = useState(createClient);
   const [state, setState] = useState<LobbyState>(initial);
   const router = useRouter();
@@ -61,6 +69,19 @@ export function DisplayLobby({ initial, rehearsal }: DisplayLobbyProps) {
   useBuildCheck({ mode: 'auto', safe: true });
 
   const delayMs = RECHECK_MS[state.kind];
+
+  // The idle loop: refreshed every 10 minutes, never shown as an error. The
+  // idle screen has no session of its own, so tonight's bingo night counts
+  // as the next one until a session for it is ready.
+  const events = useEventsProjection(initialEvents, { refreshKey: 'idle', logScope: 'display' });
+  const minuteMs = useMinuteClock();
+  const idlePlaylist = useMemo(() => buildPlaylist('idle', events, new Date(minuteMs), null), [events, minuteMs]);
+  const renderIdleSlide = (slide: Slide) => (
+    <>
+      <SlidePreload slide={slide} nowMs={minuteMs} />
+      <PromoSlide slide={slide} nowMs={minuteMs} />
+    </>
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -144,25 +165,35 @@ export function DisplayLobby({ initial, rehearsal }: DisplayLobbyProps) {
     );
   }
 
-  return (
-    <div
-      className="flex h-screen flex-col items-center justify-center gap-[4vh] px-[6vw] text-center text-white"
-      style={{ backgroundColor: '#005131' }}
-      role={state.kind === 'error' ? 'status' : undefined}
-      aria-live={state.kind === 'error' ? 'polite' : undefined}
-    >
-      <div className="relative h-[16vh] w-[60vh] max-w-full">
-        <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain" priority />
+  if (state.kind === 'error') {
+    return (
+      <div
+        className="flex h-screen flex-col items-center justify-center gap-[4vh] px-[6vw] text-center text-white"
+        style={{ backgroundColor: '#005131' }}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="relative h-[16vh] w-[60vh] max-w-full">
+          <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain" priority />
+        </div>
+        <h1 className={cn(TV_TEXT_TITLE, 'font-black uppercase tracking-[0.06em]')}>Reconnecting</h1>
+        <p className={cn(TV_TEXT_BODY, 'text-white/90')}>Trying again in a moment.</p>
       </div>
-      {state.kind === 'error' ? (
-        <>
-          <h1 className={cn(TV_TEXT_TITLE, 'font-black uppercase tracking-[0.06em]')}>Reconnecting</h1>
-          <p className={cn(TV_TEXT_BODY, 'text-white/90')}>Trying again in a moment.</p>
-        </>
-      ) : (
-        // Placeholder until the events slice (S4) fills the idle loop.
-        <h1 className={cn(TV_TEXT_TITLE, 'font-black uppercase tracking-[0.06em]')}>Bingo nights at The Anchor</h1>
-      )}
+    );
+  }
+
+  // No session to join: the idle loop under the logo. The loop area is what
+  // is left of the screen, so the slides size against it as on the session TV.
+  return (
+    <div className="flex h-screen flex-col overflow-hidden text-white" style={{ backgroundColor: '#005131' }}>
+      <div className="flex shrink-0 justify-center pt-[3vh]">
+        <div className="relative h-[12vh] w-[45vh] max-w-full">
+          <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain" priority />
+        </div>
+      </div>
+      <div className="flex min-h-0 flex-1 items-center justify-center px-[4vw] pb-[4vh] pt-[2vh]">
+        <SlideLoop className="h-full w-full" slides={idlePlaylist} renderSlide={renderIdleSlide} />
+      </div>
     </div>
   );
 }

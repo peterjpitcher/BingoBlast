@@ -104,16 +104,77 @@ interface LondonClock {
   month: number;
   day: number;
   hour: number;
+  minute: number;
 }
 
 function readLondonClock(date: Date): LondonClock {
   const parts = new Intl.DateTimeFormat('en-GB', {
-    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric',
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric',
     hourCycle: 'h23', timeZone: LONDON,
   }).formatToParts(date);
   const read = (type: Intl.DateTimeFormatPartTypes) =>
     Number(parts.find((part) => part.type === type)?.value);
-  return { year: read('year'), month: read('month'), day: read('day'), hour: read('hour') };
+  return { year: read('year'), month: read('month'), day: read('day'), hour: read('hour'), minute: read('minute') };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Fixed names rather than Intl output: ICU's en-GB short month for September
+// is "Sept" in some versions and "Sep" in others, and a TV label should not
+// change with the browser's ICU build.
+const WEEKDAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WEEKDAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function toValidDate(value: string | number | Date): Date | null {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Days since the epoch of a London calendar date, so two dates subtract as whole days. */
+function londonDayNumber(clock: LondonClock): number {
+  return Date.UTC(clock.year, clock.month - 1, clock.day) / DAY_MS;
+}
+
+/**
+ * When an upcoming event is, as the pub TV and phones say it (spec 5.5):
+ * "Tonight", "Tomorrow", a weekday name ("Friday") up to six days ahead, and
+ * otherwise "Fri 16 Oct". Judged by London calendar dates, never by hours
+ * apart, so an event at 00:30 is "Tomorrow" from 23:00 the night before and
+ * the clock change does not shift a day. Empty for anything that is not a
+ * date, never "Invalid Date".
+ *
+ * Worked out at render time from the event's start and the screen's clock, so
+ * a cached events list is never wrong after midnight (R10).
+ */
+export function formatEventWhen(startsAtIso: string, nowIso: string | number | Date): string {
+  const starts = toValidDate(startsAtIso);
+  const now = toValidDate(nowIso);
+  if (!starts || !now) return '';
+
+  const event = readLondonClock(starts);
+  const days = londonDayNumber(event) - londonDayNumber(readLondonClock(now));
+  if (days === 0) return 'Tonight';
+  if (days === 1) return 'Tomorrow';
+
+  // A calendar date built at UTC midnight, so getUTCDay is its weekday.
+  const weekday = new Date(Date.UTC(event.year, event.month - 1, event.day)).getUTCDay();
+  if (days > 1 && days <= 6) return WEEKDAYS_LONG[weekday];
+  return `${WEEKDAYS_SHORT[weekday]} ${event.day} ${MONTHS_SHORT[event.month - 1]}`;
+}
+
+/**
+ * An event's start time in London, the way a pub poster says it: "7pm", or
+ * "7:30pm" when it is not on the hour. Noon is "12pm" and midnight "12am".
+ * Empty for anything that is not a date.
+ */
+export function formatEventTime(startsAtIso: string): string {
+  const starts = toValidDate(startsAtIso);
+  if (!starts) return '';
+  const { hour, minute } = readLondonClock(starts);
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  const suffix = hour < 12 ? 'am' : 'pm';
+  return minute === 0 ? `${hour12}${suffix}` : `${hour12}:${String(minute).padStart(2, '0')}${suffix}`;
 }
 
 const FOUR_AM = 4;
@@ -153,4 +214,15 @@ export function nextLondonFourAm(fromIso: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * The one line the screens print under an event title: "Tonight at 7pm",
+ * "Friday at 7:30pm", "Fri 16 Oct at 7pm". Empty for anything that is not a
+ * date.
+ */
+export function formatEventWhenAndTime(startsAtIso: string, nowIso: string | number | Date): string {
+  const when = formatEventWhen(startsAtIso, nowIso);
+  const time = formatEventTime(startsAtIso);
+  return when && time ? `${when} at ${time}` : '';
 }

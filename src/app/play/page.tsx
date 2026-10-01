@@ -11,6 +11,9 @@ import {
   type ResolvableSession,
 } from '@/lib/session-resolution';
 import { logError } from '@/lib/log-error';
+import { getEventsProjection } from '@/lib/events-feed/projection';
+import type { EventsProjection } from '@/lib/playlist';
+import { PhoneEvents } from '@/components/display/phone-events';
 
 interface PlayPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -28,7 +31,7 @@ interface PlayPageProps {
  *   session that does not exist.
  * - Otherwise the session rule the TV uses (A3): exactly one qualifying
  *   session redirects to it; none or several shows "No bingo running right
- *   now" (the events list joins it in S4).
+ *   now" with the upcoming events under it (spec 5.5).
  */
 export default async function PlayPage({ searchParams }: PlayPageProps) {
   const params = await searchParams;
@@ -44,6 +47,9 @@ export default async function PlayPage({ searchParams }: PlayPageProps) {
     if (error) logError('play', error);
     if (data || error) redirect(`/player/${requested}`);
   }
+
+  // Read alongside the sessions; cached, and never throws.
+  const eventsPromise = getEventsProjection();
 
   const { data: sessions, error: sessionsError } = await supabase
     .from('sessions')
@@ -68,13 +74,21 @@ export default async function PlayPage({ searchParams }: PlayPageProps) {
     redirect(`/player/${resolution.id}`);
   }
 
-  return <PlayMessage title="No bingo running right now" />;
+  return <PlayMessage title="No bingo running right now" events={await eventsPromise} />;
 }
 
-function PlayMessage({ title, body, retry = false }: { title: string; body?: string; retry?: boolean }) {
+interface PlayMessageProps {
+  title: string;
+  body?: string;
+  retry?: boolean;
+  /** Listed under the message, next bingo night first; links to the post-event pages, as on the idle TV. */
+  events?: EventsProjection | null;
+}
+
+function PlayMessage({ title, body, retry = false, events = null }: PlayMessageProps) {
   return (
     <main
-      className="flex min-h-screen items-center justify-center p-6 text-white"
+      className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-white"
       style={{ backgroundColor: '#005131' }}
     >
       <div
@@ -92,6 +106,7 @@ function PlayMessage({ title, body, retry = false }: { title: string; body?: str
           </Link>
         )}
       </div>
+      {events && <PhoneEvents projection={events} sessionDate={null} phase="idle" className="w-full max-w-sm" />}
     </main>
   );
 }
