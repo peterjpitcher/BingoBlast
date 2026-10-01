@@ -19,16 +19,10 @@ interface PromoSlideProps {
   slide: Slide;
   /** The screen's clock (epoch milliseconds), for "Tonight" and the like. */
   nowMs: number;
-  /**
-   * Shown on the event and next-bingo slides while the night is paused, for
-   * example "Break time" during a break. Omitted before and after the night
-   * and on the idle screen.
-   */
-  statusLabel?: string | null;
 }
 
 /** The slide itself; null for kinds the screen draws on its own (follow-along, rules, break, next game). */
-export function PromoSlide({ slide, nowMs, statusLabel }: PromoSlideProps) {
+export function PromoSlide({ slide, nowMs }: PromoSlideProps) {
   switch (slide.kind) {
     case 'event':
       return (
@@ -38,12 +32,11 @@ export function PromoSlide({ slide, nowMs, statusLabel }: PromoSlideProps) {
           qrUrl={slide.qrUrl}
           nowMs={nowMs}
           eyebrow="Coming up at The Anchor"
-          statusLabel={statusLabel}
         />
       );
     case 'next_bingo':
       return (
-        <NextBingoSlide key={slide.key} event={slide.event} qrUrl={slide.qrUrl} nowMs={nowMs} statusLabel={statusLabel} />
+        <NextBingoSlide key={slide.key} event={slide.event} qrUrl={slide.qrUrl} nowMs={nowMs} />
       );
     case 'thanks':
       return <ThanksSlide />;

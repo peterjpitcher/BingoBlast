@@ -9,7 +9,9 @@ import {
   getUsableEvents,
   playlistSignature,
   readEventsProjection,
+  slideAllowsCornerQr,
   slideCarriesQr,
+  slideShowsStatusInTopBar,
   type Slide,
 } from './playlist';
 import type { EventsProjection, ScreenEvent } from './events-feed/types';
@@ -454,6 +456,29 @@ test('only one QR code at a time: which slides carry their own', () => {
   }
   for (const kind of ['break', 'rules', 'next_game', 'thanks'] as const) {
     assert.equal(slideCarriesQr(kind), false, kind);
+  }
+});
+
+test('the corner follow-along card stays off the Break time card and off any slide with its own code', () => {
+  // The Break time card stands alone, centred, although it has no code of its own.
+  assert.equal(slideAllowsCornerQr('break'), false);
+  for (const kind of ['event', 'next_bingo', 'follow_along', 'review', 'idle_bingo'] as const) {
+    assert.equal(slideAllowsCornerQr(kind), false, kind);
+  }
+  // The rules and the next game keep it, so a late arrival can still join in.
+  for (const kind of ['rules', 'next_game', 'thanks'] as const) {
+    assert.equal(slideAllowsCornerQr(kind), true, kind);
+  }
+});
+
+test('only the event and next-bingo slides hand their status label to the top bar', () => {
+  for (const kind of ['event', 'next_bingo'] as const) {
+    assert.equal(slideShowsStatusInTopBar(kind), true, kind);
+  }
+  // The break card and the next-game card say it themselves; the rules slide
+  // carries its own label; the rest are shown outside a break.
+  for (const kind of ['break', 'next_game', 'rules', 'follow_along', 'review', 'idle_bingo', 'thanks'] as const) {
+    assert.equal(slideShowsStatusInTopBar(kind), false, kind);
   }
 });
 

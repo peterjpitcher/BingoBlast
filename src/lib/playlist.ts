@@ -403,6 +403,29 @@ export function slideCarriesQr(kind: SlideKind): boolean {
 }
 
 /**
+ * Whether the TV's corner "Follow along on your phone" card stays up beside
+ * this slide. Not beside a slide with a code of its own (slideCarriesQr), and
+ * not beside the Break time card: that one stands alone in the middle of the
+ * screen, so the kitchen message is what the room reads (the owner's call,
+ * 1 October 2026). The card and its column go together, which is what centres
+ * the slide.
+ */
+export function slideAllowsCornerQr(kind: SlideKind): boolean {
+  return kind !== 'break' && !slideCarriesQr(kind);
+}
+
+/**
+ * True for a slide that is about something other than the night itself: an
+ * event, or the next bingo night. While one is up on a break or between games,
+ * the TV's top bar says where the night is ("Break time", "Next game coming
+ * up") in place of the game and book colour, so the slide can give all its
+ * room to the artwork (the owner's call, 1 October 2026).
+ */
+export function slideShowsStatusInTopBar(kind: SlideKind): boolean {
+  return kind === 'event' || kind === 'next_bingo';
+}
+
+/**
  * The loop for a phase. An empty list means the screen shows its own fixed
  * layout (a game being called, a claim being checked, a win).
  *
