@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { useRouter } from 'next/navigation';
 import { validateGamePrizes } from '@/lib/prize-validation';
 import { formatDateInLondon, formatDateTimeInLondon } from '@/lib/dates';
-import { formatPence, formatPoundsAmount, totalPaidOutPence } from '@/lib/money';
+import { describeWinnerTotal, formatPence, formatPoundsAmount, totalPaidOutPence, winnerTotalPence } from '@/lib/money';
 
 type Session = Database['public']['Tables']['sessions']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -77,7 +77,8 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
   const router = useRouter();
 
   // Excludes voided wins, and sums each winner's share rather than the whole
-  // prize, so a tie is counted once.
+  // prize, so a tie is counted once. A share is the ordinary share plus the
+  // snowball jackpot share (X22).
   const sessionPayout = useMemo(
     () => totalPaidOutPence(winners.filter((w) => w.is_void !== true)),
     [winners]
@@ -397,6 +398,13 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                 plus {sessionPayout.uncountedRows} non-cash
               </span>
             )}
+            {sessionPayout.jackpotNotRecordedRows > 0 && (
+              <span className="block text-xs text-slate-500">
+                {sessionPayout.jackpotNotRecordedRows === 1
+                  ? '1 jackpot amount not recorded, so not in this total'
+                  : `${sessionPayout.jackpotNotRecordedRows} jackpot amounts not recorded, so not in this total`}
+              </span>
+            )}
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -439,16 +447,21 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                             JACKPOT
                           </span>
                         )}
-                        {winner.is_void !== true
-                          && winner.prize_share_pence !== null
-                          && winner.prize_share_pence !== undefined && (
-                          <span className="block text-xs font-mono text-slate-400">
-                            {formatPence(winner.prize_share_pence)}
-                            {winner.prize_amount_pence !== null
-                              && winner.prize_amount_pence !== winner.prize_share_pence
-                              && ` (share of ${formatPence(winner.prize_amount_pence)})`}
-                          </span>
-                        )}
+                        {(() => {
+                          // X22: the ordinary share plus the jackpot share, or
+                          // "jackpot amount not recorded" where it is unknown.
+                          const totalLine = describeWinnerTotal(winnerTotalPence(winner));
+                          if (totalLine === null) return null;
+                          const showShareOf = winner.prize_amount_pence !== null
+                            && winner.prize_share_pence !== null
+                            && winner.prize_amount_pence !== winner.prize_share_pence;
+                          return (
+                            <span className="block text-xs font-mono text-slate-400">
+                              {totalLine}
+                              {showShareOf && ` (prize share of ${formatPence(winner.prize_amount_pence)})`}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-right">
                         {winner.is_void ? (

@@ -1,6 +1,6 @@
 ---
 generated: true
-last_updated: 2026-04-30T00:00:00Z
+last_updated: 2026-10-01T00:00:00Z
 source: session-setup
 project: anchor-bingo
 ---
@@ -27,12 +27,16 @@ App Router maps `src/app/<segments>/page.tsx` → URL paths. Dynamic segments us
 | `/display` | `src/app/display/page.tsx` | Public (auto-redirects to single active session) |
 | `/display/[sessionId]` | `src/app/display/[sessionId]/page.tsx` | Public |
 | `/player/[sessionId]` | `src/app/player/[sessionId]/page.tsx` | Public (guest-friendly) |
+| `/play` | `src/app/play/page.tsx` | Public. The permanent follow-along link behind the TV's QR code: `?s=<uuid>` redirects to `/player/<uuid>`; otherwise exactly one qualifying session redirects to it, none shows "No bingo running right now" with upcoming events, and several shows a list of the qualifying sessions (running first) linking to `/play?s=<id>`. Only a well-formed uuid ever goes into the redirect, and only to `/player` on this site |
 
 ## API Routes
 
 | URL | Method(s) | File | Auth |
 |-----|-----------|------|------|
 | `/api/setup` | `GET` (returns 405), `POST` | `src/app/api/setup/route.ts` | `x-setup-secret` header validated against `SETUP_SECRET` with `timingSafeEqual`; uses `SUPABASE_SERVICE_ROLE_KEY` for privileged DB ops; returns 404 if `SETUP_SECRET` is unset |
+| `/api/time` | `GET` | `src/app/api/time/route.ts` | Public. The server clock, for the public screens' clock offset (`src/lib/clock-offset.ts`). Never cached |
+| `/api/build` | `GET` | `src/app/api/build/route.ts` | Public. The deployment this server runs, compared with the id baked into a long-open TV's bundle (`src/lib/build-check.ts`) to spot a new release; `dev` outside Vercel |
+| `/api/screen/events` | `GET` | `src/app/api/screen/events/route.ts` | Public. Upcoming events for the TV and phones from the management app's feed. Takes no parameters, so there is one cached answer for everyone; the projection is cached for five minutes and the response by the CDN for a minute |
 
 ## Layouts
 
@@ -44,7 +48,7 @@ App Router maps `src/app/<segments>/page.tsx` → URL paths. Dynamic segments us
 
 | Surface | Routes | Middleware? |
 |---------|--------|-------------|
-| Public | `/`, `/display`, `/display/[sessionId]`, `/player/[sessionId]` | No — bypasses the proxy |
+| Public | `/`, `/display`, `/display/[sessionId]`, `/player/[sessionId]`, `/play`, `/api/time`, `/api/build`, `/api/screen/events`, `/api/setup` (secret-gated) | No: they bypass the proxy |
 | Auth | `/admin`, `/admin/*`, `/host`, `/host/*`, `/login` | Yes — proxy runs `updateSession()` |
 
 ## Auth Flow
@@ -59,7 +63,7 @@ App Router maps `src/app/<segments>/page.tsx` → URL paths. Dynamic segments us
      ],
    }
    ```
-   Public routes (`/display/*`, `/player/*`, `/`) deliberately bypass the middleware so the TV and follower screens are not session-refreshed on every request. `updateSession()` itself handles redirecting unauthenticated users away from `/admin/*` and `/host/*`, and redirecting already-logged-in users away from `/login`.
+   Public routes (`/display/*`, `/player/*`, `/play`, `/api/*`, `/`) deliberately bypass the middleware so the TV and follower screens are not session-refreshed on every request. `updateSession()` itself handles redirecting unauthenticated users away from `/admin/*` and `/host/*`, and redirecting already-logged-in users away from `/login`.
 2. Defence in depth: auth is also enforced **per page** in server components via `getSupabaseServerClient()` → `supabase.auth.getUser()` → `redirect('/login')`.
 3. Server actions re-verify auth (`getUser()`) and check role via `profiles.role` lookup. See [[server-actions]].
 4. The login client page calls the `login` server action in `src/app/login/actions.ts` which sets Supabase cookies and `revalidatePath('/', 'layout')`. The `signup()` action is also exported but returns an "invite-only" error — the login page UI does not surface a sign-up option.

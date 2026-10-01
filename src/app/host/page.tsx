@@ -3,6 +3,7 @@ import { createClient } from '@/utils/supabase/server';
 import { redirect } from 'next/navigation';
 import { signout } from '@/app/login/actions';
 import HostDashboard from './dashboard';
+import { listUnsettledSnowballGames } from './actions';
 import { Database } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import Image from 'next/image';
@@ -67,6 +68,11 @@ export default async function HostPage() {
 
   const sessions: SessionWithGames[] = (sessionsData || []) as SessionWithGames[];
 
+  // Finished snowball games whose pot never settled (X6), for hosts and admins
+  // alike: see listUnsettledSnowballGames. A failed read shows a warning rather
+  // than an empty list, which would read as "every pot has settled".
+  const unsettled = await listUnsettledSnowballGames();
+
   return (
     <div className="min-h-screen-safe anchor-theme bg-[#003f27] text-white pb-20">
        <header className="p-4 flex justify-between items-center border-b border-[#1f7c58] bg-[#005131]/95 backdrop-blur-sm sticky top-0 z-10">
@@ -78,14 +84,18 @@ export default async function HostPage() {
           </div>
           <div className="flex items-center gap-4">
              <Link href="/" className="text-sm text-white/70 hover:text-white">← Home</Link>
-             <span className="text-xs text-white/80 hidden sm:inline-block">{user.email}</span>
+             <span className="text-sm text-white/80 hidden sm:inline-block">{user.email}</span>
              <form action={signout}>
                 <Button variant="ghost" size="sm" className="text-white hover:bg-[#0f6846]">Sign Out</Button>
              </form>
           </div>
        </header>
       <main className="p-4">
-        <HostDashboard sessions={sessions} />
+        <HostDashboard
+          sessions={sessions}
+          unsettledSnowballGames={unsettled.success ? (unsettled.data ?? []) : []}
+          settlementCheckFailed={!unsettled.success}
+        />
       </main>
     </div>
   );

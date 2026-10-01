@@ -1,6 +1,6 @@
 ---
 generated: true
-last_updated: 2026-04-30T00:00:00Z
+last_updated: 2026-10-01T00:00:00Z
 source: session-setup
 project: anchor-bingo
 ---
@@ -35,14 +35,22 @@ See [[relationships]] for the inverse mapping (table → actions that touch it).
 | `delete_session_safe` | `deleteSession` | Atomic precheck + delete under row lock |
 | `delete_game_safe` | `deleteGame` | Atomic precheck + delete under row lock |
 | `update_game_safe` | `updateGame` | Atomic structural-update guard against `game_states.status` |
-| `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session |
-| `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on the `game_states` row: asserts host role, controller, status, remaining balls and the host gap (`p_min_gap_ms`), appends the ball, returns the committed row |
-| `void_last_number` | `voidLastNumber` | Atomic undo under the same row lock: counts non-void winners on the current ball inside the same transaction and refuses when one exists, decrements the count, clears the win display, leaves `last_call_at` untouched |
-| `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked. Idempotent on `p_client_request_id` |
-| `settle_snowball_pot` | `handleSnowballPotUpdate`, called by `endGame`, `advanceToNextStage` and `skipStage` | Settles the pot for a finished game under a `for update` lock on the pot row: derives reset-vs-rollover from non-void jackpot winners, derives both new values from the pot row's own base/increment columns, then writes the `snowball_pot_history` claim and moves the pot in one transaction. Returns an outcome of `settled`, `already_settled`, `not_snowball` or `test_session` |
-| `assert_is_host` | helper, called by the four above | Raises unless `profiles.role` is `admin` or `host` |
+| `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session, clearing `sessions.started_at` |
+| `start_game` | `startGame` | Locks the session, then the `game_states` row. Refuses `night_ended` and `other_game_in_progress`, and `snowball_settled` for a re-open of a snowball game whose pot has already settled, then starts (checking the shuffle is a permutation of 1 to 90), re-opens or takes over the game, sets the session running and stamps `sessions.started_at` once. Its third argument, `p_cash_jackpot_amount`, is for a fresh start of a `jackpot` game only: positive, at most two decimals, written as the one stage's prize text ("£125 Cash Jackpot") in the same transaction. That is the only `games` write a host can make, because `games` UPDATE is admin only in RLS |
+| `finish_game` | every finishing path | Same lock order. Completes the game, clears the pause, break, win and claim, clears `active_game_id`, and completes the session when every game is completed. Idempotent, returning `{game_state, session_completed}` |
+| `end_night` | `endNight`, `moveToNextGameAfterWin` | Session lock; refuses `game_in_progress`; idempotent, so the first `completed_at` stands |
+| `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on the `game_states` row: asserts host role, controller, status, remaining balls and the host gap (`p_min_gap_ms`), appends the ball, returns the committed row. Idempotent on the call key |
+| `void_last_number` | `voidLastNumber`, `undoLastNumberForClaim` | Atomic undo under the same row lock: counts non-void winners on the current ball inside the same transaction and refuses when one exists, decrements the count, clears the win display, leaves `last_call_at` untouched. Paused for a claim, it needs the claim attempt and the expected ball count, and allows that attempt one undo |
+| `begin_claim_check` | `beginClaimCheck` | Pauses the game and stores the claim attempt with the stage and ball count at that moment |
+| `set_claim_draft` | `setClaimDraft` | Stores the claimed numbers in tap order for the TV and phones; a lower draft sequence is ignored |
+| `check_claim` | `checkClaim` | Re-reads the board under the lock and gives the verdict: `valid`, `invalid`, `late`, or `missing_last_ball` for the host to decide |
+| `required_claim_count` | `check_claim`, `record_winner_atomic` | Line 5, Two Lines 10, Full House 15 |
+| `record_winner_atomic` | `recordWinner` | Inserts the `winners` row and updates the win display in one transaction under the `game_states` row lock. Derives call count and expected stage server-side, and re-checks the snowball jackpot window with the pot row locked. Idempotent on `p_client_request_id`, which is the claim attempt. From `20261001000400_claim_enforcement.sql` a new winner needs that attempt with a `valid` verdict, except a Manual Snowball Win inside the open jackpot window, which is refused with `jackpot_already_won` while a live jackpot winner already stands at that stage |
+| `settle_snowball_pot` | `handleSnowballPotUpdate`, after `finish_game`, and `settleSnowballPotForGame` | Settles the pot for a finished game under a `for update` lock on the pot row: derives reset-vs-rollover from non-void jackpot winners, derives both new values from the pot row's own base/increment columns, then writes the `snowball_pot_history` claim and moves the pot in one transaction. Returns an outcome of `settled`, `already_settled`, `not_snowball` or `test_session`. Refuses `game_not_completed` |
+| `list_unsettled_snowball_games` | `listUnsettledSnowballGames` | Read only (`stable`). Finished snowball games outside test nights that ended on or after 2026-10-01 00:00 Europe/London and have no `snowball_pot_history` row for the game and its pot, which is exactly the `already_settled` test. One night, or every night when `p_session_id` is null. Security definer, so a host gets a true answer while `snowball_pot_history` stays admin only; it returns games and nights, never a pot figure |
+| `assert_is_host` | helper, called by every host function | Raises unless `profiles.role` is `admin` or `host` |
 
-The four admin RPCs come from `supabase/migrations/20260430124120_atomic_admin_mutations.sql`; the host functions from `supabase/migrations/20260729231945_atomic_host_mutations.sql`, with `settle_snowball_pot` from `supabase/migrations/20260730065531_atomic_snowball_settlement.sql` and `record_winner_atomic` replaced by `supabase/migrations/20260730064309_winner_idempotency_key.sql`. All follow the same conventions: `security definer`, `set search_path = public`, `revoke all ... from public`, `grant execute ... to authenticated`, and a `for update` row lock so every precheck is binding rather than advisory.
+The four admin RPCs come from `supabase/migrations/20260430124120_atomic_admin_mutations.sql`; the host functions from `supabase/migrations/20260729231945_atomic_host_mutations.sql`, with `settle_snowball_pot` from `supabase/migrations/20260730065531_atomic_snowball_settlement.sql` and `record_winner_atomic` replaced by `supabase/migrations/20260730064309_winner_idempotency_key.sql`. The lifecycle, claim and money functions of 1 October 2026 come from `20261001000100_night_lifecycle.sql` (`start_game`, `finish_game`, `end_night`), `20261001000200_claim_attempts.sql` (`begin_claim_check`, `set_claim_draft`, `check_claim`, `required_claim_count`, the bound `void_last_number`), `20261001000300_jackpot_components.sql` (`list_unsettled_snowball_games`, and the jackpot as its own money component) and `20261001000400_claim_enforcement.sql`. All follow the same conventions: `security definer`, a pinned `search_path`, `revoke all ... from public, anon`, `grant execute ... to authenticated, service_role`, and a `for update` row lock so every precheck is binding rather than advisory.
 
 `settle_snowball_pot` carries a second job beyond atomicity: it is the reason `snowball_pots` UPDATE and `snowball_pot_history` INSERT can stay admin-only in RLS while a host-role account can still settle a pot. RLS grants row access and not column or value access, so widening those policies would let a host write any value to the pot directly. The function is the narrow door instead: the caller names a game id and every written value is derived server-side.
 
@@ -52,19 +60,19 @@ A transaction protects a call that **fails**. It does nothing for a call that **
 
 A unique constraint is not available, because ties are real: two punters can shout on the same ball and both are winners, so `(game_id, stage)` and `(game_id, stage, call_count_at_win)` are legitimately non-unique.
 
-So the identity comes from the caller. `winners.client_request_id` is a nullable `uuid` with a unique index where not null. The host client mints one key when the Record Winner modal opens and sends it with the claim:
+So the identity comes from the caller. `winners.client_request_id` is a nullable `uuid` with a unique index where not null. Since 1 October 2026 that key is the **claim attempt**: the uuid the host's phone mints when the host taps Check Claim or Check another claimant, which `begin_claim_check` stores and which then binds the draft, the verdict, the one permitted undo and the winner. It replaces the key the Record Winner modal used to mint when it opened:
 
-- **A retry** is the same tap, so the same key. The function finds it already recorded, inserts nothing, and returns the current `game_states` row rather than raising, so the retry is a safe no-op and the host still lands on Post Win.
-- **A tie** is a different claim, so a different key. Both rows save.
+- **A retry** is the same attempt, so the same key. The function finds it already recorded, inserts nothing, and returns the current `game_states` row rather than raising, so the retry is a safe no-op and the host still lands on Post Win.
+- **A tie** is a different claimant, so a different attempt (Check another claimant). Both rows save.
 - **Rows written before this migration** keep a null key. The index ignores nulls, so nothing was backfilled, and a call that omits the key behaves exactly as it did before, with no protection.
 
 The idempotency check runs **before** the controller, status and stage prechecks. Once the write is on record those prechecks can only invent a failure: a lost response gives the game time to move on, and refusing a retry for a win that is already recorded reads to the host as "it did not save". `request_id_reused` is the one case that does raise, for a key presented against a different game, which is a client bug rather than a retry.
 
-What the key does **not** cover: a *fresh* claim on a ticket that was already paid. Reopening Record Winner mints a new key, and it has to, because that is the same path a genuine tie arrives on. `clearSpentClaim()` in `game-control.tsx` is what closes that hole, by making sure the host never sees a live Record Winner button for a win already on record.
+What the key does **not** cover: a *fresh* claim on a ticket that was already paid. Check another claimant mints a new attempt, and it has to, because that is the same path a genuine tie arrives on. `clearSpentClaim()` in `game-control.tsx` closes that hole on the host screen, by closing the claim and marking its attempt finished so the host never sees a live Record Winner button for a win already on record. From `20261001000400_claim_enforcement.sql` the database also refuses a new winner whose attempt has no `valid` verdict.
 
-## Migrations Applied
+## Migrations
 
-26 migrations under `supabase/migrations/`, latest 2026-07-30. Versions match the migration history recorded in production (`supabase_migrations.schema_migrations`), so `supabase db push` finds nothing pending:
+49 migrations under `supabase/migrations/`. Versions before `20261001` are kept equal to the history production records (`supabase_migrations.schema_migrations`); that was not re-checked against production for this update. The four `20261001*` migrations (night lifecycle, claim attempts, jackpot components, claim enforcement) are not yet applied to any real database; their rollbacks are in `supabase/rollback/`, and `npm run test:db` replays every migration and proves each rollback restores the previous functions exactly.
 
 - `20251201000000` - `baseline_schema`
 - `20251221101434` - `add_active_game_id`
@@ -92,6 +100,29 @@ What the key does **not** cover: a *fresh* claim on a ticket that was already pa
 - `20260730065639` - `harden_settle_snowball_pot_anon_grant`
 - `20260730070705` - `revoke_anon_execute_on_host_rpcs`
 - `20260730072329` - `revoke_anon_on_bump_game_state_version`
+- `20260825080600` - `pending_role_for_new_accounts`
+- `20260825080601` - `winners_insert_only_via_rpc`
+- `20260825080602` - `snowball_pot_archive_and_guards`
+- `20260825080603` - `atomic_manual_pot_adjustments`
+- `20260825080604` - `session_reset_audit_and_guard`
+- `20260825080605` - `gate_forced_snowball_jackpot`
+- `20260825080606` - `call_next_number_idempotency`
+- `20260825080607` - `winners_not_publicly_readable`
+- `20260825080608` - `prize_amounts_and_tie_shares`
+- `20260825080609` - `backfill_pot_history`
+- `20260825080610` - `anonymise_historic_winner_names`
+- `20260825080611` - `pending_role_default_and_trigger`
+- `20260825080612` - `drop_winner_name_archive`
+- `20260905053040` - `default_privileges_stop_anon_inheriting`
+- `20260905053117` - `drop_orphan_anon_executable_booking_function`
+- `20260929091809` - `publish_snowball_pots_realtime`
+- `20260929101118` - `explicit_grants_public_mirror_and_reset_log`
+- `20260929103001` - `default_privileges_revoke_public_execute_globally`
+- `20260929103018` - `state_service_role_execute_on_functions`
+- `20261001000100` - `night_lifecycle`
+- `20261001000200` - `claim_attempts`
+- `20261001000300` - `jackpot_components`
+- `20261001000400` - `claim_enforcement`
 
 ## `state_version` — Live-State Ordering Field
 
@@ -113,9 +144,9 @@ Rollback note: the pre-2026-07-29 application reads `call_delay_seconds` as the 
 
 | Variable | Public/Server | Declared in `.env.example` | Used in |
 |----------|---------------|----------------------------|---------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Public | yes | `utils/supabase/{client,server,middleware}.ts`, `app/api/setup/route.ts`, `app/host/actions.ts`, `app/login/page.tsx` |
+| `NEXT_PUBLIC_SUPABASE_URL` | Public | yes | `utils/supabase/{client,server,middleware}.ts`, `app/api/setup/route.ts`, `app/login/page.tsx`, `lib/env.ts` (checked at build) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public | yes | `utils/supabase/{client,server,middleware}.ts`, `app/login/page.tsx` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server-only | yes | `app/api/setup/route.ts`, `app/host/actions.ts` (privileged winner writes) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only | yes | `app/api/setup/route.ts` only. The host actions no longer use it: every host write goes through a cookie-client RPC |
 | `SETUP_SECRET` | Server-only | yes | `app/api/setup/route.ts` |
 | `NEXT_PUBLIC_SITE_URL` | Public | yes | `app/display/[sessionId]/page.tsx` — fallback origin for the player follower QR URL when request headers are unavailable in production |
 

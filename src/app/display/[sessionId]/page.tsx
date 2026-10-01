@@ -7,18 +7,24 @@ import type { InitialLoadStatus } from './display-ui';
 import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
+import { getTodayIsoDateInLondon } from '@/lib/dates';
+import { getEventsProjection } from '@/lib/events-feed/projection';
+import { getRequestOrigin, getSiteOrigin } from '@/lib/site-origin';
+import {
+  CANDIDATE_SESSION_STATUSES,
+  resolveDisplaySession,
+  type ResolvableSession,
+} from '@/lib/session-resolution';
+import {
+  PUBLIC_GAME_COLUMNS,
+  PUBLIC_GAME_STATE_COLUMNS,
+  PUBLIC_SESSION_COLUMNS,
+} from '@/lib/public-selectors';
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
-
-// Explicit narrow column lists keep public surfaces from leaking unintended
-// fields and document exactly what the UI consumes from each table.
-const SESSION_SELECT = 'id, name, status, active_game_id';
-const GAME_SELECT =
-  'id, session_id, game_index, name, type, stage_sequence, background_colour, prizes, snowball_pot_id';
-const GAME_STATE_PUBLIC_SELECT =
-  'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
 
 /**
  * PostgREST's "no rows returned by .single()". Anything else is an outage.
@@ -32,19 +38,26 @@ const GAME_STATE_PUBLIC_SELECT =
  */
 const NO_ROWS_RETURNED = 'PGRST116';
 
-export default async function DisplayPage({ params }: PageProps) {
+export default async function DisplayPage({ params, searchParams }: PageProps) {
   const { sessionId } = await params;
+  const rehearsal = (await searchParams).rehearsal === '1';
 
   if (!isUuid(sessionId)) {
     notFound();
   }
+
+  // Upcoming events for the start and end of the night (spec 5.5), read
+  // alongside the session rather than after it. Cached, and never throws, so
+  // a management app outage can never stop the TV loading; at worst it waits
+  // for the projection's own 8 second refresh limit on a cold cache.
+  const eventsPromise = getEventsProjection();
 
   const supabase = await createClient();
 
   // Fetch session details
   const { data: sessionRow, error: sessionError } = await supabase
     .from('sessions')
-    .select(SESSION_SELECT)
+    .select(PUBLIC_SESSION_COLUMNS)
     .eq('id', sessionId)
     .single<Database['public']['Tables']['sessions']['Row']>();
 
@@ -64,30 +77,44 @@ export default async function DisplayPage({ params }: PageProps) {
     // A shell carrying the real id, so the client's poll re-reads the session
     // and replaces this the moment the database answers again. The name is
     // deliberately neutral rather than alarming: it is on a pub TV.
+    // state_version -1 lets the first real snapshot replace it.
     session = {
       id: sessionId,
       name: 'Bingo',
       status: 'running',
       active_game_id: null,
+      start_date: getTodayIsoDateInLondon(),
+      started_at: null,
+      completed_at: null,
+      state_version: -1,
     } as Database['public']['Tables']['sessions']['Row'];
   }
 
-  // Trusted origin for the join QR. Prefer the configured public origin
-  // (set in production via NEXT_PUBLIC_SITE_URL) over the incoming request
-  // headers — Vercel passes x-forwarded-host through unmodified, so an
-  // attacker who can reach the deployment with a spoofed Host header could
-  // otherwise turn the pub display QR into a phishing redirect.
-  const configuredOrigin = (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/$/, '');
+  // The follow-along QR (spec 5.4). The origin never comes from request
+  // headers on Vercel (getSiteOrigin), so a spoofed Host header cannot turn
+  // the pub TV's QR into someone else's link. The QR is the short `/play` when
+  // this is the one session /play would pick by itself, and `/play?s=<id>`
+  // otherwise; the TV re-checks that once a minute (useDisplayLifecycle).
   const requestHeaders = await headers();
-  const forwardedHost = requestHeaders.get('x-forwarded-host');
-  const host = forwardedHost || requestHeaders.get('host');
-  const forwardedProto = requestHeaders.get('x-forwarded-proto');
-  const protocol = forwardedProto || (host?.includes('localhost') ? 'http' : 'https');
-  const headerOrigin = host ? `${protocol}://${host}` : '';
-  const origin = configuredOrigin || headerOrigin;
-  const playerJoinUrl = origin
-    ? `${origin}/player/${session.id}`
-    : `/player/${session.id}`;
+  const followOrigin = getSiteOrigin({
+    env: process.env,
+    requestOrigin: getRequestOrigin((name) => requestHeaders.get(name)),
+  });
+  let initialIsUniqueSession = false;
+  if (!sessionLoadFailed) {
+    const { data: candidates, error: candidatesError } = await supabase
+      .from('sessions')
+      .select('id, status, start_date, is_test_session')
+      .in('status', CANDIDATE_SESSION_STATUSES)
+      .returns<ResolvableSession[]>();
+    if (candidatesError || !candidates) {
+      // Not worth failing the page for: the id-carrying QR is always correct.
+      logError('display', candidatesError ?? new Error('Candidate sessions lookup returned nothing'));
+    } else {
+      const resolution = resolveDisplaySession(candidates, getTodayIsoDateInLondon(), { includeTest: false });
+      initialIsUniqueSession = resolution.kind === 'one' && resolution.id === session.id;
+    }
+  }
 
   let activeGame: Database['public']['Tables']['games']['Row'] | null = null;
   let initialGameState: Database['public']['Tables']['game_states_public']['Row'] | null = null;
@@ -101,7 +128,7 @@ export default async function DisplayPage({ params }: PageProps) {
     // Fetch the active game details
     const { data: game, error: gameError } = await supabase
       .from('games')
-      .select(GAME_SELECT)
+      .select(PUBLIC_GAME_COLUMNS)
       .eq('id', session.active_game_id)
       .single<Database['public']['Tables']['games']['Row']>();
 
@@ -113,7 +140,7 @@ export default async function DisplayPage({ params }: PageProps) {
       // Fetch the initial game state for the active game
       const { data: gameState, error: gameStateError } = await supabase
         .from('game_states_public')
-        .select(GAME_STATE_PUBLIC_SELECT)
+        .select(PUBLIC_GAME_STATE_COLUMNS)
         .eq('game_id', game.id)
         .single<Database['public']['Tables']['game_states_public']['Row']>();
 
@@ -131,9 +158,11 @@ export default async function DisplayPage({ params }: PageProps) {
     }
   }
 
-  // The waiting screen is no longer decided here. DisplayUI derives it as
-  // "session not completed and no renderable game state", which covers both the
-  // pre-game period and the gap between games, so the TV is never left blank.
+  // The screen for each part of the night is decided in DisplayUI from the
+  // session and the active game's state (getNightPhase), so it follows the
+  // night live rather than from this first read.
+  const initialEvents = await eventsPromise;
+
   return (
     <DisplayUI
       session={session}
@@ -141,7 +170,10 @@ export default async function DisplayPage({ params }: PageProps) {
       initialGameState={initialGameState}
       initialPrizeText={prizeText}
       initialLoadStatus={initialLoadStatus}
-      playerJoinUrl={playerJoinUrl}
+      followOrigin={followOrigin}
+      initialIsUniqueSession={initialIsUniqueSession}
+      rehearsal={rehearsal}
+      initialEvents={initialEvents}
     />
   );
 }

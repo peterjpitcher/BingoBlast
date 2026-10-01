@@ -1,6 +1,6 @@
 ---
 generated: true
-last_updated: 2026-04-30T00:00:00Z
+last_updated: 2026-10-01T00:00:00Z
 source: session-setup
 project: anchor-bingo
 ---
@@ -51,54 +51,68 @@ Five files contain `'use server'` directives. Auth is re-verified server-side in
 
 ## `src/app/host/actions.ts`
 
-The largest action file — orchestrates live game flow. Some actions construct a service-role client (`SUPABASE_SERVICE_ROLE_KEY`) for privileged writes that need to bypass RLS.
+The largest action file: it orchestrates the live night. Every host action uses the cookie client, never the service role, because every host function reads `auth.uid()` (null under `service_role`) and writes it to audit columns. The service-role write client `startGame` used to hold is gone; the cash jackpot prize it wrote now goes through `start_game`. Payload types live in `src/app/host/claim-action-types.ts`, because a `'use server'` module may only export async functions.
 
-| Action | Tables | Auth |
-|--------|--------|------|
-| `startGame(...)` | `games`, `game_states`, `sessions`, `profiles` | host |
-| `takeControl(gameId)` | `game_states`, `profiles` | host |
-| `sendHeartbeat(gameId)` | `game_states` | host |
-| `getCurrentGameState(gameId)` | `game_states` | host |
-| `callNextNumber(gameId)` | `game_states`, `games` | host |
-| `toggleBreak(gameId, onBreak)` | `game_states` | host |
-| `pauseForValidation(gameId)` | `game_states` | host |
-| `resumeGame(gameId)` | `game_states` | host |
-| `endGame(gameId, sessionId)` | `games`, `game_states`, `sessions` | host |
-| `moveToNextGameOnBreak(...)` | `games`, `game_states` | host |
-| `moveToNextGameAfterWin(...)` | `games`, `game_states`, `winners` | host |
-| `validateClaim(gameId, claimedNumbers)` | `game_states` | host (validates claimed numbers vs called set — see commit `ea505e1`) |
-| `announceWin(gameId, stage)` | `game_states`, `winners` | host |
-| `advanceToNextStage(gameId)` | `game_states` | host |
-| `recordWinner(...)` | `winners`, `game_states`, `snowball_pots`, `snowball_pot_history` | host |
-| `toggleWinnerPrizeGiven(sessionId, gameId, winnerId, prizeGiven)` | `winners` (via `set_winner_prize_given`, `prize_given` column only) | host |
-| `skipStage(gameId)` | `game_states` | host (stage index and stage count derived server-side, never taken from the client) |
-| `voidLastNumber(gameId)` | `game_states` | host |
+| Action | Tables / RPC | Auth |
+|--------|--------------|------|
+| `startGame(sessionId, gameId, cashJackpotAmountInput?)` | reads `games`, `game_states`; RPC `start_game` (with the cash jackpot amount on a fresh start of a jackpot game) | host (role guard in the RPC, heartbeat check before a takeover) |
+| `endNight(sessionId)` | RPC `end_night` | host |
+| `takeControl(gameId)` | `game_states` | host |
+| `sendHeartbeat(gameId)` | `game_states` | controller |
+| `callNextNumber(gameId, clientRequestId)` | RPC `call_next_number` | controller (checked in the RPC) |
+| `toggleBreak(gameId, onBreak)` | `game_states` | controller |
+| `beginClaimCheck(gameId, attemptId, newClaimant?)` | RPC `begin_claim_check` | controller (in the RPC) |
+| `setClaimDraft(gameId, attemptId, numbers, seq)` | RPC `set_claim_draft` | controller (in the RPC) |
+| `checkClaim(gameId, attemptId, numbers, rejectAsLate?)` | RPC `check_claim` | controller (in the RPC) |
+| `undoLastNumberForClaim(gameId, attemptId, expectedCount)` | RPC `void_last_number` (bound to the attempt) | controller (in the RPC) |
+| `resumeGame(gameId)` | `game_states`, reads `games`, `winners` | controller |
+| `endGame(gameId, sessionId)` | RPC `finish_game`, then `settle_snowball_pot` | host (controller check in `finish_game`) |
+| `moveToNextGameOnBreak(currentGameId, sessionId, cashJackpotAmountInput?)` | `finish_game`, `settle_snowball_pot`, then `startGame`, `toggleBreak` | controller |
+| `moveToNextGameAfterWin(currentGameId, sessionId, cashJackpotAmountInput?)` | `finish_game`, `settle_snowball_pot`, then `startGame`, or `end_night` on the last game | controller |
+| `advanceToNextStage(gameId, expectedStageIndex, putOnBreak?)` | `game_states`, reads `games`; on the final stage `finish_game` and `settle_snowball_pot` | controller |
+| `skipStage(gameId, expectedStageIndex)` | `game_states`, reads `games`; on the final stage `finish_game` and `settle_snowball_pot` | controller (stage index and count derived server-side) |
+| `recordWinner(...)` | RPC `record_winner_atomic` (keyed on the claim attempt) | controller (in the RPC) |
+| `toggleWinnerPrizeGiven(sessionId, gameId, winnerId, prizeGiven)` | RPC `set_winner_prize_given` (`prize_given` column only) | controller |
 | `voidWinnerFromHost(sessionId, gameId, winnerId, reason)` | `winners` | admin only (lets the host clear a blocked undo without leaving the game) |
+| `voidLastNumber(gameId)` | RPC `void_last_number` (unpaused form) | controller (in the RPC) |
+| `settleSnowballPotForGame(gameId)` | RPC `settle_snowball_pot` | host (the retry banner and the dashboard Settle button) |
+| `listUnsettledSnowballGames(sessionId?)` | RPC `list_unsettled_snowball_games` (read only) | host |
 
-All host actions wrap mutations in auth checks and call `revalidatePath('/host')`, plus `revalidatePath('/host/[sessionId]/[gameId]')` in the actions that already hold a `sessionId`. Live-state mutations also require `requireController` (compares `game_states.controlling_host_id` to the caller's user id).
+Removed on 1 October 2026: `validateClaim` (replaced by `checkClaim`, the server verdict), `pauseForValidation` (replaced by `beginClaimCheck`), `announceWin` (the TV now shows a win only once `record_winner_atomic` has recorded it), the internal `maybeCompleteSession` (replaced by `finish_game`, which completes the session when every game is completed) and `getCurrentGameState`.
+
+Mutations call `revalidatePath('/host')`, plus `revalidatePath('/host/[sessionId]/[gameId]')` where the action holds a `sessionId`. Direct `game_states` writes other than `takeControl` require `requireController` (compares `game_states.controlling_host_id` to the caller); the RPCs check the controller themselves under their row lock.
+
+### The claim attempt
+
+A claim check is a **claim attempt**: a uuid the host's phone mints (`newClaimRequestId()` in `src/lib/claim-request-id.ts`) when the host taps Check Claim or Check another claimant. `begin_claim_check` stores it on `game_states` with the stage and ball count at that moment, and the attempt then binds every draft (`set_claim_draft`), the verdict (`check_claim`), the one permitted undo (`void_last_number` with the attempt and the ball count the host saw) and the recorded winner. It replaces the claim key the Record Winner modal used to mint: `recordWinner` passes the attempt as `p_client_request_id`, so a retry with the same attempt inserts nothing and a tie is a separate attempt. From `20261001000400_claim_enforcement.sql` a new winner needs that attempt with a `valid` verdict; the only exemption is Manual Snowball Win inside the open jackpot window, which mints its own key per award.
 
 ### Action contract
 
-`ActionResult<T>` carries an optional `conflict?: true` on the failure branch, so the client can tell "you lost a race, here is fresh state" apart from "this failed". A conflict means refresh state and show the reason, not a hard error.
+`ActionResult<T>` carries an optional `conflict?: true` on the failure branch, so the client can tell "you lost a race, here is fresh state" apart from "this failed". A conflict means refresh state and show the reason, not a hard error. `code` is a stable key (`ActionFailureCode` in `src/types/actions.ts`) for the failures the UI branches on. Raised RPC keys become host-facing words in one place, `HOST_RPC_ERRORS` in `src/app/host/actions.ts`.
 
 | Action | Writes | Atomic boundary | Returns | Client behaviour |
 |--------|--------|-----------------|---------|------------------|
-| `callNextNumber` | `game_states` | RPC `call_next_number`, row lock | `game_states` row | apply via `isFreshGameState` |
+| `startGame` | `game_states`, `sessions`, and `games.prizes` for a cash jackpot | RPC `start_game`: session lock, then `game_states` lock; the cash jackpot prize in the same transaction | redirect target, or `requiresCashJackpotAmount` to prompt | navigate, or show the amount prompt |
+| `endNight` | `sessions` | RPC `end_night`, session lock, idempotent | session row | refresh |
+| `callNextNumber` | `game_states` | RPC `call_next_number`, row lock, idempotent on the call key | `game_states` row | apply via `isFreshGameState` |
 | `voidLastNumber` | `game_states` | RPC `void_last_number`, row lock, winner check inside | `game_states` row | apply, close confirm modal |
-| `recordWinner` | `winners` + `game_states` | RPC `record_winner_atomic`, one transaction, idempotent on the claim key | `game_states` row | apply, open Post Win |
-| `toggleBreak` | `game_states` | bound update, controller plus status | `game_states` row | apply |
-| `pauseForValidation` | `game_states` | bound update | `game_states` row | apply |
-| `resumeGame` | `game_states` | bound update | `game_states` row | apply, close validation modal |
-| `advanceToNextStage` | `game_states` | bound update on expected `current_stage_index` | `game_states` row | apply |
-| `skipStage` | `game_states` | bound update, indices derived server-side | `game_states` row | apply |
-| `announceWin` | `game_states` | bound update on expected stage | `game_states` row | apply |
-| `endGame` | `game_states`, `snowball_pots`, `sessions` | existing sequence, bound `game_states` update | `game_states` row | apply, then navigate |
+| `beginClaimCheck` | `game_states` claim fields | RPC `begin_claim_check`, row lock | claim snapshot and code (`attempt_mismatch` is adopted, not a failure) | adopt the attempt |
+| `setClaimDraft` | `game_states.claim_numbers` | RPC `set_claim_draft`; a lower `seq` is ignored | `saved` or `stale_seq` | none; the draft queue moves on |
+| `checkClaim` | `game_states.claim_result` | RPC `check_claim`, row lock; a retry returns the stored verdict | verdict, invalid numbers, last ball | show the verdict |
+| `undoLastNumberForClaim` | `game_states` | RPC `void_last_number` bound to the attempt and the expected count | `game_states` row | apply |
+| `recordWinner` | `winners` + `game_states` | RPC `record_winner_atomic`, one transaction, idempotent on the claim attempt | `game_states` row | apply, open Post Win |
+| `toggleBreak` | `game_states` | bound update, controller, status, stage and claim pause; ending a claim pause refuses `stage_already_won`, as `resumeGame` does | `game_states` row | apply; on `stage_already_won` refresh the winners so the pad offers Continue |
+| `resumeGame` | `game_states` | bound update; refuses `stage_already_won` | `game_states` row | apply, close validation modal |
+| `advanceToNextStage` | `game_states` | bound update on expected `current_stage_index`; the final stage finishes through `finish_game` | `game_states` row | apply |
+| `skipStage` | `game_states` | bound update, indices derived server-side; the final stage finishes through `finish_game` | `game_states` row | apply |
+| `endGame` | `game_states`, `sessions`, then the pot | RPC `finish_game` (session lock, then `game_states` lock, idempotent), then `settle_snowball_pot` | finished game data; `snowballPotDidNotSettle` when the pot did not move | apply, then navigate or offer the settle retry |
 | `takeControl` | `game_states` | single conditional update, no separate read | `game_states` row | apply |
-| `startGame` | `game_states`, `games`, `sessions` | existing sequence | redirect target | navigate |
 | `moveToNextGameOnBreak` / `AfterWin` | composite | composite, documented as non-atomic | redirect target | navigate |
 | `sendHeartbeat` | `game_states` | bound update | nothing | no local state change |
 | `toggleWinnerPrizeGiven` | `winners.prize_given` | `set_winner_prize_given` RPC | nothing; the RPC returns the persisted flag and a mismatch is an error | apply to winner lists only, revert on failure |
 | `voidWinnerFromHost` | `winners` | bound update with `.select()`, admin only | nothing | refresh winner lists |
+| `settleSnowballPotForGame` | `snowball_pots`, `snowball_pot_history` | RPC `settle_snowball_pot`, pot lock, once per game | nothing | refresh |
+| `listUnsettledSnowballGames` | nothing | RPC `list_unsettled_snowball_games`, read only | finished snowball games with no settlement, every night when no session is given; a failed read is a failure, never an empty list | the host dashboard's Settle list, or its "could not check" warning |
 
 "Bound update" means the `update` filter binds every condition the action asserted (controller, `status`, `on_break`, `paused_for_validation`, `current_stage_index`), so zero rows changed returns a conflict instead of committing against state that has moved on. The two `moveToNextGame*` actions stay non-atomic by decision: they are in-flight guarded on the client and each step checks its own preconditions, so a failure is a visible half-transition the host can retry. Full rationale in `docs/superpowers/specs/2026-07-29-live-game-fixes-design.md` section 5.
 
@@ -109,12 +123,19 @@ All host actions wrap mutations in auth checks and call `revalidatePath('/host')
 | `delete_session_safe` | `deleteSession` | Atomic precheck + delete under row lock |
 | `delete_game_safe` | `deleteGame` | Atomic precheck + delete under row lock |
 | `update_game_safe` | `updateGame` | Atomic structural-update guard against `game_states.status` |
-| `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session |
-| `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on `game_states`; host gap passed in as `p_min_gap_ms` |
-| `void_last_number` | `voidLastNumber` | Atomic undo under the same lock, with the non-void winner check inside the transaction |
-| `record_winner_atomic` | `recordWinner` | Winner insert plus win-display update in one transaction; re-checks the snowball jackpot window; refuses a repeat of the same `p_client_request_id` and returns current state instead |
-| `set_winner_prize_given` | `toggleWinnerPrizeGiven` | Writes only `winners.prize_given` and returns the persisted value. Exists because the `winners` UPDATE policy is admin-only: a host's direct update matched zero rows and, with no `.select()`, was reported as success. Deliberately does **not** grant hosts `is_void` |
-| `settle_snowball_pot` | `handleSnowballPotUpdate`, called by `endGame`, `advanceToNextStage` and `skipStage` | Audit claim plus pot move in one transaction under a `for update` lock on the pot row. Derives reset-vs-rollover and both new values server-side, so a host settles without `snowball_pots` or `snowball_pot_history` granting a host any write access |
+| `reset_session_safe` | `resetSession` | Atomic: delete winners → delete game_states → reset session (and clear `sessions.started_at`) |
+| `start_game` | `startGame` | Starts, re-opens or takes over a game under the session lock then the `game_states` lock; refuses `night_ended` and `other_game_in_progress`, and `snowball_settled` for a re-open of a snowball game whose pot has already settled. On a fresh start of a `jackpot` game, `p_cash_jackpot_amount` (pounds, at most two decimals) becomes the one stage's prize text, "£125 Cash Jackpot", in the same transaction, because `games` UPDATE is admin only in RLS. Refuses `invalid_cash_jackpot`, `cash_jackpot_not_allowed` (not a jackpot game, or a re-open or takeover) and `cash_jackpot_stage_count` |
+| `finish_game` | `endGame`, `advanceToNextStage`, `skipStage`, `moveToNextGame*` | Completes a game under the same lock order, clears the pause, break, win and claim, clears `active_game_id`, and completes the session when every game is completed. Idempotent |
+| `end_night` | `endNight`, `moveToNextGameAfterWin` | Ends the night under the session lock; refuses `game_in_progress`. Idempotent: the first `completed_at` stands |
+| `call_next_number` | `callNextNumber` | Atomic call under a `for update` lock on `game_states`; host gap passed in as `p_min_gap_ms`; idempotent on the call key |
+| `void_last_number` | `voidLastNumber`, `undoLastNumberForClaim` | Atomic undo under the same lock, with the non-void winner check inside the transaction. Paused for a claim it needs the attempt and the expected ball count, and allows one undo per attempt (`already_undone`) |
+| `begin_claim_check` | `beginClaimCheck` | Pauses the game and stores the claim attempt with its stage and ball-count snapshots |
+| `set_claim_draft` | `setClaimDraft` | Stores the live draft for the TV and phones; a lower sequence is ignored |
+| `check_claim` | `checkClaim` | The server verdict: `valid`, `invalid` (with the uncalled numbers), `late`, or `missing_last_ball` for the host to decide |
+| `record_winner_atomic` | `recordWinner` | Winner insert plus win-display update in one transaction; re-checks the snowball jackpot window; idempotent on the claim attempt (`p_client_request_id`); from M2b a new winner needs that attempt with a `valid` verdict. Refuses `jackpot_already_won` for a Manual Snowball Win while a live jackpot winner already stands at that stage (a conflict: the host screen refreshes) |
+| `set_winner_prize_given` | `toggleWinnerPrizeGiven` | Writes only `winners.prize_given` and returns the persisted value. Exists because the `winners` UPDATE policy is admin-only: a host's direct update matched zero rows and, with no `.select()`, was reported as success. Deliberately does **not** grant hosts `is_void`. Refuses `winner_void` |
+| `settle_snowball_pot` | `handleSnowballPotUpdate`, called after `finish_game` and by `settleSnowballPotForGame` | Audit claim plus pot move in one transaction under a `for update` lock on the pot row. Derives reset-vs-rollover and both new values server-side, so a host settles without `snowball_pots` or `snowball_pot_history` granting a host any write access. Refuses `game_not_completed` |
+| `list_unsettled_snowball_games` | `listUnsettledSnowballGames` | Read only. Finished snowball games, outside test nights, that ended on or after 2026-10-01 00:00 Europe/London and have no settlement record by the same test `settle_snowball_pot` uses for `already_settled`. Reads the admin-only `snowball_pot_history` as its owner and returns games only, so a host gets a true list |
 | `assert_is_host` | the host functions above | Raises unless `profiles.role` is `admin` or `host` |
 
 See [[relationships]] for the table → action and action → caller cross-reference.

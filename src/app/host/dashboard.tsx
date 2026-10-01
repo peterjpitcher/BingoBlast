@@ -4,7 +4,8 @@ import React, { useRef, useState } from 'react';
 import { formatDateInLondon } from '@/lib/dates';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
-import { startGame } from './actions';
+import { endNight, settleSnowballPotForGame, startGame } from './actions';
+import type { UnsettledSnowballGame } from './claim-action-types';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -19,6 +20,20 @@ type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
 
 interface HostDashboardProps {
   sessions: SessionWithGames[];
+  /**
+   * Finished snowball games whose pot never settled (X6), across every night,
+   * from listUnsettledSnowballGames. Hosts and admins alike.
+   */
+  unsettledSnowballGames?: UnsettledSnowballGame[];
+  /** The settlement check itself failed to read, so the list above is not an answer. */
+  settlementCheckFailed?: boolean;
+}
+
+/** End the night confirmation: the session, and the games that will stay unplayed. */
+interface EndNightTarget {
+  sessionId: string;
+  sessionName: string;
+  unplayedGames: string[];
 }
 
 /** What one tap on Start, Resume or Re-open came to. 'busy' means another start was already in flight. */
@@ -28,7 +43,11 @@ type StartOutcome =
   | { status: 'busy' }
   | { status: 'failed'; message: string };
 
-export default function HostDashboard({ sessions }: HostDashboardProps) {
+export default function HostDashboard({
+  sessions,
+  unsettledSnowballGames = [],
+  settlementCheckFailed = false,
+}: HostDashboardProps) {
   const router = useRouter();
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [cashJackpotPrompt, setCashJackpotPrompt] = useState<{ sessionId: string; gameId: string; gameName: string } | null>(null);
@@ -46,6 +65,17 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
   const [startError, setStartError] = useState<{ gameId: string; message: string } | null>(null);
   // In-app confirmation in place of confirm() before re-opening a finished game.
   const [reopenTarget, setReopenTarget] = useState<{ sessionId: string; gameId: string; gameName: string } | null>(null);
+
+  // End the night (spec 5.1). A modal, not confirm(), listing what stays unplayed.
+  const [endNightTarget, setEndNightTarget] = useState<EndNightTarget | null>(null);
+  const [isEndingNight, setIsEndingNight] = useState(false);
+  const [endNightError, setEndNightError] = useState<string | null>(null);
+
+  // Settle buttons for finished snowball games whose pot never moved (X6).
+  const [settlingGameId, setSettlingGameId] = useState<string | null>(null);
+  const [settledGameIds, setSettledGameIds] = useState<ReadonlySet<string>>(new Set());
+  const [settleError, setSettleError] = useState<{ gameId: string; message: string } | null>(null);
+  const visibleUnsettledGames = unsettledSnowballGames.filter((g) => !settledGameIds.has(g.gameId));
 
   const toggleSession = (sessionId: string) => {
     setExpandedSessionId(expandedSessionId === sessionId ? null : sessionId);
@@ -117,6 +147,67 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
     await handleStartFromList(sessionId, gameId);
   };
 
+  const openEndNight = (session: SessionWithGames) => {
+    const unplayedGames = [...session.games]
+      .sort((a, b) => a.game_index - b.game_index)
+      .filter((g) => (g.game_states?.status ?? 'not_started') === 'not_started')
+      .map((g) => `Game ${g.game_index}: ${g.name}`);
+    setEndNightError(null);
+    setEndNightTarget({ sessionId: session.id, sessionName: session.name, unplayedGames });
+  };
+
+  const closeEndNight = () => {
+    if (isEndingNight) return;
+    setEndNightTarget(null);
+    setEndNightError(null);
+  };
+
+  /**
+   * Ends the night through end_night. Refused while a game is in progress;
+   * unplayed games stay unplayed and their snowball pot is untouched. Safe to
+   * repeat: a night that has already ended is returned as it is.
+   */
+  const handleConfirmEndNight = async () => {
+    if (!endNightTarget || isEndingNight) return;
+    setIsEndingNight(true);
+    setEndNightError(null);
+    try {
+      const result = await endNight(endNightTarget.sessionId);
+      if (!result?.success) {
+        setEndNightError(result?.error || 'Could not end the night. Try again.');
+        return;
+      }
+      setEndNightTarget(null);
+      router.refresh();
+    } catch (err) {
+      console.error(err);
+      setEndNightError('Could not reach the server to end the night. Check the connection and try again.');
+    } finally {
+      setIsEndingNight(false);
+    }
+  };
+
+  /** Settles one finished snowball game's pot. Safe to repeat: a second settle changes nothing. */
+  const handleSettleGame = async (gameId: string) => {
+    if (settlingGameId !== null) return;
+    setSettlingGameId(gameId);
+    setSettleError(null);
+    try {
+      const result = await settleSnowballPotForGame(gameId);
+      if (!result?.success) {
+        setSettleError({ gameId, message: result?.error || 'The pot did not update. Try again.' });
+        return;
+      }
+      setSettledGameIds((current) => new Set([...current, gameId]));
+      router.refresh();
+    } catch (err) {
+      console.error(err);
+      setSettleError({ gameId, message: 'Could not reach the server to settle the pot. Check the connection and try again.' });
+    } finally {
+      setSettlingGameId(null);
+    }
+  };
+
   const closeCashJackpotPrompt = () => {
     if (isSubmittingCashJackpot) return;
     setCashJackpotPrompt(null);
@@ -126,6 +217,52 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
 
   return (
     <div className="space-y-6">
+      {/* X6: a finished snowball game whose pot never moved. The retry banner
+          on the game screen is gone once the host leaves or reloads, so the
+          dashboard keeps offering it until the pot is settled. */}
+      {settlementCheckFailed && (
+        <div role="alert" className="rounded-xl border-2 border-red-500 bg-red-950/80 p-4 text-base text-white">
+          Could not check whether every snowball pot has settled. Reload to try again.
+        </div>
+      )}
+      {visibleUnsettledGames.length > 0 && (
+        <Card className="bg-[#7a5719]/40 border-[#a57626]">
+          <CardContent className="p-4 space-y-3">
+            <div>
+              <h2 className="text-lg font-bold text-white">Snowball pot not settled</h2>
+              <p className="text-base text-white/85">
+                These snowball games have finished but their pot never moved, so the jackpot is
+                still showing its old figure. Settle each one. If a pot was already corrected by
+                hand in Admin, do not settle it here as well.
+              </p>
+            </div>
+            <ul className="space-y-2">
+              {visibleUnsettledGames.map((g) => (
+                <li key={g.gameId} className="flex flex-col gap-2 rounded-lg border border-[#a57626]/70 bg-[#003f27]/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="font-bold text-white">Game {g.gameIndex}: {g.gameName}</p>
+                    <p className="text-sm text-white/80">
+                      {g.sessionName}{g.sessionStartDate ? `, ${formatDateInLondon(g.sessionStartDate)}` : ''}
+                    </p>
+                    {settleError?.gameId === g.gameId && (
+                      <p role="alert" className="mt-1 rounded border-2 border-red-500 bg-red-950/80 px-2 py-1 text-base font-semibold text-white">{settleError.message}</p>
+                    )}
+                  </div>
+                  <Button
+                    variant="primary"
+                    className="min-h-[44px] shrink-0 bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+                    onClick={() => { void handleSettleGame(g.gameId); }}
+                    disabled={settlingGameId !== null}
+                  >
+                    {settlingGameId === g.gameId ? 'Settling…' : 'Settle'}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-white">Available Sessions</h2>
         <p className="text-white/80 text-sm">Tap a session to view games</p>
@@ -147,6 +284,10 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
             // Find the first game that is NOT completed. This is our active or next game.
             // If all are completed, this will be undefined.
             const activeOrNextGame = sortedGames.find(g => g.game_states?.status !== 'completed');
+            // X10: while one game is being played, no other game of the night can
+            // be started or re-opened. start_game refuses it under the session
+            // lock; hiding the button means the host is not offered it at all.
+            const gameInProgress = sortedGames.find(g => g.game_states?.status === 'in_progress');
 
             return (
               <Card 
@@ -164,17 +305,17 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="text-lg font-bold text-white">{session.name}</h3>
                       {session.is_test_session && (
-                        <span className="px-2 py-0.5 text-xs font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">TEST</span>
+                        <span className="px-2 py-0.5 text-sm font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">TEST</span>
                       )}
                     </div>
                     <p className="text-sm text-white/80">{formatDateInLondon(session.start_date)}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     {session.status === 'running' && (
-                      <span className="px-2 py-1 text-xs font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626] animate-pulse">RUNNING</span>
+                      <span className="px-2 py-1 text-sm font-bold bg-[#a57626]/25 text-white rounded-full border border-[#a57626]">RUNNING</span>
                     )}
                     {session.status === 'ready' && (
-                      <span className="px-2 py-1 text-xs font-bold bg-[#0f6846] text-white rounded-full border border-[#1f7c58]">READY</span>
+                      <span className="px-2 py-1 text-sm font-bold bg-[#0f6846] text-white rounded-full border border-[#1f7c58]">READY</span>
                     )}
                     <div className={cn("transform transition-transform text-white/75", expandedSessionId === session.id ? "rotate-180" : "")}>
                       ▼
@@ -193,7 +334,8 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                           const isCompleted = status === 'completed';
                           const isInProgress = status === 'in_progress';
                           
-                          const isPlayable = activeOrNextGame?.id === game.id || isCompleted;
+                          const isBlockedByOtherGame = !!gameInProgress && gameInProgress.id !== game.id;
+                          const isPlayable = (activeOrNextGame?.id === game.id || isCompleted) && !isBlockedByOtherGame;
                           const isStartingThis = startingGameId === game.id;
                           const gameStartError = startError?.gameId === game.id ? startError.message : null;
                           
@@ -222,7 +364,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                   <h4 className={cn("font-bold", isCompleted ? "text-white/80" : "text-white")}>
                                     Game {game.game_index}: {game.name}
                                   </h4>
-                                  <div className="flex gap-2 text-xs">
+                                  <div className="flex gap-2 text-sm">
                                     <span className="text-white/80 uppercase tracking-wider">{game.type}</span>
                                     {status === 'not_started' && <span className="text-white/70">Not Started</span>}
                                     {status === 'in_progress' && <span className="text-white font-bold">In Progress</span>}
@@ -260,11 +402,11 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                     disabled 
                                     className="text-white/60"
                                   >
-                                    Locked
+                                    {isBlockedByOtherGame && isCompleted ? 'Finished' : 'Locked'}
                                   </Button>
                                 )}
                                 {gameStartError && (
-                                  <p role="alert" className="max-w-[16rem] text-right text-xs text-white">
+                                  <p role="alert" className="max-w-[16rem] rounded border-2 border-red-500 bg-red-950/80 px-2 py-1 text-right text-sm font-semibold text-white">
                                     {gameStartError}
                                   </p>
                                 )}
@@ -272,6 +414,28 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                             </div>
                           );
                         })}
+                      </div>
+                    )}
+
+                    {/* End the night (spec 5.1). Once a night is running, this is
+                        how it finishes when games are left unplayed: finishing
+                        the last game only completes the night when every game
+                        has been played. */}
+                    {session.status === 'running' && (
+                      <div className="mt-4 pt-4 border-t border-[#1f7c58] flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-base text-white/80">
+                          {gameInProgress
+                            ? `Finish Game ${gameInProgress.game_index} before ending the night.`
+                            : 'Finished for tonight? End the night so the TV shows the end-of-night screen.'}
+                        </p>
+                        <Button
+                          variant="secondary"
+                          className="min-h-[44px] shrink-0 border-[#a57626] text-white hover:bg-[#a57626]/20"
+                          onClick={() => openEndNight(session)}
+                          disabled={!!gameInProgress || startingGameId !== null}
+                        >
+                          End the night
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -289,7 +453,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
         className="max-w-md bg-[#003f27] border border-[#1f7c58]"
       >
         <div className="space-y-4">
-          <p className="text-sm text-white/90">
+          <p className="text-base text-white/90">
             <span className="font-bold text-white">{reopenTarget?.gameName}</span> has finished.
             Re-opening it resumes calling so you can correct a mistake.
           </p>
@@ -310,6 +474,52 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
       </Modal>
 
       <Modal
+        isOpen={!!endNightTarget}
+        onClose={closeEndNight}
+        title="End the night?"
+        className="max-w-md bg-[#003f27] border border-[#1f7c58]"
+      >
+        <div className="space-y-4">
+          {endNightError && (
+            <div role="alert" className="p-3 bg-red-950/80 border-2 border-red-500 text-white rounded">
+              {endNightError}
+            </div>
+          )}
+          <p className="text-base text-white/90">
+            <span className="font-bold text-white">{endNightTarget?.sessionName}</span> will be marked as
+            finished. The TV and the phones move to the end-of-night screen.
+          </p>
+          {endNightTarget && endNightTarget.unplayedGames.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-base font-semibold text-white">These games have not been played and will stay unplayed:</p>
+              <ul className="list-disc pl-5 text-base text-white/90">
+                {endNightTarget.unplayedGames.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+              <p className="text-base text-white/85">A snowball pot on an unplayed game does not move.</p>
+            </div>
+          ) : (
+            <p className="text-base text-white/85">Every game has been played.</p>
+          )}
+          <p className="text-base text-white/75">Only an admin can open the night again once it has ended.</p>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <Button variant="secondary" className="min-h-[44px]" onClick={closeEndNight} disabled={isEndingNight}>
+            Keep the night open
+          </Button>
+          <Button
+            variant="primary"
+            className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+            onClick={() => { void handleConfirmEndNight(); }}
+            disabled={isEndingNight}
+          >
+            {isEndingNight ? 'Ending…' : 'End the night'}
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
         isOpen={!!cashJackpotPrompt}
         onClose={closeCashJackpotPrompt}
         title="Set Cash Jackpot"
@@ -317,15 +527,15 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
       >
         <div className="space-y-4">
           {cashJackpotError && (
-            <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+            <div role="alert" className="p-3 bg-red-950/80 border-2 border-red-500 text-white rounded">
               {cashJackpotError}
             </div>
           )}
-          <p className="text-sm text-white/85">
+          <p className="text-base text-white/85">
             Enter tonight&apos;s cash jackpot for <span className="font-bold text-white">{cashJackpotPrompt?.gameName}</span>. This will be shown as the game prize.
           </p>
           <div>
-            <label className="text-sm text-white/90 block mb-1">Cash Jackpot Amount</label>
+            <label className="text-base text-white/90 block mb-1">Cash Jackpot Amount</label>
             <Input
               type="number"
               inputMode="decimal"

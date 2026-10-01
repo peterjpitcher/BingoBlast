@@ -1,7 +1,14 @@
 // src/lib/money.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatPence, formatPoundsAmount, totalPaidOutPence } from './money';
+import {
+  describeWinnerTotal,
+  formatPence,
+  formatPoundsAmount,
+  JACKPOT_NOT_RECORDED,
+  totalPaidOutPence,
+  winnerTotalPence,
+} from './money';
 
 test('whole pounds have no decimal point', () => {
   assert.equal(formatPence(1000), '£10');
@@ -79,4 +86,109 @@ test('a float that is a penny short of a whole number still rounds to it', () =>
 test('a non-finite amount reads as £0, never £NaN on the pub TV', () => {
   assert.equal(formatPoundsAmount(Number.NaN), '£0');
   assert.equal(formatPoundsAmount(Number.POSITIVE_INFINITY), '£0');
+});
+
+// winnerTotalPence (X22, spec 7 M3). prize_share_pence is now the ORDINARY
+// share only; a snowball jackpot winner's jackpot is jackpot_share_pence. The
+// history page used to total the first and miss the second, so a £140 jackpot
+// vanished from the night's payout.
+test('an ordinary winner totals their ordinary share', () => {
+  const total = winnerTotalPence({ prize_share_pence: 1000 });
+  assert.equal(total.totalPence, 1000);
+  assert.equal(total.ordinaryPence, 1000);
+  assert.equal(total.jackpotPence, null);
+  assert.equal(total.jackpotNotRecorded, false);
+});
+
+test('a jackpot winner totals the ordinary share plus the jackpot share', () => {
+  const total = winnerTotalPence({
+    prize_share_pence: 1000,
+    jackpot_share_pence: 14000,
+    is_snowball_jackpot: true,
+  });
+  assert.equal(total.totalPence, 15000);
+  assert.equal(total.jackpotPence, 14000);
+  assert.equal(total.jackpotNotRecorded, false);
+});
+
+test('a jackpot-only win (ordinary pool 0) totals the jackpot', () => {
+  const total = winnerTotalPence({
+    prize_share_pence: 0,
+    jackpot_share_pence: 21250,
+    is_snowball_jackpot: true,
+  });
+  assert.equal(total.totalPence, 21250);
+});
+
+test('a tied jackpot adds each winner\'s share, never the whole pot twice', () => {
+  const tied = [
+    { prize_share_pence: 500, jackpot_share_pence: 7000, is_snowball_jackpot: true },
+    { prize_share_pence: 500, jackpot_share_pence: 7000, is_snowball_jackpot: true },
+  ];
+  assert.equal(totalPaidOutPence(tied).totalPence, 15000);
+});
+
+test('a jackpot winner with no recorded jackpot says so and totals only what is known', () => {
+  const total = winnerTotalPence({
+    prize_share_pence: 1000,
+    jackpot_share_pence: null,
+    is_snowball_jackpot: true,
+  });
+  assert.equal(total.totalPence, 1000);
+  assert.equal(total.jackpotPence, null);
+  assert.equal(total.jackpotNotRecorded, true);
+  assert.equal(describeWinnerTotal(total), `£10 + ${JACKPOT_NOT_RECORDED}`);
+});
+
+test('a jackpot winner with nothing recorded at all has no total but still says why', () => {
+  const total = winnerTotalPence({
+    prize_share_pence: null,
+    jackpot_share_pence: null,
+    is_snowball_jackpot: true,
+  });
+  assert.equal(total.totalPence, null);
+  assert.equal(total.jackpotNotRecorded, true);
+  assert.equal(describeWinnerTotal(total), JACKPOT_NOT_RECORDED);
+});
+
+test('the phrase for an unknown jackpot is exactly as the spec words it', () => {
+  assert.equal(JACKPOT_NOT_RECORDED, 'jackpot amount not recorded');
+});
+
+test('a prize that is not money has no total and no jackpot note', () => {
+  const total = winnerTotalPence({ prize_share_pence: null });
+  assert.equal(total.totalPence, null);
+  assert.equal(total.jackpotNotRecorded, false);
+  assert.equal(describeWinnerTotal(total), null);
+});
+
+test('a voided winner totals nothing, jackpot or not', () => {
+  const total = winnerTotalPence({
+    prize_share_pence: 1000,
+    jackpot_share_pence: 14000,
+    is_snowball_jackpot: true,
+    is_void: true,
+  });
+  assert.equal(total.totalPence, null);
+  assert.equal(total.jackpotPence, null);
+  assert.equal(total.jackpotNotRecorded, false);
+  assert.equal(describeWinnerTotal(total), null);
+});
+
+test('a known total reads as pounds', () => {
+  assert.equal(describeWinnerTotal(winnerTotalPence({ prize_share_pence: 21250 })), '£212.50');
+});
+
+test('a night total counts both components and the rows whose jackpot is unknown', () => {
+  const night = [
+    { prize_share_pence: 1000 },
+    { prize_share_pence: 1000, jackpot_share_pence: 14000, is_snowball_jackpot: true },
+    { prize_share_pence: 500, jackpot_share_pence: null, is_snowball_jackpot: true },
+    { prize_share_pence: null },
+  ];
+  const result = totalPaidOutPence(night);
+  assert.equal(result.totalPence, 16500);
+  assert.equal(result.countedRows, 3);
+  assert.equal(result.uncountedRows, 1);
+  assert.equal(result.jackpotNotRecordedRows, 1);
 });

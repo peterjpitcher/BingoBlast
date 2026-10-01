@@ -13,6 +13,7 @@ const KEYS = [
   'NEXT_PUBLIC_SITE_URL',
   'VERCEL_ENV',
   'ANCHOR_API_KEY',
+  'ANCHOR_API_BASE_URL',
 ] as const;
 
 let saved: Record<string, string | undefined> = {};
@@ -101,13 +102,22 @@ test('a local http origin is allowed outside production, for local runs only', (
   assert.throws(() => validateBuildEnv(), /NEXT_PUBLIC_SITE_URL/);
 });
 
-test('the events feed key is not required in this slice', () => {
-  assert.equal(EVENTS_FEED_REQUIRED, false);
+test('the events feed is required, so a production build without ANCHOR_API_KEY fails', () => {
+  assert.equal(EVENTS_FEED_REQUIRED, true);
   process.env.VERCEL_ENV = 'production';
+  assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY/);
+  process.env.ANCHOR_API_KEY = 'key';
   assert.doesNotThrow(() => validateBuildEnv());
 });
 
-test('once the events feed is required, a production build needs ANCHOR_API_KEY and a preview does not', () => {
+test('preview and local builds do not need ANCHOR_API_KEY', () => {
+  process.env.VERCEL_ENV = 'preview';
+  assert.doesNotThrow(() => validateBuildEnv());
+  delete process.env.VERCEL_ENV;
+  assert.doesNotThrow(() => validateBuildEnv(), 'a local build has no VERCEL_ENV');
+});
+
+test('a production build needs ANCHOR_API_KEY when the feed is required, and a preview does not', () => {
   process.env.VERCEL_ENV = 'production';
   assert.throws(() => validateBuildEnv({ eventsFeedRequired: true }), /ANCHOR_API_KEY/);
   process.env.ANCHOR_API_KEY = 'key';
@@ -116,4 +126,57 @@ test('once the events feed is required, a production build needs ANCHOR_API_KEY 
   delete process.env.ANCHOR_API_KEY;
   process.env.VERCEL_ENV = 'preview';
   assert.doesNotThrow(() => validateBuildEnv({ eventsFeedRequired: true }));
+});
+
+test('a production build treats an ANCHOR_API_KEY of only spaces as not set', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = '   ';
+  assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY/);
+  process.env.ANCHOR_API_KEY = '\t\n';
+  assert.throws(() => validateBuildEnv(), /ANCHOR_API_KEY/);
+  process.env.ANCHOR_API_KEY = ' key ';
+  assert.doesNotThrow(() => validateBuildEnv());
+});
+
+test('ANCHOR_API_BASE_URL is optional', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = 'key';
+  assert.doesNotThrow(() => validateBuildEnv());
+  process.env.ANCHOR_API_BASE_URL = '   ';
+  assert.doesNotThrow(() => validateBuildEnv(), 'blank means the default');
+});
+
+test('ANCHOR_API_BASE_URL must use https when set, since the key travels to it', () => {
+  process.env.ANCHOR_API_BASE_URL = 'https://management.orangejelly.co.uk/api';
+  assert.doesNotThrow(() => validateBuildEnv());
+  process.env.ANCHOR_API_BASE_URL = 'https://management.orangejelly.co.uk/api/';
+  assert.doesNotThrow(() => validateBuildEnv());
+
+  for (const bad of [
+    'http://management.orangejelly.co.uk/api',
+    'management.orangejelly.co.uk/api',
+    'ftp://management.orangejelly.co.uk/api',
+    'https://user:pass@management.orangejelly.co.uk/api',
+    'https://management.orangejelly.co.uk/api?x=1',
+  ]) {
+    process.env.ANCHOR_API_BASE_URL = bad;
+    assert.throws(() => validateBuildEnv(), /ANCHOR_API_BASE_URL/, bad);
+  }
+});
+
+test('ANCHOR_API_BASE_URL may be local http outside production only', () => {
+  for (const local of ['http://localhost:3000/api', 'http://127.0.0.1:3000/api', 'http://[::1]:3000/api']) {
+    process.env.ANCHOR_API_BASE_URL = local;
+    delete process.env.VERCEL_ENV;
+    assert.doesNotThrow(() => validateBuildEnv(), local);
+    process.env.VERCEL_ENV = 'preview';
+    assert.doesNotThrow(() => validateBuildEnv(), local);
+    process.env.VERCEL_ENV = 'production';
+    process.env.ANCHOR_API_KEY = 'key';
+    assert.throws(() => validateBuildEnv(), /ANCHOR_API_BASE_URL/, local);
+    delete process.env.ANCHOR_API_KEY;
+  }
+  process.env.VERCEL_ENV = 'preview';
+  process.env.ANCHOR_API_BASE_URL = 'http://management.local/api';
+  assert.throws(() => validateBuildEnv(), /ANCHOR_API_BASE_URL/, 'only loopback hosts may use http');
 });

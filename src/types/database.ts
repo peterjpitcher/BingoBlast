@@ -44,6 +44,100 @@ export interface SnowballSettlementRow {
   new_jackpot_amount: number | null
 }
 
+/**
+ * One row from list_unsettled_snowball_games: a finished snowball game, outside
+ * a test night, that ended on or after 2026-10-01 00:00 Europe/London and has
+ * no settlement record. Defined in
+ * supabase/migrations/20261001000300_jackpot_components.sql.
+ */
+export interface UnsettledSnowballGameRow {
+  game_id: string
+  game_name: string
+  game_index: number
+  ended_at: string
+  session_id: string
+  session_name: string
+  session_start_date: string | null
+}
+
+/** A claim verdict, as stored in game_states.claim_result. */
+export type ClaimResult = 'valid' | 'invalid' | 'late'
+
+/**
+ * What finish_game returns. Defined in
+ * supabase/migrations/20261001000100_night_lifecycle.sql.
+ */
+export interface FinishGameResult {
+  game_state: Database['public']['Tables']['game_states']['Row']
+  /** The session is completed after this call (every game finished, now or before). */
+  session_completed: boolean
+}
+
+/**
+ * begin_claim_check outcomes. ok is false only for attempt_mismatch: another
+ * attempt is being checked, and attempt_id is the one to adopt.
+ */
+export type BeginClaimCheckCode = 'started' | 'already_started' | 'replaced' | 'attempt_mismatch'
+
+/**
+ * set_claim_draft outcomes. 'saved' and 'stale_seq' (ignored, the stored draft
+ * returned unchanged) are ok; every other code is a refusal that wrote nothing.
+ */
+export type SetClaimDraftCode =
+  | 'saved'
+  | 'stale_seq'
+  | 'not_paused'
+  | 'attempt_mismatch'
+  | 'verdict_already_given'
+  | 'stale_attempt'
+  | 'number_out_of_range'
+  | 'duplicate_numbers'
+  | 'too_many_numbers'
+
+/**
+ * check_claim outcomes. The three verdicts and 'missing_last_ball' (numbers
+ * stored as the draft, no verdict, the host decides) are ok; the rest are
+ * refusals that wrote nothing. A retry once a verdict exists returns that
+ * verdict when the numbers match, in any order.
+ */
+export type CheckClaimCode =
+  | ClaimResult
+  | 'missing_last_ball'
+  | 'not_paused'
+  | 'attempt_mismatch'
+  | 'stale_attempt'
+  | 'verdict_already_given'
+  | 'number_out_of_range'
+  | 'duplicate_numbers'
+  | 'wrong_count'
+
+/**
+ * The jsonb every claim function returns. Defined in
+ * supabase/migrations/20261001000200_claim_attempts.sql. Guard failures
+ * (unauthorized, not_controller, not_in_progress, on_break, attempt_required,
+ * game_state_not_found, unknown_stage) are raised as errors instead.
+ */
+export interface ClaimRpcResult<C extends string> {
+  /** False when the call was refused and wrote nothing. */
+  ok: boolean
+  code: C
+  /** The attempt on the row after the call; on attempt_mismatch, the one to adopt. */
+  attempt_id: string | null
+  /** The stored claim, in tap order. */
+  claim_numbers: number[] | null
+  claim_result: ClaimResult | null
+  /** The stored draft sequence. A phone adopting an attempt continues from here. */
+  claim_draft_seq: number
+  game_state: Database['public']['Tables']['game_states']['Row']
+}
+
+export interface CheckClaimRpcResult extends ClaimRpcResult<CheckClaimCode> {
+  /** The stored numbers that have not been called, in tap order. */
+  invalid_numbers: number[]
+  /** The last ball called, or null when none has been. */
+  last_number: number | null
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -86,6 +180,12 @@ export interface Database {
           created_by: string | null
           active_game_id: string | null // New
           created_at: string
+          /** When the first game of the night started. Set by start_game; a re-open keeps it; reset clears it. */
+          started_at: string | null
+          /** Stamped by trigger on the transition to completed, cleared on leaving it. Null for nights before 2026-10-01. */
+          completed_at: string | null
+          /** Bumped by trigger on every update. Drop a session snapshot older than the one held. */
+          state_version: number
         }
         Insert: {
           id?: string
@@ -97,6 +197,9 @@ export interface Database {
           created_by?: string | null
           active_game_id?: string | null // New
           created_at?: string
+          started_at?: string | null
+          completed_at?: string | null
+          state_version?: number
         }
         Update: {
           id?: string
@@ -108,6 +211,9 @@ export interface Database {
           created_by?: string | null
           active_game_id?: string | null // New
           created_at?: string
+          started_at?: string | null
+          completed_at?: string | null
+          state_version?: number
         }
         Relationships: [
           {
@@ -207,6 +313,27 @@ export interface Database {
           last_call_request_id: string | null
           updated_at: string
           state_version: number // Monotonic counter bumped on every update; used to order Realtime/polling snapshots
+          /**
+           * The claim being checked (20261001000200_claim_attempts.sql). Every
+           * claim_* column is written only by begin_claim_check, set_claim_draft,
+           * check_claim and the bound undo in void_last_number: the
+           * guard_claim_fields trigger refuses a direct write while paused and
+           * clears them all whenever the game is not paused. That is why none of
+           * them is in Insert or Update.
+           */
+          claim_attempt_id: string | null
+          /** The stage index when the check started; a different stage makes the attempt stale. */
+          claim_stage_index: number | null
+          /** The ball count when the check started, moved down by the bound undo. */
+          claim_call_count: number | null
+          /** The highest draft sequence stored. */
+          claim_draft_seq: number
+          /** The attempt has used its one undo. */
+          claim_undo_used: boolean
+          /** The claimed numbers in tap order. Public, mirrored to game_states_public. */
+          claim_numbers: number[] | null
+          /** The server verdict. Public, mirrored to game_states_public. */
+          claim_result: ClaimResult | null
         }
         Insert: {
           id?: string
@@ -286,6 +413,10 @@ export interface Database {
           last_call_at: string | null
           updated_at: string
           state_version: number // Mirror of game_states.state_version; copied by sync trigger
+          /** Mirror of game_states.claim_numbers: the claim the TV and phones show, in tap order. */
+          claim_numbers: number[] | null
+          /** Mirror of game_states.claim_result. */
+          claim_result: ClaimResult | null
         }
         Insert: {
           game_id: string
@@ -304,6 +435,8 @@ export interface Database {
           last_call_at?: string | null
           updated_at?: string
           state_version?: number
+          claim_numbers?: number[] | null
+          claim_result?: ClaimResult | null
         }
         Update: {
           game_id?: string
@@ -322,6 +455,8 @@ export interface Database {
           last_call_at?: string | null
           updated_at?: string
           state_version?: number
+          claim_numbers?: number[] | null
+          claim_result?: ClaimResult | null
         }
         Relationships: [
           {
@@ -342,9 +477,11 @@ export interface Database {
           winner_name: string
           prize_description: string | null
           /**
-           * What this row's prize text is worth, in pence, or null when the
-           * prize is not money. Read-only from the app: maintained entirely by
-           * the winners_prize_share_sync trigger.
+           * The ORDINARY prize pool of this row, in pence: what the ordinary
+           * prize text is worth, before any snowball jackpot text was appended.
+           * 0 for a jackpot-only description; null when the prize is not money.
+           * Read-only from the app: maintained entirely by the
+           * winners_prize_share_sync trigger.
            */
           prize_amount_pence: number | null
           /**
@@ -355,6 +492,21 @@ export interface Database {
            * with: prize_amount_pence counts a shared prize once per winner.
            */
           prize_share_pence: number | null
+          /**
+           * The snowball jackpot this winner shared in, in pence: the pot under
+           * the pot lock when the win was recorded. Null when the row is not a
+           * jackpot winner, and on jackpot rows from before 2026-10-01 that no
+           * settlement record vouches for ("jackpot amount not recorded").
+           */
+          jackpot_pool_pence: number | null
+          /**
+           * This winner's share of the jackpot: the pool split between the
+           * non-void jackpot winners of the stage, odd penny to the earliest.
+           * Maintained by the winners_prize_share_sync trigger, so it is not in
+           * Insert or Update. A winner's total is prize_share_pence (now the
+           * ordinary prize only) plus this.
+           */
+          jackpot_share_pence: number | null
           prize_given: boolean
           call_count_at_win: number | null
           is_snowball_eligible: boolean
@@ -387,6 +539,7 @@ export interface Database {
           is_void?: boolean
           void_reason?: string | null
           client_request_id?: string | null
+          jackpot_pool_pence?: number | null
           created_at?: string
         }
         Update: {
@@ -403,6 +556,7 @@ export interface Database {
           is_void?: boolean
           void_reason?: string | null
           client_request_id?: string | null
+          jackpot_pool_pence?: number | null
           created_at?: string
         }
         Relationships: [
@@ -591,9 +745,91 @@ export interface Database {
         }
         Returns: Database['public']['Tables']['game_states']['Row']
       }
+      /**
+       * Undoes the last ball. Unpaused, only p_game_id is needed, as before.
+       * Paused for a claim, it is the one undo an attempt may make: pass the
+       * attempt and the ball count the host saw. Raises paused_for_validation
+       * (no attempt given), attempt_mismatch, verdict_already_given or
+       * already_undone. See 20261001000200_claim_attempts.sql.
+       */
       void_last_number: {
-        Args: { p_game_id: string }
+        Args: {
+          p_game_id: string
+          p_attempt_id?: string | null
+          p_expected_count?: number | null
+        }
         Returns: Database['public']['Tables']['game_states']['Row']
+      }
+      /**
+       * Starts, re-opens or takes over a game, under the session lock then the
+       * game_states lock. Raises night_ended, other_game_in_progress,
+       * invalid_sequence, game_not_found, session_not_found, and for the cash
+       * jackpot amount invalid_cash_jackpot, cash_jackpot_not_allowed and
+       * cash_jackpot_stage_count. Cookie client only.
+       * See 20261001000100_night_lifecycle.sql.
+       */
+      start_game: {
+        Args: {
+          p_game_id: string
+          /** A permutation of 1 to 90, shuffled with crypto. Needed for a fresh start. */
+          p_number_sequence?: number[] | null
+          /**
+           * The cash jackpot in pounds, at most two decimals, for a fresh start
+           * of a 'jackpot' game only; written as its one stage's prize text
+           * ("£125 Cash Jackpot") in the same transaction. Null on every other
+           * start, which leaves the prizes alone.
+           */
+          p_cash_jackpot_amount?: number | null
+        }
+        Returns: Database['public']['Tables']['game_states']['Row']
+      }
+      /**
+       * Completes a game, and the session when every game is completed.
+       * Idempotent. Raises not_controller, not_in_progress, game_not_found,
+       * session_not_found, game_state_not_found.
+       */
+      finish_game: {
+        Args: { p_game_id: string }
+        Returns: FinishGameResult
+      }
+      /** Ends the night. Idempotent. Raises game_in_progress, session_not_found. */
+      end_night: {
+        Args: { p_session_id: string }
+        Returns: Database['public']['Tables']['sessions']['Row']
+      }
+      /** Starts (or adopts, or with p_new_claimant replaces) a claim check. */
+      begin_claim_check: {
+        Args: {
+          p_game_id: string
+          p_attempt_id: string
+          p_new_claimant?: boolean
+        }
+        Returns: ClaimRpcResult<BeginClaimCheckCode>
+      }
+      /** Stores the live draft for the TV and phones. */
+      set_claim_draft: {
+        Args: {
+          p_game_id: string
+          p_attempt_id: string
+          p_numbers: number[]
+          p_seq: number
+        }
+        Returns: ClaimRpcResult<SetClaimDraftCode>
+      }
+      /** The server verdict on a claim. */
+      check_claim: {
+        Args: {
+          p_game_id: string
+          p_attempt_id: string
+          p_numbers: number[]
+          p_reject_as_late?: boolean
+        }
+        Returns: CheckClaimRpcResult
+      }
+      /** How many numbers a stage needs: Line 5, Two Lines 10, Full House 15, else null. */
+      required_claim_count: {
+        Args: { p_stage: string }
+        Returns: number | null
       }
       record_winner_atomic: {
         Args: {
@@ -605,10 +841,14 @@ export interface Database {
           p_force_snowball_jackpot?: boolean
           p_snowball_eligible?: boolean
           /**
-           * Idempotency key for one claim attempt, from newClaimRequestId() in
-           * src/lib/claim-request-id.ts. Pass the same value on a retry of the
-           * same claim; pass a fresh one for the next claim, including a tie.
-           * Null omits the protection, so always send one.
+           * Idempotency key for one claim attempt. Pass the same value on a
+           * retry of the same claim; pass a fresh one for the next claim,
+           * including a tie. From 20261001000400_claim_enforcement.sql this
+           * must be the claim attempt id given to begin_claim_check, with a
+           * 'valid' verdict from check_claim, or a new winner is refused
+           * (claim_not_checked, attempt_mismatch, stale_attempt,
+           * claim_not_valid). The only exemption is a manual snowball award
+           * inside the open jackpot window.
            */
           p_client_request_id?: string | null
         }
@@ -616,7 +856,8 @@ export interface Database {
       }
       /**
        * Writes only winners.prize_given, so a host can tick a prize as handed
-       * over without gaining is_void. Returns the persisted value.
+       * over without gaining is_void. Returns the persisted value. Raises
+       * winner_void for a voided winner (20261001000300_jackpot_components.sql).
        * Defined in supabase/migrations/20260730065446_host_can_mark_prize_given.sql.
        */
       set_winner_prize_given: {
@@ -631,11 +872,23 @@ export interface Database {
        * Settles the snowball pot for a finished game in one transaction. Host
        * callable, which is why snowball_pots and snowball_pot_history keep
        * admin-only RLS. Also security definer and auth.uid()-reading, so it
-       * needs the cookie-based client, never the service-role client.
+       * needs the cookie-based client, never the service-role client. Raises
+       * game_not_completed unless the game is completed
+       * (20261001000300_jackpot_components.sql).
        */
       settle_snowball_pot: {
         Args: { p_game_id: string }
         Returns: SnowballSettlementRow[]
+      }
+      /**
+       * The finished snowball games whose pot never settled, newest first: the
+       * host dashboard's Settle list. Reads the admin-only settlement history
+       * for a host and returns games only. One night, or every night when
+       * p_session_id is null. Read only; raises only unauthorized.
+       */
+      list_unsettled_snowball_games: {
+        Args: { p_session_id?: string | null }
+        Returns: UnsettledSnowballGameRow[]
       }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }

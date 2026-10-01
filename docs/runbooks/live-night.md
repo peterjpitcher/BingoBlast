@@ -1,6 +1,6 @@
 # Runbook: running a live night
 
-**Owner:** Pete. **Last reviewed:** 25 August 2026.
+**Owner:** Pete. **Last reviewed:** 1 October 2026.
 
 One page. Keep it on your phone. Everything here is something that has actually
 gone wrong, or that the code says can go wrong.
@@ -47,9 +47,11 @@ Tap it again. Since 25 August 2026 this is safe: the second tap carries the same
 key as the first, so if the first one did come out you get the same board back
 rather than a second ball. The error message says so at the time.
 
-The same is true of **Record Winner**, **Continue Playing** and **Skip Stage**.
-It is **not** true of **Undo Last Call**: undoing twice takes two balls off. If
-an undo fails, reload and look at the board before trying again.
+The same is true of **Check Claim**, **Check Win**, **Confirm Winner**,
+**Continue Playing** and **Skip Stage**. It is **not** true of **Undo Last
+Call**: undoing twice takes two balls off. If an undo fails, reload and look at
+the board before trying again. (The one undo inside a claim check is the
+exception: it is tied to that claim and can only ever take one ball off.)
 
 ### You called a ball too early, or the room did not hear it
 
@@ -61,24 +63,54 @@ that takes you straight there.
 
 ### Somebody shouts bingo
 
-**Check Claim**, tap their numbers, **Check Win**. The screen lists what you have
-tapped underneath the grid, in ticket order, and calls out in red anything that
-has not actually been called. Check that list against their book before pressing
-Check Win.
+**Check Claim**, then tap their numbers **in the order the caller reads them
+out**. The TV and the phones show each number as you tap it, ticked if it has
+been called and crossed if it has not, so the room can follow the check. The
+screen also lists what you have tapped underneath the grid, in that same order,
+and calls out in red anything that has not actually been called. Check that list
+against their book, then press **Check Win**. The server gives the verdict, and
+the TV shows it.
 
-If the claim is bad: **Reject and Resume**.
+- **Valid:** Record Winner opens. The win only goes up on the TV once you
+  confirm it, not before.
+- **Not a winner** (a number that has not been called): **Reject & Resume**.
+- If a tap does not reach the TV, the screen says **"TV not updated, retrying"**
+  and keeps trying by itself. Carry on: Check Win sends the full list anyway.
+
+### The claim does not include the last number called
+
+The app asks: "This claim does not include the last number called. Did they call
+before it was announced?" It does not guess from timings, because the TV can
+lag behind the room. This is your call.
+
+- **Yes:** the app takes that last ball back off the board and checks the same
+  numbers again. It can only do this once per claim, so a second tap never takes
+  a second ball off.
+- **No:** the claim is rejected as **too late**, and the TV says so.
 
 ### The claim is good but you are not ready to move on
 
-Record the winner, then **Close and stay paused**. The main screen shows a
-"Paused for a claim check" banner with a **Resume calling** button whenever you
-are ready.
+Record the winner, then **Close and stay paused**. The main screen then shows
+that the stage has been won, with **Continue to** the next stage (or **Finish
+this game** on the last stage) and **Check another claimant**.
+
+**Resume calling is not offered once a stage has a winner, and the app refuses
+it.** Carrying on calling for a prize that has already gone is how a stage gets
+paid twice. Move on with Continue instead.
 
 ### Two people win at once
 
-Record them both, as two separate winners. The app splits the prize evenly
-between them and shows each person's share. That is the house rule on the TV and
-it is now what the record says.
+After recording the first winner, press **Check another claimant** and check the
+second person's ticket as a new claim. Each claimant is a separate check and a
+separate winner, so a retry can never record the same person twice. The app
+splits the stage prize evenly between them and shows each person's share. A
+snowball jackpot is shared only between the winners who were eligible for it.
+
+### The host phone reloaded, or another device took over, mid-claim
+
+Nothing is lost. The claim is held by the server, so the screen reopens it with
+the numbers already tapped and carries on from there. If the winner had already
+been confirmed, it is not recorded twice.
 
 ### The snowball pot is not showing
 
@@ -88,8 +120,11 @@ retries by itself; bringing the screen back to the front makes it retry sooner.
 
 ### The game ended but the pot did not move
 
-A banner appears offering **Settle the pot**. Press it. It is safe to press more
-than once: if the pot did move after all, it says so and changes nothing.
+A banner appears offering **Settle the pot**, before the screen moves on to the
+next game. Press it. It is safe to press more than once: if the pot did move
+after all, it says so and changes nothing. You can carry on without it, but then
+tell an admin: the admin's host console lists every finished snowball game whose
+pot has not settled, with a **Settle** button.
 
 ### A game needs to end with nobody winning
 
@@ -109,6 +144,24 @@ week's TV advertises this week's figure.
    settle properly. Record the winners in the app afterwards if you can, or note
    them on paper and add them via `/admin` the next day.
 
+### Ending the night
+
+Finishing the last game ends the night by itself: the last game's "End Game &
+Finish Session" does both. If you stop early with games left unplayed, press
+**End the night** on the host console (open the session). It lists the games that
+will stay unplayed, and a snowball pot on an unplayed game does not move. It is
+refused while a game is still in progress: end that game first.
+
+The TV and the phones then show the end-of-night screen. If the night was ended
+by mistake, an admin sets the session back to Running.
+
+### "A new version is ready"
+
+The host screen shows this banner after an update. Press **Reload** when you are
+between calls. It waits until any claim check is finished before it appears. The
+TV and the phones pick up updates by themselves, never in the middle of a claim
+or a win.
+
 ### Somebody else's device has control
 
 Take control from the game screen. It works once the other device has been quiet
@@ -121,7 +174,8 @@ Reload it. It follows the session automatically once it is back.
 
 ## After the night
 
-- [ ] The last game is ended, so the session shows Completed.
+- [ ] The night is ended (by finishing the last game, or **End the night**), so
+      the session shows Completed.
 - [ ] The snowball pot shows the figure you expect for next time. Check it on
       `/admin/snowball`; the history table underneath explains every movement.
 - [ ] Prizes handed over are ticked off in Winners and Prizes.

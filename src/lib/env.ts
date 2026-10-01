@@ -10,15 +10,18 @@
 // next.config.ts imports this file directly, so it must stay free of path
 // aliases, imports and TypeScript-only runtime syntax (enums, namespaces).
 //
-// Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin falls back to
-// the request headers) and SUPABASE_SERVICE_ROLE_KEY (production does not set
-// it; startGame falls back without it until a later slice removes that path).
+// Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin comes from
+// src/lib/site-origin.ts, which falls back to Vercel's own production or
+// preview address) and SUPABASE_SERVICE_ROLE_KEY (production does not set it;
+// only /api/setup uses it).
 
 /**
  * Whether production builds need the management API key for the events feed.
- * False until the events feed ships (slice S4); a preview never needs it.
+ * True since the events feed shipped (slice S4). Only a Vercel production build
+ * needs it: previews and local builds run without it and the screens show the
+ * no-events loop (the feed reports `missing_config`).
  */
-export const EVENTS_FEED_REQUIRED = false;
+export const EVENTS_FEED_REQUIRED = true;
 
 export interface PublicSupabaseEnv {
   url: string;
@@ -77,6 +80,27 @@ function siteUrlProblem(value: string, isProduction: boolean): string | null {
   return null;
 }
 
+/**
+ * Why an ANCHOR_API_BASE_URL value is not usable, or null when it is fine. The
+ * management key travels in a header on every request to it, so it must be
+ * https; plain http is accepted only for a loopback host outside production,
+ * so a local run can point at a local management app. A path is allowed (the
+ * default is https://management.orangejelly.co.uk/api).
+ */
+function apiBaseUrlProblem(value: string, isProduction: boolean): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return 'is not a URL';
+  }
+  const isLocalHttp = parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname) && !isProduction;
+  if (parsed.protocol !== 'https:' && !isLocalHttp) return 'must use https';
+  if (parsed.username || parsed.password) return 'must not contain a username or password';
+  if (parsed.search || parsed.hash) return 'must not contain a query or fragment';
+  return null;
+}
+
 export interface ValidateBuildEnvOptions {
   /** Overrides EVENTS_FEED_REQUIRED; for tests. */
   eventsFeedRequired?: boolean;
@@ -108,8 +132,17 @@ export function validateBuildEnv(options: ValidateBuildEnvOptions = {}): void {
     if (problem) problems.push(`NEXT_PUBLIC_SITE_URL ${problem} (got "${siteUrl}").`);
   }
 
-  if (eventsFeedRequired && isProduction && !process.env.ANCHOR_API_KEY) {
+  // Trimmed, as src/lib/events-feed/client.ts reads it: a key of only spaces
+  // is no key, and passing the build with one would ship a feed that can
+  // never authenticate.
+  if (eventsFeedRequired && isProduction && !process.env.ANCHOR_API_KEY?.trim()) {
     problems.push('ANCHOR_API_KEY is not set, and production builds need it for the events feed.');
+  }
+
+  const apiBaseUrl = process.env.ANCHOR_API_BASE_URL?.trim();
+  if (apiBaseUrl) {
+    const problem = apiBaseUrlProblem(apiBaseUrl, isProduction);
+    if (problem) problems.push(`ANCHOR_API_BASE_URL ${problem} (got "${apiBaseUrl}").`);
   }
 
   if (problems.length > 0) {

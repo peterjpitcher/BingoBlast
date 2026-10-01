@@ -206,6 +206,20 @@ body {
   background-color: #0d5b3d !important;
 }
 
+/* Reduced motion (spec 5.7): no animation and no transitions at all, so a
+   pulse, bounce, spin or fade never plays for someone who has asked the
+   system for less movement. Unlayered and !important, so it beats every
+   Tailwind animate-* and transition-* utility. The slide loop's fade is a
+   script animation and checks the same media query itself. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* Simple utility for full-height screens until we fully migrate layouts */
 .min-h-screen-safe {
   min-height: 100vh; /* Fallback */

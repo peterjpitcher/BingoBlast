@@ -19,6 +19,34 @@ returns void language sql as $$
   insert into test_results (name, ok, detail) values (p_name, p_ok, p_detail);
 $$;
 
+-- A checked, valid claim for a game's current stage, as the host screen makes
+-- one: begin a check for the attempt (replacing any other), then check the last
+-- N balls called, which always include the last ball. Since
+-- 20261001000400_claim_enforcement.sql record_winner_atomic records a new
+-- winner only for such an attempt, with the attempt id as p_client_request_id.
+-- pg_temp keeps it out of public, where the replay's function count would see it.
+create or replace function pg_temp.valid_claim(p_game_id uuid, p_attempt_id uuid)
+returns void language plpgsql as $$
+declare
+  v_state public.game_states;
+  v_required int;
+  v_numbers int[];
+  v_result jsonb;
+begin
+  perform public.begin_claim_check(p_game_id, p_attempt_id, true);
+  select * into v_state from public.game_states where game_id = p_game_id;
+  select public.required_claim_count(g.stage_sequence ->> v_state.current_stage_index)
+    into v_required from public.games g where g.id = p_game_id;
+  select array_agg(x::int) into v_numbers
+    from (select x from jsonb_array_elements_text(v_state.called_numbers) with ordinality e(x, o)
+           order by o desc limit v_required) s;
+  v_result := public.check_claim(p_game_id, p_attempt_id, v_numbers, false);
+  if v_result ->> 'code' is distinct from 'valid' then
+    raise exception 'fixture claim was not valid: %', v_result - 'game_state';
+  end if;
+end;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Fixtures. Fixed uuids so a failure detail is greppable.
 -- ---------------------------------------------------------------------------
@@ -175,6 +203,11 @@ begin
   perform t('jackpot :: the board is past the window before this test',
             v_count > 44, 'count is ' || v_count || ', pot window is 44');
 
+  -- Since M2b the forced flag outside the window is not the manual exemption,
+  -- so this award needs a checked claim like any other.
+  perform pg_temp.valid_claim('77777777-7777-4777-8777-777777777777',
+                              'bbbbbbbb-0000-4000-8000-000000000001');
+
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     '77777777-7777-4777-8777-777777777777',
@@ -205,14 +238,16 @@ insert into public.game_states (
 )
 select :game2_id,
        (select jsonb_agg(n) from generate_series(1, 90) n),
-       (select jsonb_agg(n) from generate_series(1, 10) n),
-       10, 0, 'in_progress', :host_id, now(), now();
+       (select jsonb_agg(n) from generate_series(1, 15) n),
+       15, 0, 'in_progress', :host_id, now(), now();
 
 do $$
 declare
   v_first boolean;
   v_second boolean;
 begin
+  perform pg_temp.valid_claim('88888888-8888-4888-8888-888888888888',
+                              'bbbbbbbb-0000-4000-8000-000000000002');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     '88888888-8888-4888-8888-888888888888',
@@ -229,6 +264,8 @@ begin
             'is_snowball_jackpot was ' || coalesce(v_first::text, 'null'));
 
   -- A tie: a second valid Full House on the same game and the same ball.
+  perform pg_temp.valid_claim('88888888-8888-4888-8888-888888888888',
+                              'bbbbbbbb-0000-4000-8000-000000000003');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     '88888888-8888-4888-8888-888888888888',
@@ -464,6 +501,8 @@ select :game3_id,
 do $$
 declare v_amount int; v_share int;
 begin
+  perform pg_temp.valid_claim('aaaaaaaa-3333-4333-8333-333333333333',
+                              'cccccccc-0000-4000-8000-000000000001');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     'aaaaaaaa-3333-4333-8333-333333333333',
@@ -483,6 +522,8 @@ do $$
 declare v_shares int[];
 begin
   -- A tie on the same stage. Both are valid wins; the prize is one prize.
+  perform pg_temp.valid_claim('aaaaaaaa-3333-4333-8333-333333333333',
+                              'cccccccc-0000-4000-8000-000000000002');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     'aaaaaaaa-3333-4333-8333-333333333333',
@@ -503,6 +544,8 @@ do $$
 declare v_shares int[]; v_total int;
 begin
   -- Three ways on an amount that does not divide: 1000 / 3 = 333.33.
+  perform pg_temp.valid_claim('aaaaaaaa-3333-4333-8333-333333333333',
+                              'cccccccc-0000-4000-8000-000000000003');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     'aaaaaaaa-3333-4333-8333-333333333333',
@@ -570,6 +613,8 @@ select :game4_id,
 do $$
 declare v_share int; v_amount int;
 begin
+  perform pg_temp.valid_claim('aaaaaaaa-4444-4444-8444-444444444444',
+                              'cccccccc-0000-4000-8000-000000000004');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     'aaaaaaaa-4444-4444-8444-444444444444',
@@ -589,6 +634,8 @@ begin
   -- Rows on one stage that disagree about the prize are not one prize being
   -- shared. Each keeps its own value rather than averaging into a number nobody
   -- agreed to.
+  perform pg_temp.valid_claim('aaaaaaaa-4444-4444-8444-444444444444',
+                              'cccccccc-0000-4000-8000-000000000005');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     'aaaaaaaa-4444-4444-8444-444444444444',
@@ -647,6 +694,8 @@ begin
   -- The RPC is the only way a winner is created, so this is the assertion that
   -- keeps the table clean going forwards. It writes the literal and ignores
   -- anything a caller might want instead: there is no parameter for a name.
+  perform pg_temp.valid_claim('aaaaaaaa-4444-4444-8444-444444444444',
+                              'cccccccc-0000-4000-8000-000000000009');
   perform public.record_winner_atomic(
     '55555555-5555-4555-8555-555555555555',
     'aaaaaaaa-4444-4444-8444-444444444444',

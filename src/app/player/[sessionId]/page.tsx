@@ -6,18 +6,17 @@ import type { InitialLoadStatus } from './player-ui';
 import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
+import { getTodayIsoDateInLondon } from '@/lib/dates';
+import { getEventsProjection } from '@/lib/events-feed/projection';
+import {
+  PUBLIC_GAME_COLUMNS,
+  PUBLIC_GAME_STATE_COLUMNS,
+  PUBLIC_SESSION_COLUMNS,
+} from '@/lib/public-selectors';
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
 }
-
-// Explicit narrow column lists keep public surfaces from leaking unintended
-// fields and document exactly what the UI consumes from each table.
-const SESSION_SELECT = 'id, name, status, active_game_id';
-const GAME_SELECT =
-  'id, session_id, game_index, name, type, stage_sequence, background_colour, prizes, snowball_pot_id';
-const GAME_STATE_PUBLIC_SELECT =
-  'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
 
 /**
  * PostgREST's "no rows returned by .single()". Anything else is an outage.
@@ -38,12 +37,16 @@ export default async function PlayerPage({ params }: PageProps) {
     notFound();
   }
 
+  // Upcoming events for the start and end of the night (spec 5.5), read
+  // alongside the session rather than after it. Cached, and never throws.
+  const eventsPromise = getEventsProjection();
+
   const supabase = await createClient();
 
   // Fetch session details
   const { data: sessionRow, error: sessionError } = await supabase
     .from('sessions')
-    .select(SESSION_SELECT)
+    .select(PUBLIC_SESSION_COLUMNS)
     .eq('id', sessionId)
     .single<Database['public']['Tables']['sessions']['Row']>();
 
@@ -63,11 +66,16 @@ export default async function PlayerPage({ params }: PageProps) {
     // A shell carrying the real id, so the client's poll re-reads the session
     // and replaces this the moment the database answers again. The name is
     // deliberately neutral rather than alarming: it is on a pub TV.
+    // state_version -1 lets the first real snapshot replace it.
     session = {
       id: sessionId,
       name: 'Bingo',
       status: 'running',
       active_game_id: null,
+      start_date: getTodayIsoDateInLondon(),
+      started_at: null,
+      completed_at: null,
+      state_version: -1,
     } as Database['public']['Tables']['sessions']['Row'];
   }
 
@@ -83,7 +91,7 @@ export default async function PlayerPage({ params }: PageProps) {
     // Fetch the active game details
     const { data: game, error: gameError } = await supabase
       .from('games')
-      .select(GAME_SELECT)
+      .select(PUBLIC_GAME_COLUMNS)
       .eq('id', session.active_game_id)
       .single<Database['public']['Tables']['games']['Row']>();
 
@@ -95,7 +103,7 @@ export default async function PlayerPage({ params }: PageProps) {
       // Fetch the initial game state for the active game
       const { data: gameState, error: gameStateError } = await supabase
         .from('game_states_public')
-        .select(GAME_STATE_PUBLIC_SELECT)
+        .select(PUBLIC_GAME_STATE_COLUMNS)
         .eq('game_id', game.id)
         .single<Database['public']['Tables']['game_states_public']['Row']>();
 
@@ -112,6 +120,8 @@ export default async function PlayerPage({ params }: PageProps) {
     }
   }
 
+  const initialEvents = await eventsPromise;
+
   return (
     <PlayerUI
       session={session}
@@ -119,6 +129,7 @@ export default async function PlayerPage({ params }: PageProps) {
       initialGameState={initialGameState}
       initialPrizeText={prizeText}
       initialLoadStatus={initialLoadStatus}
+      initialEvents={initialEvents}
     />
   );
 }

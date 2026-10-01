@@ -1,10 +1,16 @@
 // src/components/connection-banner.tsx
 'use client';
 import { useEffect, useState } from 'react';
+import { tvText } from '@/components/display/tv-text';
 
 interface ConnectionBannerProps {
   visible: boolean;
   shouldAutoRefresh: boolean;
+  /**
+   * 'tv' sizes the banner for the pub TV's text floors (spec 5.7); the
+   * default suits the phone and the host screen.
+   */
+  variant?: 'default' | 'tv';
   /**
    * Set while the surface is holding state a reload would destroy: a host modal
    * that is open, numbers already tapped into a claim, a request in flight.
@@ -40,7 +46,7 @@ interface ConnectionBannerProps {
  *   which is exactly right here: it is reliable when it says false, and false is
  *   the only answer that changes the behaviour.
  */
-export function ConnectionBanner({ visible, shouldAutoRefresh, hasUnsavedWork = false }: ConnectionBannerProps) {
+export function ConnectionBanner({ visible, shouldAutoRefresh, hasUnsavedWork = false, variant = 'default' }: ConnectionBannerProps) {
   const [isOffline, setIsOffline] = useState(false);
 
   useEffect(() => {
@@ -72,17 +78,24 @@ export function ConnectionBanner({ visible, shouldAutoRefresh, hasUnsavedWork = 
     window.location.reload();
   };
 
+  // Dark text on solid amber (about 8:1), where white on 90 percent amber was
+  // about 2:1. The Refresh target is at least 44px tall.
+  const barClass =
+    'fixed top-2 left-1/2 -translate-x-1/2 z-50 flex max-w-[calc(100vw-1rem)] items-center gap-3 rounded-full bg-amber-500 px-4 py-1 font-semibold text-bingo-dark shadow';
+  const buttonClass =
+    'ml-2 min-h-11 shrink-0 rounded-full bg-white/40 px-4 font-bold text-bingo-dark hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bingo-dark';
+
   return (
     <div
       role="status"
       aria-live="polite"
-      className="fixed top-2 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-full bg-amber-500/90 px-4 py-2 text-sm text-white shadow"
+      className={variant === 'tv' ? tvText('xs', barClass, 'px-[1em]') : `${barClass} text-base`}
     >
-      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-white" />
+      <span className="inline-block h-[0.5em] w-[0.5em] shrink-0 animate-pulse rounded-full bg-current" />
       <span>{isOffline ? 'No connection. Waiting to reconnect…' : 'Reconnecting…'}</span>
       <button
         type="button"
-        className="ml-2 rounded bg-white/20 px-2 py-1 text-xs hover:bg-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+        className={variant === 'tv' ? tvText('xs', buttonClass, 'px-[0.8em]') : `${buttonClass} text-base`}
         onClick={handleManualRefresh}
       >
         Refresh

@@ -114,9 +114,10 @@ export default async function GameControlPage({ params }: PageProps) {
     return <LoadErrorScreen retryHref={retryHref} />;
   }
 
-  // Fetch initial game state. Read here with the same cookie client rather than
-  // through getCurrentGameState, because only the raw error code can tell "this
-  // game has not been started" (no row) from a failed read.
+  // Fetch initial game state, with the same cookie client, keeping the raw
+  // error code: only that can tell "this game has not been started" (no row)
+  // from a failed read. The claim fields come with it, which is how the host
+  // screen reopens a claim in progress after a reload or a takeover.
   const { data: initialGameState, error: gameStateError } = await supabase
     .from('game_states')
     .select('*')
@@ -155,7 +156,7 @@ export default async function GameControlPage({ params }: PageProps) {
        <header className="p-3 bg-[#005131]/95 border-b border-[#1f7c58] flex justify-between items-center sticky top-0 z-20 shadow-md">
         <div className="flex items-center gap-3">
             <Link href="/host">
-              <Button variant="secondary" size="sm" className="h-8 px-2 border-[#1f7c58] bg-[#0f6846] hover:bg-[#136f4b]">
+              <Button variant="secondary" size="sm" className="min-w-11 px-2 border-[#1f7c58] bg-[#0f6846] hover:bg-[#136f4b]">
                 &larr;
               </Button>
             </Link>
@@ -164,12 +165,12 @@ export default async function GameControlPage({ params }: PageProps) {
             </div>
             <div className="leading-tight hidden sm:block">
               <h1 className="text-sm font-bold text-white">{session.name}</h1>
-              <p className="text-xs text-white/80">{game.name}</p>
+              <p className="text-sm text-white/80">{game.name}</p>
             </div>
         </div>
         <div className="flex items-center gap-3">
           <form action={signout}>
-            <Button variant="ghost" size="sm" className="text-xs h-8 text-white hover:bg-[#0f6846]">Sign Out</Button>
+            <Button variant="ghost" size="sm" className="text-white hover:bg-[#0f6846]">Sign Out</Button>
           </form>
         </div>
       </header>
