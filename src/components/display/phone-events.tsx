@@ -3,8 +3,10 @@
 // Upcoming events on a phone (spec 5.5, D5): at the start and end of the
 // night, under the break card and between games on /player, and on /play when
 // no bingo is running. The same events as the TV, next bingo night first, each with a
-// "View event" link that opens in a new tab. Also the review button (spec
-// 5.6), shown only when switched on.
+// "View event" link that opens in a new tab. The first event leads with its
+// poster at the full width of the card; the rest keep a small tile, so the
+// list stays short enough to scroll. Also the review button (spec 5.6), shown
+// only when switched on.
 //
 // The labels ("Tonight", "7pm") need the phone's clock, so the list appears
 // once the page is running in the browser; the server render leaves it out
@@ -47,6 +49,34 @@ function EventThumbnail({ image }: { image: ScreenEventImage | null }) {
   );
 }
 
+/**
+ * The first event's poster, at the full width of the card and shown whole:
+ * the frame takes the artwork's own shape (16:9, or square).
+ */
+function EventPoster({ image }: { image: ScreenEventImage | null }) {
+  const [failed, setFailed] = useState(false);
+  if (!image || failed) return null;
+  return (
+    <div
+      className={cn(
+        'relative w-full overflow-hidden rounded-card border border-line-gold bg-anchor-green-raised',
+        image.square ? 'aspect-square' : 'aspect-video'
+      )}
+    >
+      <Image
+        src={image.url}
+        alt={image.alt}
+        fill
+        // The card is the width of the phone less its gutters, and never
+        // wider than the page column (28rem).
+        sizes="(max-width: 28rem) 100vw, 28rem"
+        className="object-contain"
+        onError={() => setFailed(true)}
+      />
+    </div>
+  );
+}
+
 interface PhoneEventsProps {
   projection: EventsProjection | null;
   /** The phone's session date, so tonight's own bingo night is left out; null on /play. */
@@ -72,11 +102,16 @@ export function PhoneEvents({ projection, sessionDate, phase, inGameSubState = n
     <Card className={cn('flex flex-col gap-3.5 p-5 text-left', className)}>
       <h2 className="text-2xl leading-[1.1] text-anchor-cream-text">Coming up at The Anchor</h2>
       <ul className="flex flex-col gap-3.5">
-        {items.map(({ event, isNextBingo }) => {
+        {items.map(({ event, isNextBingo }, index) => {
           const whenLine = formatEventWhenAndTime(event.startsAt, minuteMs);
+          const isLead = index === 0;
           return (
-            <li key={event.id} className="flex gap-3.5 border-t border-line pt-3.5">
-              <EventThumbnail key={event.image?.url ?? 'none'} image={event.image} />
+            <li key={event.id} className={cn('flex gap-3.5 border-t border-line pt-3.5', isLead && 'flex-col')}>
+              {isLead ? (
+                <EventPoster key={event.image?.url ?? 'none'} image={event.image} />
+              ) : (
+                <EventThumbnail key={event.image?.url ?? 'none'} image={event.image} />
+              )}
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 {isNextBingo && (
                   <Kicker as="p" className="text-[11px]">Next bingo night</Kicker>
