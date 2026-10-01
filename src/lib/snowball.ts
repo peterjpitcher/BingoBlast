@@ -1,3 +1,5 @@
+import { formatPoundsAmount } from './money';
+
 export type SnowballWindowStatus = 'open' | 'last_call' | 'closed';
 
 export function getSnowballCallsRemaining(numbersCalledCount: number, maxCalls: number): number {
@@ -31,12 +33,11 @@ export function getSnowballCallsLabel(numbersCalledCount: number, maxCalls: numb
   return `${remainingCalls} ${remainingCalls === 1 ? 'call' : 'calls'} left`;
 }
 
+/**
+ * A pounds amount without the pound sign, for copy that supplies its own:
+ * "212.50", "1,250", "0". Delegates to formatPoundsAmount so the two can never
+ * disagree.
+ */
 export function formatPounds(value: number): string {
-  if (!Number.isFinite(value)) {
-    return '0';
-  }
-  if (Number.isInteger(value)) {
-    return `${value}`;
-  }
-  return value.toFixed(2).replace(/\.?0+$/, '');
+  return formatPoundsAmount(value).replace('£', '');
 }

@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { getPublicSupabaseEnv } from '@/lib/env'
 
 /**
  * Roles that may reach a staff route at all.
@@ -39,9 +40,10 @@ export async function updateSession(request: NextRequest) {
     },
   })
 
+  const { url, anonKey } = getPublicSupabaseEnv()
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url,
+    anonKey,
     {
       cookies: {
         getAll() {

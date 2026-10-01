@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { formatDateInLondon } from '@/lib/dates';
 import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
@@ -21,38 +21,107 @@ interface HostDashboardProps {
   sessions: SessionWithGames[];
 }
 
+/** What one tap on Start, Resume or Re-open came to. 'busy' means another start was already in flight. */
+type StartOutcome =
+  | { status: 'started' }
+  | { status: 'needs-cash-jackpot' }
+  | { status: 'busy' }
+  | { status: 'failed'; message: string };
+
 export default function HostDashboard({ sessions }: HostDashboardProps) {
   const router = useRouter();
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [cashJackpotPrompt, setCashJackpotPrompt] = useState<{ sessionId: string; gameId: string; gameName: string } | null>(null);
   const [cashJackpotAmount, setCashJackpotAmount] = useState('');
   const [isSubmittingCashJackpot, setIsSubmittingCashJackpot] = useState(false);
+  const [cashJackpotError, setCashJackpotError] = useState<string | null>(null);
+
+  // Start, Resume and Re-open (X18). The game being started shows "Starting…",
+  // and every start button is disabled while one is in flight. The ref is the
+  // real double-tap guard: two taps inside one render both read the same state,
+  // so state alone would let a second start through.
+  const startInFlightRef = useRef(false);
+  const [startingGameId, setStartingGameId] = useState<string | null>(null);
+  // In-app error text in place of alert(), shown under the game it belongs to.
+  const [startError, setStartError] = useState<{ gameId: string; message: string } | null>(null);
+  // In-app confirmation in place of confirm() before re-opening a finished game.
+  const [reopenTarget, setReopenTarget] = useState<{ sessionId: string; gameId: string; gameName: string } | null>(null);
 
   const toggleSession = (sessionId: string) => {
     setExpandedSessionId(expandedSessionId === sessionId ? null : sessionId);
   };
 
-  const startSelectedGame = async (sessionId: string, gameId: string, cashJackpotInput?: string) => {
-    const result = await startGame(sessionId, gameId, cashJackpotInput);
-    if (!result?.success) {
-      alert("Error starting game: " + (result?.error || "Unknown error"));
-      return false;
-    }
+  /**
+   * Starts (or resumes, or re-opens) a game. Holds the in-flight guard for the
+   * whole request, and on success leaves the busy state up while the page
+   * navigates away, so a second tap cannot start anything in the meantime.
+   */
+  const startSelectedGame = async (
+    sessionId: string,
+    gameId: string,
+    cashJackpotInput?: string
+  ): Promise<StartOutcome> => {
+    if (startInFlightRef.current) return { status: 'busy' };
+    startInFlightRef.current = true;
+    setStartingGameId(gameId);
+    setStartError(null);
 
-    if (result.data?.requiresCashJackpotAmount) {
-      setCashJackpotPrompt({
-        sessionId,
-        gameId,
-        gameName: result.data.gameName || 'Jackpot Game',
-      });
-      setCashJackpotAmount('');
-      return false;
-    }
+    let navigating = false;
+    try {
+      const result = await startGame(sessionId, gameId, cashJackpotInput);
+      if (!result?.success) {
+        return { status: 'failed', message: result?.error || 'Could not start the game. Try again.' };
+      }
 
-    if (result.redirectTo) {
-      router.push(result.redirectTo);
+      if (result.data?.requiresCashJackpotAmount) {
+        setCashJackpotPrompt({
+          sessionId,
+          gameId,
+          gameName: result.data.gameName || 'Jackpot Game',
+        });
+        setCashJackpotAmount('');
+        setCashJackpotError(null);
+        return { status: 'needs-cash-jackpot' };
+      }
+
+      if (result.redirectTo) {
+        navigating = true;
+        router.push(result.redirectTo);
+      }
+      return { status: 'started' };
+    } catch (err) {
+      console.error(err);
+      return {
+        status: 'failed',
+        message: 'Could not reach the server to start the game. Check the connection and try again.',
+      };
+    } finally {
+      if (!navigating) {
+        startInFlightRef.current = false;
+        setStartingGameId(null);
+      }
     }
-    return true;
+  };
+
+  const handleStartFromList = async (sessionId: string, gameId: string) => {
+    const outcome = await startSelectedGame(sessionId, gameId);
+    if (outcome.status === 'failed') {
+      setStartError({ gameId, message: outcome.message });
+    }
+  };
+
+  const handleConfirmReopen = async () => {
+    if (!reopenTarget) return;
+    const { sessionId, gameId } = reopenTarget;
+    setReopenTarget(null);
+    await handleStartFromList(sessionId, gameId);
+  };
+
+  const closeCashJackpotPrompt = () => {
+    if (isSubmittingCashJackpot) return;
+    setCashJackpotPrompt(null);
+    setCashJackpotAmount('');
+    setCashJackpotError(null);
   };
 
   return (
@@ -125,6 +194,8 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                           const isInProgress = status === 'in_progress';
                           
                           const isPlayable = activeOrNextGame?.id === game.id || isCompleted;
+                          const isStartingThis = startingGameId === game.id;
+                          const gameStartError = startError?.gameId === game.id ? startError.message : null;
                           
                           // It is locked if it is NOT playable (which means it's a future game)
                           const isLocked = !isPlayable;
@@ -160,7 +231,7 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                 </div>
                               </div>
                               
-                              <div>
+                              <div className="flex flex-col items-end gap-1">
                                 {isPlayable ? (
                                   <Button 
                                     size="sm" 
@@ -169,21 +240,18 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                       isInProgress ? "bg-[#a57626] hover:bg-[#8f6621] border-[#a57626] text-white" :
                                       isCompleted ? "border-[#a57626] text-white hover:bg-[#a57626]/20" : ""
                                     }
-                                    onClick={async (e) => {
+                                    disabled={startingGameId !== null}
+                                    onClick={(e) => {
                                         e.preventDefault();
-                                        if (isCompleted && !confirm("⚠️ Are you sure you want to RE-OPEN this finished game?\n\nThis will resume calling and allow you to correct mistakes.")) {
+                                        if (isCompleted) {
+                                            setStartError(null);
+                                            setReopenTarget({ sessionId: session.id, gameId: game.id, gameName: game.name });
                                             return;
                                         }
-                                        
-                                        try {
-                                            await startSelectedGame(session.id, game.id);
-                                        } catch (err) {
-                                            console.error(err);
-                                            alert("An unexpected error occurred: " + (err instanceof Error ? err.message : String(err)));
-                                        }
+                                        void handleStartFromList(session.id, game.id);
                                     }}
                                   >
-                                    {isInProgress ? 'Resume' : isCompleted ? 'Re-open' : 'Start'}
+                                    {isStartingThis ? 'Starting…' : isInProgress ? 'Resume' : isCompleted ? 'Re-open' : 'Start'}
                                   </Button>
                                 ) : (
                                   <Button 
@@ -194,6 +262,11 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
                                   >
                                     Locked
                                   </Button>
+                                )}
+                                {gameStartError && (
+                                  <p role="alert" className="max-w-[16rem] text-right text-xs text-white">
+                                    {gameStartError}
+                                  </p>
                                 )}
                               </div>
                             </div>
@@ -210,16 +283,44 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
       )}
 
       <Modal
+        isOpen={!!reopenTarget}
+        onClose={() => setReopenTarget(null)}
+        title="Re-open this finished game?"
+        className="max-w-md bg-[#003f27] border border-[#1f7c58]"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-white/90">
+            <span className="font-bold text-white">{reopenTarget?.gameName}</span> has finished.
+            Re-opening it resumes calling so you can correct a mistake.
+          </p>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <Button variant="secondary" className="min-h-[44px]" onClick={() => setReopenTarget(null)}>
+            Keep it finished
+          </Button>
+          <Button
+            variant="primary"
+            className="min-h-[44px] bg-[#a57626] hover:bg-[#8f6621] border border-[#a57626]"
+            onClick={() => { void handleConfirmReopen(); }}
+            disabled={startingGameId !== null}
+          >
+            Re-open
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
         isOpen={!!cashJackpotPrompt}
-        onClose={() => {
-          if (isSubmittingCashJackpot) return;
-          setCashJackpotPrompt(null);
-          setCashJackpotAmount('');
-        }}
+        onClose={closeCashJackpotPrompt}
         title="Set Cash Jackpot"
         className="max-w-md bg-[#003f27] border border-[#1f7c58]"
       >
         <div className="space-y-4">
+          {cashJackpotError && (
+            <div role="alert" className="p-3 bg-[#a57626]/20 border border-[#a57626] text-white rounded">
+              {cashJackpotError}
+            </div>
+          )}
           <p className="text-sm text-white/85">
             Enter tonight&apos;s cash jackpot for <span className="font-bold text-white">{cashJackpotPrompt?.gameName}</span>. This will be shown as the game prize.
           </p>
@@ -240,11 +341,8 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
         <div className="mt-6 flex justify-end gap-3">
           <Button
             variant="secondary"
-            onClick={() => {
-              if (isSubmittingCashJackpot) return;
-              setCashJackpotPrompt(null);
-              setCashJackpotAmount('');
-            }}
+            onClick={closeCashJackpotPrompt}
+            disabled={isSubmittingCashJackpot}
           >
             Cancel
           </Button>
@@ -252,24 +350,28 @@ export default function HostDashboard({ sessions }: HostDashboardProps) {
             variant="primary"
             className="bg-[#005131] hover:bg-[#0f6846] border border-[#a57626]"
             onClick={async () => {
-              if (!cashJackpotPrompt) return;
+              if (!cashJackpotPrompt || isSubmittingCashJackpot) return;
               if (!cashJackpotAmount.trim()) {
-                alert('Enter a cash jackpot amount first.');
+                setCashJackpotError('Enter a cash jackpot amount first.');
                 return;
               }
 
+              setCashJackpotError(null);
               setIsSubmittingCashJackpot(true);
               try {
-                const started = await startSelectedGame(cashJackpotPrompt.sessionId, cashJackpotPrompt.gameId, cashJackpotAmount);
-                if (started) {
+                const outcome = await startSelectedGame(cashJackpotPrompt.sessionId, cashJackpotPrompt.gameId, cashJackpotAmount);
+                if (outcome.status === 'started') {
                   setCashJackpotPrompt(null);
                   setCashJackpotAmount('');
+                } else if (outcome.status === 'failed') {
+                  setCashJackpotError(outcome.message);
                 }
               } finally {
                 setIsSubmittingCashJackpot(false);
               }
             }}
-            disabled={isSubmittingCashJackpot}
+            // Disabled on an empty field as well as refused after the tap.
+            disabled={isSubmittingCashJackpot || cashJackpotAmount.trim().length === 0}
           >
             {isSubmittingCashJackpot ? 'Starting...' : 'Set Amount & Start'}
           </Button>

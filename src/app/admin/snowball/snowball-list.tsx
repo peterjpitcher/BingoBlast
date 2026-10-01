@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { archiveSnowballPot, createSnowballPot, resetSnowballPot, updateSnowballPot } from './actions';
 import { formatPounds } from '@/lib/snowball';
+import { formatPoundsAmount } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
@@ -163,16 +164,16 @@ export default function SnowballList({ pots }: SnowballListProps) {
                     <tr key={pot.id} className="hover:bg-slate-800/30 transition-colors">
                       <td className="px-4 py-3 font-medium text-white">{pot.name}</td>
                       <td className="px-4 py-3">
-                          <span className="text-green-400 font-bold text-lg">£{pot.current_jackpot_amount}</span>
+                          <span className="text-green-400 font-bold text-lg">{formatPoundsAmount(Number(pot.current_jackpot_amount))}</span>
                       </td>
                       <td className="px-4 py-3">
                           <span className="px-2 py-0.5 bg-indigo-900/50 text-indigo-300 rounded border border-indigo-800 font-medium">{pot.current_max_calls}</span>
                       </td>
                       <td className="px-4 py-3 text-slate-400 text-xs">
-                          +£{pot.jackpot_increment} / +{pot.calls_increment} calls
+                          +{formatPoundsAmount(Number(pot.jackpot_increment))} / +{pot.calls_increment} calls
                       </td>
                       <td className="px-4 py-3 text-slate-400 text-xs">
-                          £{pot.base_jackpot_amount} / {pot.base_max_calls} calls
+                          {formatPoundsAmount(Number(pot.base_jackpot_amount))} / {pot.base_max_calls} calls
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
                         <Button variant="ghost" size="sm" className="text-yellow-500 hover:text-yellow-400 hover:bg-yellow-900/20 min-h-[44px] px-2" onClick={() => handleShowReset(pot)}>Reset</Button>

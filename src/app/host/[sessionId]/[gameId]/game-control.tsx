@@ -14,6 +14,9 @@ import { cn } from '@/lib/utils';
 import { BingoBall } from '@/components/ui/bingo-ball';
 import { useWakeLock } from '@/hooks/wake-lock';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
+import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
+import { useBuildCheck } from '@/hooks/use-build-check';
+import { NewVersionBanner } from '@/components/new-version-banner';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining, isSnowballJackpotEligible } from '@/lib/snowball';
 import { isFreshGameState } from '@/lib/game-state-version';
@@ -114,6 +117,22 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const [potNeedsSettling, setPotNeedsSettling] = useState(false);
     const [isSettlingPot, setIsSettlingPot] = useState(false);
     const [showSkipConfirm, setShowSkipConfirm] = useState(false);
+    // The stage the Post Win and Skip modals are about, captured when each one
+    // opens and used for every tap until the modal closes (X2).
+    //
+    // The expected stage used to be read from the live state at the moment of
+    // the tap. After an advance that committed but lost its response, the poll
+    // moved the live state on a stage, so the retry named the NEW stage and the
+    // server advanced again: a whole stage skipped with its prize unawarded.
+    // Captured here, a retry names the stage the host actually won or skipped,
+    // and the server absorbs it as a repeat.
+    //
+    // State rather than a ref because the modals' own labels (Continue Playing
+    // or Move to Next Game, the skip title) must come from the same captured
+    // stage. It is only ever set as a modal opens, so every handler render
+    // reads the captured value.
+    const [postWinStageIndex, setPostWinStageIndex] = useState<number | null>(null);
+    const [skipStageIndex, setSkipStageIndex] = useState<number | null>(null);
     const [skipError, setSkipError] = useState<string | null>(null);
     const [showEndGameModal, setShowEndGameModal] = useState(false);
     const [isEndingGame, setIsEndingGame] = useState(false);
@@ -163,8 +182,22 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         isVoidingWinner || isSubmittingCashJackpot || isEndingGame || isSettlingPot;
     const hasUnsavedWork = isAnyModalOpen || selectedNumbers.length > 0 || isAnyRequestInFlight;
 
-    // Singleton Supabase client — all subscriptions share one WebSocket connection
-    const supabaseRef = useRef(createClient());
+    // New releases (S0.4). The host screen never reloads by itself: it offers
+    // "A new version is ready" with a Reload button, and holds even that back
+    // while the host is in a claim, so it cannot land on top of a ticket being
+    // read out.
+    const isInClaim =
+        showValidationModal || showWinnerModal || showManualSnowballModal ||
+        showPostWinModal || selectedNumbers.length > 0;
+    const { showPrompt: showNewVersionPrompt, reload: reloadForNewVersion } = useBuildCheck({
+        mode: 'prompt',
+        safe: !isInClaim,
+    });
+
+    // One Supabase client for the screen: every subscription shares its
+    // WebSocket. Held in state rather than a ref so it can be handed to hooks
+    // during render.
+    const [supabase] = useState(createClient);
 
     // Connection health: drives the reconnecting banner + auto-refresh.
     // The returned object changes once a second by design, so ONLY the stable
@@ -232,13 +265,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // Winner list fetchers, shared by the subscriptions below and by the void
     // control so a void refreshes both lists without waiting on Realtime.
     const fetchGameWinners = useCallback(async () => {
-        const supabase = supabaseRef.current;
         const { data } = await supabase.from('winners').select('*').eq('game_id', gameId).order('created_at', { ascending: false });
         if (data) setCurrentWinners(data);
-    }, [gameId]);
+    }, [supabase, gameId]);
 
     const fetchSessionWinners = useCallback(async () => {
-        const supabase = supabaseRef.current;
         const { data } = await supabase
             .from('winners')
             .select(`
@@ -249,7 +280,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             .order('created_at', { ascending: false });
 
         if (data) setSessionWinners(data as SessionWinner[]);
-    }, [sessionId]);
+    }, [supabase, sessionId]);
 
     const refreshWinnerLists = useCallback(async () => {
         await Promise.all([fetchGameWinners(), fetchSessionWinners()]);
@@ -345,11 +376,21 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         isSnowballJackpotEligible(currentGameState.numbers_called_count, currentSnowballPot.current_max_calls)
     );
     const isSnowballEligibilityStage = isSnowballGame && currentStageName === 'Full House';
-    const isFinalStage = currentGameState.current_stage_index >= Math.max(0, game.stage_sequence.length - 1);
+    // The stage captured when Post Win opened (X2). Everything inside the Post
+    // Win modal reads these, never the live state, so its labels and its
+    // requests always agree about which stage the host just won.
+    const lastStageIndex = Math.max(0, game.stage_sequence.length - 1);
+    const postWinStage = postWinStageIndex ?? currentGameState.current_stage_index;
+    const postWinIsFinalStage = postWinStage >= lastStageIndex;
     // Last stage of the last game: there is nothing after this. The post-win
     // buttons must say so. Labelling it "Move to Next Game" when no next game
     // exists reads as "not for me", which is how two sessions were left running.
-    const isEndOfSession = isFinalStage && isLastGameOfSession;
+    const postWinIsEndOfSession = postWinIsFinalStage && isLastGameOfSession;
+    // And for the stage captured when Skip opened.
+    const skipModalStage = skipStageIndex ?? currentGameState.current_stage_index;
+    const skipStageName = game.stage_sequence[skipModalStage] || fallbackStageName;
+    const skipStagePrize = getPlannedPrize(skipModalStage);
+    const skipIsFinalStage = skipModalStage >= lastStageIndex;
 
     // Snowball eligibility is an explicit host choice, only demanded when it can
     // actually change what is paid out: a snowball Full House with the jackpot
@@ -393,8 +434,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
      * needs.
      */
     useEffect(() => {
-        const supabase = supabaseRef.current;
-
         if (game.type !== 'snowball' || !game.snowball_pot_id) {
             setCurrentSnowballPot(null);
             setPotLoadState('not-applicable');
@@ -449,14 +488,13 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             if (retryTimer) clearTimeout(retryTimer);
             document.removeEventListener('visibilitychange', onVisible);
         };
-    }, [game.type, game.snowball_pot_id]);
+    }, [supabase, game.type, game.snowball_pot_id]);
 
     // Shared poll routine — used by the polling interval, the visibility
     // handler, and the realtime reconnect path. Tracks an in-flight flag and a
     // monotonic sequence so a slow response can't clobber newer state.
     const pollGameState = useCallback(async () => {
         if (pollInFlightRef.current) return;
-        const supabase = supabaseRef.current;
         const seq = ++pollSeqRef.current;
         pollInFlightRef.current = true;
         try {
@@ -487,7 +525,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         // Depends on the stable health callbacks, never on the health object:
         // the object changes every second, which would give this callback a new
         // identity every second and re-arm the 3 second poll interval forever.
-    }, [gameId, markPollSuccess, markPollFailure]);
+    }, [supabase, gameId, markPollSuccess, markPollFailure]);
 
     /**
      * Applies whatever state a mutation returned, and turns a conflict into a
@@ -520,78 +558,38 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         [pollGameState],
     );
 
-    // Stable callable so the visibility handler can force-reconnect realtime.
-    const reconnectRealtimeRef = useRef<(() => void) | null>(null);
-
-    useEffect(() => {
-        const supabase = supabaseRef.current;
-        let isMounted = true;
-        let activeChannel: ReturnType<typeof supabase.channel> | null = null;
-        let reconnectTimeout: NodeJS.Timeout | null = null;
-        let attemptCount = 0;
-
-        const connect = () => {
-            if (!isMounted) return;
-            // Clear any pending reconnect so manual reconnects don't double-up.
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = null;
-            }
-            // Tear down any existing channel first.
-            if (activeChannel) {
-                supabase.removeChannel(activeChannel);
-                activeChannel = null;
-            }
-
-            activeChannel = supabase
-                .channel(`game_state:${gameId}:${Date.now()}`)
-                .on<GameState>(
-                    'postgres_changes',
-                    {
-                        event: 'UPDATE',
-                        schema: 'public',
-                        table: 'game_states',
-                        filter: `game_id=eq.${gameId}`
-                    },
-                    (payload) => {
-                        if (!isMounted) return;
-                        setCurrentGameState((current) =>
-                            isFreshGameState(current, payload.new) ? payload.new : current,
-                        );
-                    }
-                )
-                .subscribe((status) => {
-                    if (!isMounted) return;
-                    markRealtimeStatus(status);
-                    if (status === 'SUBSCRIBED') {
-                        attemptCount = 0;
-                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                        if (activeChannel) {
-                            supabase.removeChannel(activeChannel);
-                            activeChannel = null;
-                        }
-                        // Exponential backoff: 1s, 2s, 4s, 8s … capped at 30s
-                        const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
-                        attemptCount += 1;
-                        reconnectTimeout = setTimeout(connect, delay);
-                    }
-                });
-        };
-
-        reconnectRealtimeRef.current = connect;
-        connect();
-
-        return () => {
-            isMounted = false;
-            reconnectRealtimeRef.current = null;
-            if (reconnectTimeout) clearTimeout(reconnectTimeout);
-            if (activeChannel) supabase.removeChannel(activeChannel);
-        };
-        // Depends on the stable markRealtimeStatus callback, never on the health
-        // object: depending on the object tore this channel down and rebuilt it
-        // every second, which is faster than Supabase can subscribe a channel, so
-        // the host never received a single Realtime update.
-    }, [gameId, markRealtimeStatus]);
+    // Live game state. useRealtimeChannel owns the reconnect (X1): one channel
+    // at a time, at most one pending retry with a 1s to 30s backoff, and the
+    // CLOSED that realtime-js fires synchronously while a channel is being torn
+    // down is ignored instead of being taken for a failure. The hand-rolled
+    // version reacted to that CLOSED by removing and reconnecting again, and a
+    // late CLOSED from an old channel could tear down its replacement.
+    //
+    // onStatus is the stable markRealtimeStatus callback, never the health
+    // object: depending on the object tore this channel down and rebuilt it
+    // every second, which is faster than Supabase can subscribe a channel, so
+    // the host never received a single Realtime update.
+    const { reconnect: reconnectRealtime } = useRealtimeChannel({
+        supabase,
+        key: `game_state:${gameId}`,
+        onStatus: markRealtimeStatus,
+        build: (channel, isCurrent) =>
+            channel.on<GameState>(
+                'postgres_changes',
+                {
+                    event: 'UPDATE',
+                    schema: 'public',
+                    table: 'game_states',
+                    filter: `game_id=eq.${gameId}`
+                },
+                (payload) => {
+                    if (!isCurrent()) return;
+                    setCurrentGameState((current) =>
+                        isFreshGameState(current, payload.new) ? payload.new : current,
+                    );
+                }
+            ),
+    });
 
     // Polling fallback — re-fetch game state every 3 seconds to recover from
     // missed Realtime events. Skips when tab is hidden to save bandwidth.
@@ -608,12 +606,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     useEffect(() => {
         const handleVisibilityChange = () => {
             if (document.visibilityState !== 'visible') return;
-            reconnectRealtimeRef.current?.();
+            reconnectRealtime();
             void pollGameState();
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [pollGameState]);
+    }, [pollGameState, reconnectRealtime]);
 
     const handleCallNextNumber = async () => {
         if (!isController || isCallingNumber) return;
@@ -683,11 +681,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         if (!isController || isAdvancing) return;
         setActionError(null);
         setIsAdvancing(true);
-        // The stage the host is looking at, captured before the request. The
+        // The stage captured when Post Win opened (X2), not the live stage. The
         // server binds to this rather than to a value it reads itself, so a
-        // retry after a lost response cannot advance a second time. Read once
-        // here so both the request and any retry inside this call agree.
-        const expectedStageIndex = currentGameState.current_stage_index;
+        // retry after a lost response is absorbed rather than advancing a
+        // second time, even after the poll has moved the live state on.
+        const expectedStageIndex = postWinStage;
         try {
             // One call, not two. "Continue and Take Break" used to advance the
             // stage and then issue the break separately, so a break that failed
@@ -712,7 +710,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleMoveToNextGame = async () => {
         if (!isController || isMovingGame) return;
 
-        if (!isFinalStage) {
+        if (!postWinIsFinalStage) {
             await handleContinuePlaying();
             return;
         }
@@ -752,7 +750,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const handleTakeBreakAfterGame = async () => {
         if (!isController || isMovingGame) return;
 
-        if (!isFinalStage) {
+        if (!postWinIsFinalStage) {
             await handleContinuePlaying(true);
             return;
         }
@@ -990,7 +988,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 // behind Post Win with a live Record Winner button on the same
                 // ticket, which paid a snowball jackpot twice.
                 clearSpentClaim();
-                setShowPostWinModal(true);
+                openPostWinModal();
                 // The win that just saved has to appear in both lists now. This
                 // is the only thing that puts it there: `winners` is not
                 // published over Realtime.
@@ -1014,10 +1012,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setActionError(null);
         setSkipError(null);
         setIsSkipping(true);
-        // As in handleContinuePlaying: the server binds to the stage the host
-        // was looking at, so a retry after a lost response is inert rather than
+        // As in handleContinuePlaying: the stage captured when this modal opened
+        // (X2), so a retry after a lost response is absorbed rather than
         // skipping a second stage and its prize.
-        const expectedStageIndex = currentGameState.current_stage_index;
+        const expectedStageIndex = skipModalStage;
         try {
             const result = await skipStage(gameId, expectedStageIndex);
             if (!result?.success) {
@@ -1036,6 +1034,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }
     };
 
+    /** Opens Post Win for the stage just won, capturing it (X2). */
+    const openPostWinModal = () => {
+        setPostWinStageIndex(currentGameState.current_stage_index);
+        setShowPostWinModal(true);
+    };
+
+    /** Opens the skip confirmation for the stage on screen, capturing it (X2). */
+    const openSkipConfirm = () => {
+        setSkipError(null);
+        setSkipStageIndex(currentGameState.current_stage_index);
+        setShowSkipConfirm(true);
+    };
+
     /**
      * Opens Record Winner with the eligibility choice cleared, so every win is a
      * fresh decision and a previous "Eligible" can never carry over to the next
@@ -1051,8 +1062,19 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         // refusal. Otherwise an unrelated message would greet the host here.
         setActionError(null);
         setSnowballEligibleChoice(null);
+        // Always the planned prize for this stage (X15). The Manual Snowball
+        // Win prefill ("£140 (Manual Snowball Win)") used to survive a cancel
+        // and greet the next ordinary winner.
+        setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
         claimRequestIdRef.current = newClaimRequestId();
         setShowWinnerModal(true);
+    };
+
+    /** Cancel or close on Manual Snowball Win: drop its prefill (X15). */
+    const handleCloseManualSnowballModal = () => {
+        if (isRecordingSnowballWinner) return;
+        setShowManualSnowballModal(false);
+        setPrizeDescription(getPlannedPrize(currentGameState.current_stage_index));
     };
 
     const handleCloseRecordWinnerModal = () => {
@@ -1293,6 +1315,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                 shouldAutoRefresh={health.shouldAutoRefresh}
                 hasUnsavedWork={hasUnsavedWork}
             />
+
+            <NewVersionBanner visible={showNewVersionPrompt} onReload={reloadForNewVersion} />
 
             {/* Alerts. Hidden while any modal that renders the same error inside
                 itself is open, because that is where the host can actually see it. */}
@@ -1657,7 +1681,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     <div className="mt-4 pt-3 border-t border-[#1f7c58]/70">
                                         <Button
                                             variant="ghost"
-                                            onClick={() => { setSkipError(null); setShowSkipConfirm(true); }}
+                                            onClick={openSkipConfirm}
                                             disabled={isSkipping}
                                             className="text-white/70 hover:text-white hover:bg-[#0f6846] min-h-[44px] text-sm"
                                         >
@@ -1934,7 +1958,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             <Modal
                 isOpen={showSkipConfirm}
                 onClose={() => { if (!isSkipping) { setShowSkipConfirm(false); setSkipError(null); } }}
-                title={`Skip ${currentStageName || 'this stage'} with no winner?`}
+                title={`Skip ${skipStageName || 'this stage'} with no winner?`}
                 className="bg-[#003f27] border border-[#1f7c58] max-w-md"
             >
                 <div className="space-y-4">
@@ -1942,12 +1966,12 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         The stage closes and its prize is not awarded to anyone. This cannot be undone:
                         a game can only move forwards through its stages.
                     </p>
-                    {plannedStagePrize && (
+                    {skipStagePrize && (
                         <p className="text-sm text-[#f3d59d]">
-                            Unawarded: {plannedStagePrize}
+                            Unawarded: {skipStagePrize}
                         </p>
                     )}
-                    {isFinalStage && (
+                    {skipIsFinalStage && (
                         <p className="text-sm text-white/85">
                             This is the last stage, so skipping it ends the game.
                         </p>
@@ -2200,11 +2224,11 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         >
                             {isPostWinBusy && (isAdvancing || isMovingGame)
                                 ? 'Working…'
-                                : isEndOfSession
+                                : postWinIsEndOfSession
                                     ? 'End Game & Finish Session'
-                                    : isFinalStage ? 'Move to Next Game' : 'Continue Playing'}
+                                    : postWinIsFinalStage ? 'Move to Next Game' : 'Continue Playing'}
                         </Button>
-                        {isEndOfSession && !isPostWinBusy && (
+                        {postWinIsEndOfSession && !isPostWinBusy && (
                             <p className="text-xs text-white/75 -mt-1">
                                 This is the last game. Pressing this ends it and closes the session.
                             </p>
@@ -2223,14 +2247,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                             {/* Hidden at the end of the session: there is no next
                                 game to break into, so this would just end the
                                 game under a misleading label. */}
-                            {!isEndOfSession && (
+                            {!postWinIsEndOfSession && (
                                 <Button
                                     variant="secondary"
                                     className="min-h-[44px] border-[#a57626] text-white hover:bg-[#a57626]/20"
                                     onClick={handleTakeBreakAfterGame}
                                     disabled={isPostWinBusy}
                                 >
-                                    {isFinalStage ? 'Take a Break' : 'Continue & Take Break'}
+                                    {postWinIsFinalStage ? 'Take a Break' : 'Continue & Take Break'}
                                 </Button>
                             )}
 
@@ -2302,7 +2326,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             </Modal>
 
             {/* Manual Snowball Win Modal — winners are anonymous on public surfaces, so no name input. */}
-            <Modal isOpen={showManualSnowballModal} onClose={() => setShowManualSnowballModal(false)} title="Manual Snowball Award" className="bg-[#003f27] border border-[#1f7c58]">
+            <Modal isOpen={showManualSnowballModal} onClose={handleCloseManualSnowballModal} title="Manual Snowball Award" className="bg-[#003f27] border border-[#1f7c58]">
                 <div className="space-y-4">
                     {actionError && (
                         <div role="alert" className={modalErrorClass}>{actionError}</div>
@@ -2327,7 +2351,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     <Button
                         variant="secondary"
                         className="min-h-[44px]"
-                        onClick={() => setShowManualSnowballModal(false)}
+                        onClick={handleCloseManualSnowballModal}
                         disabled={isRecordingSnowballWinner}
                     >
                         Cancel
@@ -2360,7 +2384,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     // This award is a recorded win too, so the claim
                                     // it belongs to is spent.
                                     clearSpentClaim();
-                                    setShowPostWinModal(true);
+                                    openPostWinModal();
                                     void refreshWinnerLists();
                                 }
                             } catch (err) {

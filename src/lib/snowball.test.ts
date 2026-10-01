@@ -63,9 +63,15 @@ test('whole pounds render without a decimal point', () => {
   assert.equal(formatPounds(0), '0');
 });
 
-test('pence are kept when they are there', () => {
-  assert.equal(formatPounds(212.5), '212.5');
+test('pence are kept when they are there, always as two digits', () => {
+  // This used to read "212.5" on the pub TV and in the prize text (X13).
+  assert.equal(formatPounds(212.5), '212.50');
   assert.equal(formatPounds(212.25), '212.25');
+});
+
+test('formatPounds is formatPoundsAmount without the pound sign', () => {
+  assert.equal(formatPounds(1250), '1,250');
+  assert.equal(formatPounds(1250.5), '1,250.50');
 });
 
 test('a non-finite amount renders as zero rather than as NaN on the pub TV', () => {

@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { useRouter } from 'next/navigation';
 import { validateGamePrizes } from '@/lib/prize-validation';
 import { formatDateInLondon, formatDateTimeInLondon } from '@/lib/dates';
-import { formatPence, totalPaidOutPence } from '@/lib/money';
+import { formatPence, formatPoundsAmount, totalPaidOutPence } from '@/lib/money';
 
 type Session = Database['public']['Tables']['sessions']['Row'];
 type GameState = Database['public']['Tables']['game_states']['Row'];
@@ -698,7 +698,7 @@ export default function SessionDetail({ session, initialGames, snowballPots, win
                               <option value="">Select a Pot...</option>
                               {snowballPots.map(pot => (
                                   <option key={pot.id} value={pot.id}>
-                                      {pot.name} (Jackpot: £{pot.current_jackpot_amount} / Calls: {pot.current_max_calls})
+                                      {pot.name} (Jackpot: {formatPoundsAmount(Number(pot.current_jackpot_amount))} / Calls: {pot.current_max_calls})
                                   </option>
                               ))}
                           </select>

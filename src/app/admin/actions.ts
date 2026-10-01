@@ -2,6 +2,7 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { getTodayIsoDateInLondon } from '@/lib/dates'
 import type { Database, UserRole } from '@/types/database'
 import type { ActionResult } from '@/types/actions'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
@@ -144,7 +145,9 @@ export async function duplicateSession(sessionId: string): Promise<ActionResult>
     .from('sessions')
     .insert({
       name: `${originalSession.name} (Copy)`,
-      start_date: new Date().toISOString().split('T')[0],
+      // London's today, not UTC's: a copy made after midnight BST used to be
+      // dated the previous day.
+      start_date: getTodayIsoDateInLondon(),
       notes: originalSession.notes,
       status: 'draft',
       is_test_session: originalSession.is_test_session,

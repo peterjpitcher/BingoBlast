@@ -17,9 +17,13 @@ import { isFreshGameState } from '@/lib/game-state-version';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
+import { createPollRunner, type PollRunner } from '@/lib/poll-runner';
+import { KITCHEN_OPEN_UNTIL } from '@/lib/venue-links';
 import { useConnectionHealth } from '@/hooks/use-connection-health';
+import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
+import { useClockOffset } from '@/hooks/use-clock-offset';
+import { useBuildCheck } from '@/hooks/use-build-check';
 import { ConnectionBanner } from '@/components/connection-banner';
-import type { RealtimeStatus } from '@/lib/connection-health';
 import { logError } from '@/lib/log-error';
 
 // Define types for props
@@ -27,6 +31,7 @@ type Session = Database['public']['Tables']['sessions']['Row'];
 type Game = Database['public']['Tables']['games']['Row'];
 type GameState = Database['public']['Tables']['game_states_public']['Row'];
 type SnowballPot = Database['public']['Tables']['snowball_pots']['Row'];
+type PublicClient = ReturnType<typeof createClient>;
 
 /**
  * Outcome of the server-side initial read in page.tsx. 'failed' means a session,
@@ -75,6 +80,19 @@ type RefreshResult =
   | { status: 'failed' }
   | { status: 'superseded' };
 
+/** One poll's worth of public state, read in full before any of it is applied. */
+interface PublicSnapshot {
+  session: Session;
+  /** The game `state` belongs to, or null when the session has no active game. */
+  game: Game | null;
+  /** True when `game` is not the game the screen showed when the poll started. */
+  gameChanged: boolean;
+  state: GameState | null;
+  /** Null when there is no pot, or its non-critical read failed. */
+  pot: SnowballPot | null;
+  potPollStartedAt: number | null;
+}
+
 const formatStageLabel = (stage: string | undefined) => {
   if (!stage) return '-';
 
@@ -104,6 +122,95 @@ const GAME_STATE_PUBLIC_SELECT =
   'game_id, called_numbers, numbers_called_count, current_stage_index, status, call_delay_seconds, on_break, paused_for_validation, display_win_type, display_win_text, display_winner_name, started_at, ended_at, last_call_at, updated_at, state_version';
 
 const POLL_INTERVAL_MS = 3000;
+const LOG_SCOPE = 'display';
+
+/**
+ * Reads a game and its public state together. Used for every game switch, so
+ * the new game's name and colour never reach the screen before its state does:
+ * setting the game first used to show the new name over the old game's board
+ * for a moment (X12b).
+ */
+async function fetchGameWithState(
+  client: PublicClient,
+  gameId: string,
+  signal?: AbortSignal,
+): Promise<{ game: Game; state: GameState }> {
+  const gameQuery = client.from('games').select(GAME_SELECT).eq('id', gameId);
+  const { data: game, error: gameError } = await (signal ? gameQuery.abortSignal(signal) : gameQuery).single<Game>();
+  if (gameError || !game) throw gameError ?? new Error('Active game lookup returned no row');
+
+  const stateQuery = client.from('game_states_public').select(GAME_STATE_PUBLIC_SELECT).eq('game_id', game.id);
+  const { data: state, error: stateError } = await (signal ? stateQuery.abortSignal(signal) : stateQuery).single<GameState>();
+  if (stateError || !state) throw stateError ?? new Error('Active game state lookup returned no row');
+
+  return { game, state };
+}
+
+/**
+ * One poll: the session, then the active game's state (and the game itself on
+ * a switch), then the pot. Nothing is applied here; the caller applies the whole
+ * snapshot at once, and only if no Realtime event or newer poll overtook it.
+ */
+async function fetchPublicSnapshot(
+  client: PublicClient,
+  sessionId: string,
+  knownGame: Game | null,
+  signal: AbortSignal,
+): Promise<PublicSnapshot> {
+  const { data: session, error: sessionError } = await client
+    .from('sessions')
+    .select(SESSION_SELECT)
+    .eq('id', sessionId)
+    .abortSignal(signal)
+    .single<Session>();
+  if (sessionError || !session) throw sessionError ?? new Error('Polling sessions returned no row');
+
+  const targetGameId = session.active_game_id;
+  if (!targetGameId) {
+    return { session, game: null, gameChanged: knownGame !== null, state: null, pot: null, potPollStartedAt: null };
+  }
+
+  let game: Game;
+  let state: GameState;
+  let gameChanged = false;
+  if (!knownGame || knownGame.id !== targetGameId) {
+    ({ game, state } = await fetchGameWithState(client, targetGameId, signal));
+    gameChanged = true;
+  } else {
+    game = knownGame;
+    const { data: freshState, error: stateError } = await client
+      .from('game_states_public')
+      .select(GAME_STATE_PUBLIC_SELECT)
+      .eq('game_id', game.id)
+      .abortSignal(signal)
+      .single<GameState>();
+    if (stateError || !freshState) throw stateError ?? new Error('Polling game_states_public returned no row');
+    state = freshState;
+  }
+
+  // The pot rides on the poll as well as its Realtime channel, so a missed pot
+  // event cannot leave a stale jackpot up for the rest of the game. Non-critical
+  // like the channel: a failed read is logged and never fails the poll, so it
+  // cannot raise the banner.
+  let pot: SnowballPot | null = null;
+  let potPollStartedAt: number | null = null;
+  if (game.type === 'snowball' && game.snowball_pot_id) {
+    potPollStartedAt = Date.now();
+    const { data: freshPot, error: potError } = await client
+      .from('snowball_pots')
+      .select('*')
+      .eq('id', game.snowball_pot_id)
+      .abortSignal(signal)
+      .single<SnowballPot>();
+    if (potError || !freshPot) {
+      logError(LOG_SCOPE, potError ?? new Error('Polling snowball_pots returned no row'));
+    } else {
+      pot = freshPot;
+    }
+  }
+
+  return { session, game, gameChanged, state, pot, potPollStartedAt };
+}
 
 export default function DisplayUI({
   session,
@@ -113,7 +220,9 @@ export default function DisplayUI({
   initialLoadStatus,
   playerJoinUrl,
 }: DisplayUIProps) {
-  const supabase = useRef(createClient());
+  // One client for the life of the screen. Held in state rather than a ref so
+  // it can be passed to hooks during render.
+  const [supabase] = useState<PublicClient>(createClient);
 
   const initialRevealCount = adoptRevealCount(readCalledNumbers(initialActiveGameState).length);
 
@@ -128,31 +237,49 @@ export default function DisplayUI({
     const stageKey = currentActiveGame.stage_sequence[currentGameState.current_stage_index];
     return currentActiveGame.prizes?.[stageKey as keyof typeof currentActiveGame.prizes] || '';
   }, [currentActiveGame, currentGameState, initialPrizeText]);
-  const [currentSnowballPot, setCurrentSnowballPot] = useState<SnowballPot | null>(null);
+  // The last pot row read from any source. Only shown while it is the active
+  // game's pot (see currentSnowballPot below), so a late read or event for the
+  // previous game's pot can never be shown against this one.
+  const [latestPot, setLatestPot] = useState<SnowballPot | null>(null);
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>(
     initialLoadStatus === 'failed' ? 'failed' : initialActiveGameState ? 'ready' : 'loading'
   );
-  // How many balls this client currently shows. planReveal owns the value; the
-  // displayed numbers are sliced from it so there is a single source of truth.
-  const [revealCount, setRevealCount] = useState<number>(initialRevealCount);
+  // Whether this screen has ever had a good read. Before the first one a
+  // failure shows "Connecting"; after it, the last good screen stays up.
+  const [hasBeenReady, setHasBeenReady] = useState<boolean>(
+    initialLoadStatus !== 'failed' && initialActiveGameState !== null
+  );
+  // How many balls this client shows, and for which game. planReveal owns the
+  // value; the displayed numbers are sliced from it so there is a single source
+  // of truth. Keyed by game so a render for a new game never uses the old
+  // game's count (see revealCount below).
+  const [reveal, setReveal] = useState<{ gameId: string | null; count: number }>({
+    gameId: initialActiveGameState ? initialActiveGameState.game_id : null,
+    count: initialRevealCount,
+  });
 
   const revealedCountRef = useRef<number>(initialRevealCount);
+  // performance.now() of this client's last advance: the dwell clock.
   const lastRevealAtRef = useRef<number | null>(null);
   const revealGameIdRef = useRef<string | null>(
     initialActiveGameState ? initialActiveGameState.game_id : null
   );
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Lets the visibilitychange handler force the game-state channel to rebuild.
-  const reconnectGameStateRef = useRef<(() => void) | null>(null);
+  // When (performance.now()) this client first saw the current newest ball.
+  const newestSeenRef = useRef<{ gameId: string; count: number; atMs: number } | null>(null);
 
   // Connection health: drives the reconnecting banner + auto-refresh.
+  // NEVER put `health` itself in a dependency array: it changes every second.
   const health = useConnectionHealth();
   const { markPollSuccess, markPollFailure, markRealtimeStatus } = health;
 
-  // Polling guards: monotonic sequence + in-flight flag prevent stale poll
-  // results from clobbering newer state when responses arrive out-of-order.
-  const pollSeqRef = useRef(0);
-  const pollInFlightRef = useRef(false);
+  // Device clock correction for the reveal delay (X12d).
+  const clockOffsetMs = useClockOffset();
+
+  // The poll's sequencing and deadline. Realtime handlers call invalidate()
+  // before applying, so a poll that was already in flight cannot put older
+  // state back on screen.
+  const pollRunnerRef = useRef<PollRunner<PublicSnapshot> | null>(null);
   // refreshActiveGame request-order guard: if active_game_id flips A to B and
   // A's fetch resolves last, the wrong game would win.
   const refreshSeqRef = useRef(0);
@@ -160,17 +287,22 @@ export default function DisplayUI({
   const potRealtimeAtRef = useRef<number | null>(null);
 
   // Stable refs for fields that the polling effect reads but should not retrigger
-  // its setup. Pairs with the `currentActiveGame?.id` dependency below.
+  // its setup.
   const currentActiveGameRef = useRef(currentActiveGame);
   useEffect(() => {
     currentActiveGameRef.current = currentActiveGame;
   }, [currentActiveGame]);
 
   const currentActiveGameId = currentActiveGame ? currentActiveGame.id : null;
+  const activePotId =
+    currentActiveGame?.type === 'snowball' && currentActiveGame.snowball_pot_id
+      ? currentActiveGame.snowball_pot_id
+      : null;
 
   const refreshActiveGame = useCallback(
     async (newActiveGameId: string | null): Promise<RefreshResult> => {
-      if (newActiveGameId === currentActiveGameId) {
+      const knownGameId = currentActiveGameRef.current?.id ?? null;
+      if (newActiveGameId === knownGameId) {
         return { status: 'ok', hasGame: newActiveGameId !== null };
       }
       const seq = ++refreshSeqRef.current;
@@ -181,173 +313,78 @@ export default function DisplayUI({
         return { status: 'ok', hasGame: false };
       }
 
-      const { data: newGame, error: gameError } = await supabase.current
-        .from('games')
-        .select(GAME_SELECT)
-        .eq('id', newActiveGameId)
-        .single<Database['public']['Tables']['games']['Row']>();
-      if (seq !== refreshSeqRef.current) return { status: 'superseded' };
-      if (gameError || !newGame) {
-        logError('display', gameError ?? new Error('Active game lookup returned no row'));
+      try {
+        const { game, state } = await fetchGameWithState(supabase, newActiveGameId);
+        if (seq !== refreshSeqRef.current) return { status: 'superseded' };
+        // Game and state in the same render (X12b).
+        setCurrentActiveGame(game);
+        setCurrentGameState(state);
+        return { status: 'ok', hasGame: true };
+      } catch (err) {
+        if (seq !== refreshSeqRef.current) return { status: 'superseded' };
+        logError(LOG_SCOPE, err);
         return { status: 'failed' };
       }
-
-      setCurrentActiveGame(newGame);
-
-      const { data: newGameState, error: stateError } = await supabase.current
-        .from('game_states_public')
-        .select(GAME_STATE_PUBLIC_SELECT)
-        .eq('game_id', newGame.id)
-        .single<Database['public']['Tables']['game_states_public']['Row']>();
-      if (seq !== refreshSeqRef.current) return { status: 'superseded' };
-      if (stateError || !newGameState) {
-        logError('display', stateError ?? new Error('Active game state lookup returned no row'));
-        setCurrentGameState(null);
-        return { status: 'failed' };
-      }
-
-      setCurrentGameState(newGameState);
-      return { status: 'ok', hasGame: true };
     },
-    [currentActiveGameId]
+    [supabase]
   );
 
-  // Session-level realtime: track changes to active_game_id / status, with the
-  // same exponential-backoff reconnect as the game-state channel.
-  useEffect(() => {
-    const supabaseClient = supabase.current;
-
-    let isMounted = true;
-    let activeChannel: ReturnType<typeof supabaseClient.channel> | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let attemptCount = 0;
-
-    const connect = async () => {
-      if (!isMounted) return;
-      if (activeChannel) {
-        await supabaseClient.removeChannel(activeChannel);
-        activeChannel = null;
-      }
-      if (!isMounted) return;
-
-      const channel = supabaseClient
-        .channel(`session_updates:${session.id}:${Date.now()}`)
-        .on<Session>(
-          'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
-          async (payload) => {
-            if (!isMounted) return;
-            setCurrentSession(payload.new);
-            const result = await refreshActiveGame(payload.new.active_game_id);
-            if (!isMounted) return;
-            if (result.status === 'failed') setConnectionPhase('failed');
-            else if (result.status === 'ok') setConnectionPhase('ready');
-          }
-        )
-        .subscribe((status) => {
-          if (!isMounted) return;
-          // Deliberately NOT reported into useConnectionHealth. The 3 second
-          // poll already picks up game switches and session status, so this
-          // channel is non-critical and a wobble here must never put a
-          // "Reconnecting" banner on the pub TV. Only the game-state channel
-          // reports into connection health.
-          if (status === 'SUBSCRIBED') {
-            attemptCount = 0;
-            return;
-          }
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            if (reconnectTimer) clearTimeout(reconnectTimer);
-            // Exponential backoff: 1s, 2s, 4s and so on, capped at 30s.
-            const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
-            attemptCount += 1;
-            reconnectTimer = setTimeout(() => { void connect(); }, delay);
-          }
-        });
-
-      activeChannel = channel;
-    };
-
-    void connect();
-
-    return () => {
-      isMounted = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (activeChannel) void supabaseClient.removeChannel(activeChannel);
-    };
-  }, [session.id, refreshActiveGame]);
-
-  // Game state realtime with exponential-backoff auto-reconnect.
-  // Each reconnect tears down the previous channel before creating the next
-  // (ordering matters, because Supabase rejects subscribe() on a torn channel).
-  useEffect(() => {
-    const supabaseClient = supabase.current;
-    const activeGameId = currentActiveGame?.id;
-    if (!activeGameId) return;
-
-    let isMounted = true;
-    let activeChannel: ReturnType<typeof supabaseClient.channel> | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let attemptCount = 0;
-
-    const connect = async () => {
-      if (!isMounted) return;
-      if (activeChannel) {
-        await supabaseClient.removeChannel(activeChannel);
-        activeChannel = null;
-      }
-      if (!isMounted) return;
-
-      const channel = supabaseClient
-        .channel(`game_state_public_updates:${activeGameId}:${Date.now()}`)
-        .on<GameState>(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${activeGameId}` },
-          (payload) => {
-            if (!isMounted) return;
-            // Drop payloads for a different game (active-game switch race).
-            const incoming = payload.new as GameState | undefined;
-            const activeId = currentActiveGameRef.current?.id;
-            if (!incoming || (activeId && incoming.game_id !== activeId)) return;
-            // Freshness gate: ignore older snapshots that may arrive after a
-            // reconnect or out-of-order broadcast (state_version is monotonic).
-            // currentPrizeText is derived from currentGameState via useMemo,
-            // so it inherits this gating automatically.
-            setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
+  // Session-level realtime: track changes to active_game_id / status.
+  // Deliberately NOT reported into useConnectionHealth. The 3 second poll
+  // already picks up game switches and session status, so this channel is
+  // non-critical and a wobble here must never put a "Reconnecting" banner on
+  // the pub TV. Only the game-state channel reports into connection health.
+  useRealtimeChannel({
+    supabase,
+    key: `session_updates:${session.id}`,
+    build: (channel, isCurrent) =>
+      channel.on<Session>(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${session.id}` },
+        async (payload) => {
+          if (!isCurrent()) return;
+          pollRunnerRef.current?.invalidate();
+          setCurrentSession(payload.new);
+          const result = await refreshActiveGame(payload.new.active_game_id);
+          if (result.status === 'failed') {
+            setConnectionPhase('failed');
+          } else if (result.status === 'ok') {
             setConnectionPhase('ready');
+            setHasBeenReady(true);
           }
-        )
-        .subscribe((status) => {
-          if (!isMounted) return;
-          // This is the ONLY channel that reports into connection health: it is
-          // the one carrying live calls, so it is the only one whose failure
-          // guests need to know about.
-          markRealtimeStatus(status as RealtimeStatus);
-          if (status === 'SUBSCRIBED') {
-            attemptCount = 0;
-            return;
-          }
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            if (reconnectTimer) clearTimeout(reconnectTimer);
-            // Exponential backoff: 1s, 2s, 4s and so on, capped at 30s.
-            const delay = Math.min(1000 * Math.pow(2, attemptCount), 30000);
-            attemptCount += 1;
-            reconnectTimer = setTimeout(() => { void connect(); }, delay);
-          }
-        });
+        }
+      ),
+  });
 
-      activeChannel = channel;
-    };
-
-    reconnectGameStateRef.current = () => { void connect(); };
-    void connect();
-
-    return () => {
-      isMounted = false;
-      reconnectGameStateRef.current = null;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (activeChannel) void supabaseClient.removeChannel(activeChannel);
-    };
-  }, [currentActiveGame?.id, markRealtimeStatus]);
+  // Game state realtime. This is the ONLY channel that reports into connection
+  // health: it is the one carrying live calls, so it is the only one whose
+  // failure guests need to know about. useRealtimeChannel owns the reconnect
+  // and its backoff, and ignores the CLOSED that tearing a channel down fires.
+  const { reconnect: reconnectGameState } = useRealtimeChannel({
+    supabase,
+    key: `game_state_public_updates:${currentActiveGameId ?? 'none'}`,
+    enabled: currentActiveGameId !== null,
+    onStatus: markRealtimeStatus,
+    build: (channel, isCurrent) =>
+      channel.on<GameState>(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'game_states_public', filter: `game_id=eq.${currentActiveGameId}` },
+        (payload) => {
+          if (!isCurrent()) return;
+          // Drop payloads for a different game (active-game switch race).
+          const incoming = payload.new as GameState | undefined;
+          const activeId = currentActiveGameRef.current?.id;
+          if (!incoming || (activeId && incoming.game_id !== activeId)) return;
+          // Anything the poll has in flight was requested before this event.
+          pollRunnerRef.current?.invalidate();
+          // Freshness gate: ignore older snapshots that may arrive after a
+          // reconnect or out-of-order broadcast (state_version is monotonic).
+          setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
+          setConnectionPhase('ready');
+          setHasBeenReady(true);
+        }
+      ),
+  });
 
   // Force-reconnect the game-state channel when the screen comes back into
   // view. TV browsers and phones kill background WebSockets silently, and the
@@ -355,117 +392,130 @@ export default function DisplayUI({
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return;
-      reconnectGameStateRef.current?.();
+      reconnectGameState();
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  }, [reconnectGameState]);
 
-  // Polling fallback: re-fetches session + game state every 3 seconds with
-  // request-order guards so out-of-order responses cannot clobber newer state.
+  // Snowball pot realtime. Deliberately non-critical: this channel does not
+  // report into useConnectionHealth. The pot is re-read whenever the active
+  // game changes and on every poll, and the jackpot figure is not time
+  // critical, so a pot channel failure must never put a "Reconnecting" banner
+  // on the TV. It used to be opened outside any reconnect logic and could leak
+  // (X12c); it now shares the guarded connector and checks the pot id.
+  useRealtimeChannel({
+    supabase,
+    key: `pot_updates:${activePotId ?? 'none'}`,
+    enabled: activePotId !== null,
+    build: (channel, isCurrent) =>
+      channel.on<SnowballPot>(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'snowball_pots', filter: `id=eq.${activePotId}` },
+        (payload) => {
+          if (!isCurrent()) return;
+          const incoming = payload.new;
+          if (!incoming || incoming.id !== currentActiveGameRef.current?.snowball_pot_id) return;
+          potRealtimeAtRef.current = Date.now();
+          setLatestPot(incoming);
+        }
+      ),
+  });
+
+  // Read the pot whenever the active game's pot changes.
+  useEffect(() => {
+    if (!activePotId) return;
+    let cancelled = false;
+    const readStartedAt = Date.now();
+    void (async () => {
+      const { data, error } = await supabase
+        .from('snowball_pots')
+        .select('*')
+        .eq('id', activePotId)
+        .single<SnowballPot>();
+      if (cancelled) return;
+      if (error || !data) {
+        logError(LOG_SCOPE, error ?? new Error('Snowball pot lookup returned no row'));
+        return;
+      }
+      if (shouldApplyPolledPot({
+        polledPotId: data.id,
+        activePotId,
+        pollStartedAt: readStartedAt,
+        lastRealtimeAt: potRealtimeAtRef.current,
+      })) {
+        setLatestPot(data);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, activePotId]);
+
+  // Polling fallback: re-reads session + game state every 3 seconds. The runner
+  // gives every poll an 8 second deadline (a hung request used to stop polling
+  // for good) and a sequence number, so a response that a Realtime event or a
+  // newer poll has overtaken is discarded rather than applied.
   useEffect(() => {
     let cancelled = false;
-    let interval: NodeJS.Timeout | null = null;
+    const runner = createPollRunner<PublicSnapshot>({
+      run: (signal) => fetchPublicSnapshot(supabase, session.id, currentActiveGameRef.current, signal),
+    });
+    pollRunnerRef.current = runner;
+
+    const applySnapshot = (snapshot: PublicSnapshot) => {
+      setCurrentSession(snapshot.session);
+
+      const incoming = snapshot.state;
+      if (snapshot.gameChanged) {
+        // Supersede any slower switch started by a Realtime session event, then
+        // change game and state in the same render.
+        refreshSeqRef.current += 1;
+        setCurrentActiveGame(snapshot.game);
+        setCurrentGameState((current) =>
+          incoming && current && current.game_id === incoming.game_id && !isFreshGameState(current, incoming)
+            ? current
+            : incoming
+        );
+      } else if (incoming) {
+        // Freshness-gated apply: discard a stale snapshot that lost a race with
+        // a more recent realtime event or earlier poll response.
+        setCurrentGameState((current) => (isFreshGameState(current, incoming) ? incoming : current));
+      }
+
+      if (snapshot.pot && snapshot.potPollStartedAt !== null && shouldApplyPolledPot({
+        polledPotId: snapshot.pot.id,
+        activePotId: snapshot.game?.snowball_pot_id,
+        pollStartedAt: snapshot.potPollStartedAt,
+        lastRealtimeAt: potRealtimeAtRef.current,
+      })) {
+        setLatestPot(snapshot.pot);
+      }
+    };
 
     const poll = async () => {
       if (cancelled) return;
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      if (pollInFlightRef.current) return;
-
-      pollInFlightRef.current = true;
-      const seq = ++pollSeqRef.current;
+      const started = runner.start();
+      if (!started) return;
 
       try {
-        const { data: freshSession, error: sessionError } = await supabase.current
-          .from('sessions')
-          .select(SESSION_SELECT)
-          .eq('id', session.id)
-          .single<Session>();
-        if (cancelled || seq !== pollSeqRef.current) return;
-        if (sessionError || !freshSession) {
-          logError('display', sessionError ?? new Error('Polling sessions returned no row'));
-          setConnectionPhase('failed');
-          markPollFailure();
-          return;
-        }
-
-        setCurrentSession(freshSession);
-
-        const activeGame = currentActiveGameRef.current;
-        const knownGameId = activeGame ? activeGame.id : null;
-        if (freshSession.active_game_id !== knownGameId) {
-          const result = await refreshActiveGame(freshSession.active_game_id);
-          if (cancelled) return;
-          if (result.status === 'failed') {
-            setConnectionPhase('failed');
-            markPollFailure();
-            return;
-          }
-          if (result.status === 'ok') setConnectionPhase('ready');
-          markPollSuccess();
-          return;
-        }
-
-        if (activeGame) {
-          const { data: freshState, error: stateError } = await supabase.current
-            .from('game_states_public')
-            .select(GAME_STATE_PUBLIC_SELECT)
-            .eq('game_id', activeGame.id)
-            .single<GameState>();
-          if (cancelled || seq !== pollSeqRef.current) return;
-          if (stateError || !freshState) {
-            logError('display', stateError ?? new Error('Polling game_states_public returned no row'));
-            setConnectionPhase('failed');
-            markPollFailure();
-            return;
-          }
-
-          // Freshness-gated apply: discard stale snapshots that lost a race
-          // with a more recent realtime event or earlier poll response.
-          // currentPrizeText is derived from currentGameState via useMemo,
-          // so it inherits this gating automatically.
-          setCurrentGameState((current) => (isFreshGameState(current, freshState) ? freshState : current));
-
-          // The pot rides on the poll as well as its Realtime channel, so a
-          // missed pot event cannot leave a stale jackpot up for the rest of
-          // the game. Non-critical like the channel: a failed read is logged
-          // and never fails the poll, so it cannot raise the banner.
-          if (activeGame.type === 'snowball' && activeGame.snowball_pot_id) {
-            const potPollStartedAt = Date.now();
-            const { data: freshPot, error: potError } = await supabase.current
-              .from('snowball_pots')
-              .select('*')
-              .eq('id', activeGame.snowball_pot_id)
-              .single<SnowballPot>();
-            if (cancelled || seq !== pollSeqRef.current) return;
-            if (potError || !freshPot) {
-              logError('display', potError ?? new Error('Polling snowball_pots returned no row'));
-            } else if (shouldApplyPolledPot({
-              polledPotId: freshPot.id,
-              activePotId: currentActiveGameRef.current?.snowball_pot_id,
-              pollStartedAt: potPollStartedAt,
-              lastRealtimeAt: potRealtimeAtRef.current,
-            })) {
-              setCurrentSnowballPot(freshPot);
-            }
-          }
-        }
-
+        const snapshot = await started.promise;
+        if (cancelled || !runner.isCurrent(started.seq)) return;
+        applySnapshot(snapshot);
         setConnectionPhase('ready');
+        setHasBeenReady(true);
         markPollSuccess();
       } catch (err) {
-        if (!cancelled) {
-          logError('display', err);
-          setConnectionPhase('failed');
-          markPollFailure();
-        }
-      } finally {
-        pollInFlightRef.current = false;
+        if (cancelled || !runner.isCurrent(started.seq)) return;
+        logError(LOG_SCOPE, err);
+        setConnectionPhase('failed');
+        markPollFailure();
       }
     };
 
     void poll();
-    interval = setInterval(() => { void poll(); }, POLL_INTERVAL_MS);
+    const interval = setInterval(() => { void poll(); }, POLL_INTERVAL_MS);
 
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -476,51 +526,11 @@ export default function DisplayUI({
 
     return () => {
       cancelled = true;
-      if (interval) clearInterval(interval);
+      if (pollRunnerRef.current === runner) pollRunnerRef.current = null;
+      clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [session.id, currentActiveGame?.id, refreshActiveGame, markPollSuccess, markPollFailure]);
-
-  useEffect(() => {
-    const supabaseClient = supabase.current;
-    let potChannel: ReturnType<typeof supabaseClient.channel> | null = null;
-
-    const fetchAndSubscribePot = async () => {
-        if (currentActiveGame?.type === 'snowball' && currentActiveGame.snowball_pot_id) {
-            const { data } = await supabaseClient
-            .from('snowball_pots')
-            .select('*')
-            .eq('id', currentActiveGame.snowball_pot_id)
-            .single();
-            if (data) setCurrentSnowballPot(data);
-
-            // Deliberately non-critical: this channel does not report into
-            // useConnectionHealth. The pot is re-read whenever the active game
-            // changes and on every poll, and the jackpot figure is not time
-            // critical, so a pot channel failure must never put a
-            // "Reconnecting" banner on the TV.
-            potChannel = supabaseClient
-            .channel(`pot_updates:${currentActiveGame.snowball_pot_id}`)
-            .on<SnowballPot>(
-                'postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'snowball_pots', filter: `id=eq.${currentActiveGame.snowball_pot_id}` },
-                (payload) => {
-                    potRealtimeAtRef.current = Date.now();
-                    setCurrentSnowballPot(payload.new);
-                }
-            )
-            .subscribe();
-        } else {
-            setCurrentSnowballPot(null);
-        }
-    };
-
-    fetchAndSubscribePot();
-
-    return () => {
-        if (potChannel) supabaseClient.removeChannel(potChannel);
-    };
-  }, [currentActiveGame]);
+  }, [supabase, session.id, markPollSuccess, markPollFailure]);
 
   const serverNumbers = useMemo<number[]>(
     () => readCalledNumbers(currentGameState),
@@ -541,22 +551,32 @@ export default function DisplayUI({
     clearRevealTimer();
 
     if (!currentActiveGame || !currentGameState) {
+      // Nothing to show: delayedNumbers is empty without a game state, so only
+      // the refs need resetting. The next game is adopted afresh below.
       revealGameIdRef.current = null;
       revealedCountRef.current = 0;
       lastRevealAtRef.current = null;
-      setRevealCount(0);
+      newestSeenRef.current = null;
       return;
     }
 
     if (revealGameIdRef.current !== currentGameState.game_id) {
-      const adopted = adoptRevealCount(serverNumbers.length);
       revealGameIdRef.current = currentGameState.game_id;
-      revealedCountRef.current = adopted;
+      revealedCountRef.current = adoptRevealCount(serverNumbers.length);
       lastRevealAtRef.current = null;
-      setRevealCount(adopted);
     }
+    const revealGameId = currentGameState.game_id;
 
     const serverCount = serverNumbers.length;
+    // The first moment this device saw the current newest ball. A call time
+    // that looks like the future is measured from here instead (reveal-queue).
+    let newestSeen = newestSeenRef.current;
+    if (!newestSeen || newestSeen.gameId !== currentGameState.game_id || newestSeen.count !== serverCount) {
+      newestSeen = { gameId: currentGameState.game_id, count: serverCount, atMs: performance.now() };
+      newestSeenRef.current = newestSeen;
+    }
+    const newestSeenAtMs = newestSeen.atMs;
+
     const publicDelayMs =
       (Number.isFinite(currentGameState.call_delay_seconds)
         ? currentGameState.call_delay_seconds
@@ -578,24 +598,44 @@ export default function DisplayUI({
         minDwellMs: PUBLIC_MIN_DWELL_MS,
         lastRevealAtMs: lastRevealAtRef.current,
         snapImmediately,
-        nowMs: Date.now(),
+        // last_call_at is a server timestamp, so compare it with the device
+        // clock corrected by the measured offset. The dwell uses the
+        // monotonic clock, which nothing can move.
+        nowMs: Date.now() + clockOffsetMs,
+        monotonicNowMs: performance.now(),
+        newestSeenAtMs,
       });
 
       if (plan.revealCount !== revealedCountRef.current) {
         revealedCountRef.current = plan.revealCount;
-        lastRevealAtRef.current = Date.now();
-        setRevealCount(plan.revealCount);
+        lastRevealAtRef.current = performance.now();
       }
+      // Publish the count for this game. Returning the same object when nothing
+      // changed lets React skip the render.
+      const count = revealedCountRef.current;
+      setReveal((current) =>
+        current.gameId === revealGameId && current.count === count ? current : { gameId: revealGameId, count }
+      );
 
       revealTimerRef.current =
         plan.nextTickInMs === null ? null : setTimeout(step, plan.nextTickInMs);
     };
 
-    step();
+    // Scheduled rather than called inline, so no state is set synchronously in
+    // the effect body. Effects already run after paint, so this adds nothing
+    // a viewer could see.
+    revealTimerRef.current = setTimeout(step, 0);
 
     return clearRevealTimer;
-  }, [currentActiveGame, currentGameState, serverNumbers]);
+  }, [currentActiveGame, currentGameState, serverNumbers, clockOffsetMs]);
 
+  // A game the reveal effect has not caught up with yet (a switch, or the first
+  // snapshot after no game) shows the adopted count straight away rather than
+  // the previous game's count, which could briefly show the newest ball early.
+  const revealCount =
+    currentGameState && reveal.gameId === currentGameState.game_id
+      ? reveal.count
+      : adoptRevealCount(serverNumbers.length);
   const delayedNumbers = useMemo<number[]>(
     () => serverNumbers.slice(0, revealCount),
     [serverNumbers, revealCount]
@@ -604,6 +644,9 @@ export default function DisplayUI({
   // numbers_called_count would tick a counter down up to 3 seconds before the
   // ball itself appears, spoiling the call and disagreeing with the ball strip.
   const revealedCallCount = delayedNumbers.length;
+  // Only the active game's pot is ever shown (X12c).
+  const currentSnowballPot =
+    latestPot && activePotId && latestPot.id === activePotId ? latestPot : null;
   const currentNumberDelayed = revealedCallCount > 0 ? delayedNumbers[revealedCallCount - 1] : null;
 
   const isSessionCompletedState = currentSession.status === 'completed';
@@ -619,20 +662,44 @@ export default function DisplayUI({
     currentGameState.status === 'in_progress';
 
   /**
+   * The full-screen "Reconnecting" page needs the same 10 second unhealthy
+   * window as the ConnectionBanner (X12a). One failed poll used to switch a
+   * pre-game TV straight to it; now the last good screen stays up, and the page
+   * only appears once the connection has been failing for as long as the
+   * banner would wait. shouldShowBanner is a boolean read inline, never the
+   * health object in a dependency array.
+   */
+  const hasFailedLongEnough = connectionPhase === 'failed' && health.shouldShowBanner;
+
+  /**
    * Phase precedence, in order and for a reason:
    *  - a completed session is terminal, so the thank-you screen always wins;
    *  - a renderable game beats 'failed', because a single query blip must never
    *    rip a live game off the TV. The ConnectionBanner covers that case;
-   *  - 'failed' beats 'waiting' and 'loading', so an outage is never dressed up
-   *    as "the host has not started yet". It recovers on the next good read.
+   *  - 'failed' (after the grace period) beats 'waiting' and 'loading', so an
+   *    outage is never dressed up as "the host has not started yet". It
+   *    recovers on the next good read;
+   *  - inside the grace period a screen that has never had a good read shows
+   *    "Connecting", and one that has keeps showing what it had.
    */
-  const loadPhase = useMemo<LoadPhase>(() => {
-    if (isSessionCompletedState) return 'completed';
-    if (hasRenderableGame) return 'active';
-    if (connectionPhase === 'failed') return 'failed';
-    if (connectionPhase === 'loading') return 'loading';
-    return 'waiting';
-  }, [isSessionCompletedState, hasRenderableGame, connectionPhase]);
+  const loadPhase: LoadPhase = isSessionCompletedState
+    ? 'completed'
+    : hasRenderableGame
+      ? 'active'
+      : hasFailedLongEnough
+        ? 'failed'
+        : connectionPhase === 'loading' || (connectionPhase === 'failed' && !hasBeenReady)
+          ? 'loading'
+          : 'waiting';
+
+  // New releases: reload by itself, but never over a claim check or a win.
+  useBuildCheck({
+    mode: 'auto',
+    safe:
+      !currentGameState ||
+      currentGameState.status !== 'in_progress' ||
+      (!currentGameState.paused_for_validation && !currentGameState.display_win_type),
+  });
 
   const isWaitingState = loadPhase === 'waiting';
   // Every game overlay hangs off hasRenderableGame, so the waiting screen and
@@ -700,7 +767,6 @@ export default function DisplayUI({
           index,
           stageLabel: formatStageLabel(stage),
           prizeLabel: prize || '',
-          prizeMissing: !prize,
         };
       })
     : [];
@@ -824,14 +890,17 @@ export default function DisplayUI({
       <ConnectionBanner visible={health.shouldShowBanner} shouldAutoRefresh={health.shouldAutoRefresh} />
       {/* Top Bar */}
       <div className="h-24 px-8 flex items-center justify-between bg-[#005131] border-b border-[#1f7c58] z-10">
-         <div className="flex items-center gap-4">
+         <div className="flex items-center gap-4 shrink-0">
              <div className="relative w-64 h-20">
                  <Image src="/the-anchor-pub-logo-white-transparent.png" alt="The Anchor" fill className="object-contain object-left" />
              </div>
          </div>
-         <div className="text-right">
-             <h2 className="text-[36px] font-bold tracking-tight">{currentSession.name}</h2>
-             {currentActiveGame && <p className={cn("text-[27px] font-medium uppercase tracking-wider", dimTextColor)}>{currentActiveGame.name}</p>}
+         {/* min-w-0 lets this column shrink inside the flex row, and truncate
+             keeps a long session or game name to one line instead of pushing
+             out of the 6rem bar (X12f). */}
+         <div className="min-w-0 flex-1 pl-6 text-right">
+             <h2 className="truncate text-[36px] font-bold tracking-tight">{currentSession.name}</h2>
+             {currentActiveGame && <p className={cn("truncate text-[27px] font-medium uppercase tracking-wider", dimTextColor)}>{currentActiveGame.name}</p>}
          </div>
       </div>
 
@@ -883,7 +952,7 @@ export default function DisplayUI({
                     </div>
 
                     <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
-                        <h2 className={servicePromoTitleClass}>Kitchen Open Until 9pm</h2>
+                        <h2 className={servicePromoTitleClass}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</h2>
                         <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
                     </div>
                 </div>
@@ -904,7 +973,7 @@ export default function DisplayUI({
                     </div>
 
                     <div className={cn("w-full bg-[#005131]/90 border border-[#a57626] rounded-3xl text-center xl:text-left backdrop-blur-sm", serviceCardPadClass)}>
-                        <h2 className={servicePromoTitleClass}>Kitchen Open Until 9pm</h2>
+                        <h2 className={servicePromoTitleClass}>Kitchen Open Until {KITCHEN_OPEN_UNTIL}</h2>
                         <p className={servicePromoBodyClass}>Get your drinks and order food at the bar!</p>
                     </div>
 
@@ -1025,14 +1094,14 @@ export default function DisplayUI({
                             <p className="text-[clamp(1.2rem,2vw,1.8rem)] font-bold tracking-wide">
                               Stage {item.index + 1}: {item.stageLabel}
                             </p>
-                            <p
-                              className={cn(
-                                "text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold",
-                                item.prizeMissing ? "text-red-400" : "text-[#f3d59d]"
-                              )}
-                            >
-                              {item.prizeMissing ? '⚠️ Prize not set' : item.prizeLabel}
-                            </p>
+                            {/* An empty prize is a setup gap for the host to
+                                fix, not something to put in front of guests
+                                (X12e): the host screen still flags it. */}
+                            {item.prizeLabel && (
+                              <p className="text-[clamp(1.1rem,1.8vw,1.6rem)] font-semibold text-[#f3d59d]">
+                                {item.prizeLabel}
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1078,11 +1147,13 @@ export default function DisplayUI({
                     <p className={footerLeftTextClass}>
                       Playing for: {formatStageLabel(currentActiveGame?.stage_sequence[currentGameState?.current_stage_index || 0])}
                     </p>
-                    <p className={footerLeftTextClass}>
-                      Prize: {currentPrizeText
-                        ? currentPrizeText
-                        : <span className="text-red-400">⚠️ Prize not set</span>}
-                    </p>
+                    {/* Hidden when empty: "Prize not set" is for the host
+                        screen only (X12e). */}
+                    {currentPrizeText && (
+                      <p className={footerLeftTextClass}>
+                        Prize: {currentPrizeText}
+                      </p>
+                    )}
                     {isSnowballGame && (
                       <p className={footerLeftTextClass}>
                         {currentSnowballPot
