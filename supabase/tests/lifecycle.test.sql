@@ -565,6 +565,76 @@ end $$;
 drop table cj_before;
 
 -- ===========================================================================
+-- A snowball game whose pot has settled cannot be re-opened. A Full House won
+-- after the re-open would be judged against the pot as it now stands (already
+-- reset or rolled over), and settle_snowball_pot would then answer
+-- already_settled, so the pot would be paid at the wrong value and never reset.
+-- A third, unplayed game keeps the night open, so the refusal is
+-- snowball_settled and not night_ended.
+-- ===========================================================================
+insert into public.snowball_pots (
+  id, name, base_max_calls, base_jackpot_amount, calls_increment, jackpot_increment,
+  current_max_calls, current_jackpot_amount
+) values
+  ('c6000000-0000-4000-8000-000000000001', 'Lifecycle pot', 30, 20, 2, 20, 40, 100.00);
+
+insert into public.sessions (id, name, status) values
+  ('c2000000-0000-4000-8000-000000000006', 'Snowball re-open night', 'ready');
+
+insert into public.games (id, session_id, game_index, name, type, stage_sequence, snowball_pot_id, prizes) values
+  ('c3000000-0000-4000-8000-000000000061', 'c2000000-0000-4000-8000-000000000006', 1, 'Snowball settled',
+   'snowball', '["Full House"]', 'c6000000-0000-4000-8000-000000000001', '{"Full House": "£10 Cash"}'),
+  ('c3000000-0000-4000-8000-000000000062', 'c2000000-0000-4000-8000-000000000006', 2, 'Snowball unsettled',
+   'snowball', '["Full House"]', 'c6000000-0000-4000-8000-000000000001', '{"Full House": "£10 Cash"}'),
+  ('c3000000-0000-4000-8000-000000000063', 'c2000000-0000-4000-8000-000000000006', 3, 'Still to play',
+   'standard', '["Line"]', null, '{"Line": "£5"}');
+
+do $$
+declare
+  v_msg text;
+  r record;
+  v_pot public.snowball_pots;
+  v_state public.game_states;
+  v_session public.sessions;
+begin
+  perform public.start_game('c3000000-0000-4000-8000-000000000061', pg_temp.seq90());
+  perform public.finish_game('c3000000-0000-4000-8000-000000000061');
+  select * into r from public.settle_snowball_pot('c3000000-0000-4000-8000-000000000061');
+  if r.outcome is distinct from 'settled' then
+    raise exception 'fixture settlement did not settle: %', r.outcome;
+  end if;
+  select * into v_pot from public.snowball_pots where id = 'c6000000-0000-4000-8000-000000000001';
+
+  v_msg := pg_temp.err($q$select public.start_game('c3000000-0000-4000-8000-000000000061', null)$q$);
+  select * into v_state from public.game_states where game_id = 'c3000000-0000-4000-8000-000000000061';
+  select * into v_session from public.sessions where id = 'c2000000-0000-4000-8000-000000000006';
+  perform t('start :: a snowball game whose pot has settled cannot be re-opened',
+            v_msg = 'snowball_settled', 'message=' || coalesce(v_msg, 'none'));
+  perform t('start :: the refused re-open leaves the game finished, the night idle and the pot where settlement put it',
+            v_state.status = 'completed' and v_state.ended_at is not null
+              and v_session.status = 'running' and v_session.active_game_id is null
+              and (select current_jackpot_amount = v_pot.current_jackpot_amount
+                          and current_max_calls = v_pot.current_max_calls
+                     from public.snowball_pots where id = 'c6000000-0000-4000-8000-000000000001'),
+            'game=' || v_state.status || ' session=' || v_session.status
+              || ' active_game_id=' || coalesce(v_session.active_game_id::text, 'null'));
+
+  -- Should the re-open have gone through, finish the game again so the rest
+  -- of this file still runs and reports.
+  if v_msg is null then
+    perform public.finish_game('c3000000-0000-4000-8000-000000000061');
+  end if;
+
+  perform public.start_game('c3000000-0000-4000-8000-000000000062', pg_temp.seq90());
+  perform public.finish_game('c3000000-0000-4000-8000-000000000062');
+  v_state := public.start_game('c3000000-0000-4000-8000-000000000062', null);
+  perform t('start :: a finished snowball game whose pot has not settled still re-opens',
+            v_state.status = 'in_progress' and v_state.ended_at is null,
+            'status=' || v_state.status);
+  perform public.finish_game('c3000000-0000-4000-8000-000000000062');
+end $$;
+
+-- ===========================================================================
 -- Grants: anon cannot call any of the three, and a pending account is refused
 -- by the role guard. The replay's grant matrix covers the catalogue; these
 -- cover what a caller actually gets.

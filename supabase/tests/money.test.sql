@@ -209,6 +209,66 @@ begin
 end $$;
 
 -- ===========================================================================
+-- Tied jackpot winners whose recorded pools disagree (the pot moved between
+-- the two records) are credited no jackpot share. There is one pot, so each
+-- taking its whole pool would pay out more than the pot held, and there is no
+-- way to tell which pool is right.
+-- ===========================================================================
+insert into public.snowball_pots (
+  id, name, base_max_calls, base_jackpot_amount, calls_increment, jackpot_increment,
+  current_max_calls, current_jackpot_amount
+) values
+  ('f6000000-0000-4000-8000-000000000004', 'Moving pot', 30, 20, 2, 20, 40, 140.00);
+
+insert into public.games (id, session_id, game_index, name, type, stage_sequence, snowball_pot_id, prizes) values
+  ('f3000000-0000-4000-8000-000000000008', 'f2000000-0000-4000-8000-000000000001', 8, 'Pools disagree',
+   'snowball', '["Full House"]', 'f6000000-0000-4000-8000-000000000004', '{"Full House": "£10 Cash"}');
+
+insert into public.game_states (
+  game_id, number_sequence, called_numbers, numbers_called_count,
+  current_stage_index, status, controlling_host_id, controller_last_seen_at, started_at, last_call_at
+) values (
+  'f3000000-0000-4000-8000-000000000008',
+  (select jsonb_agg(n order by n) from generate_series(1, 90) n),
+  (select jsonb_agg(n order by n) from generate_series(1, 20) n),
+  20, 0, 'in_progress', 'f1000000-0000-4000-8000-000000000001', now(), now(), now() - interval '5 seconds'
+);
+
+do $$
+begin
+  perform pg_temp.win('f3000000-0000-4000-8000-000000000008', 'f4000000-0000-4000-8000-000000000081', '£10 Cash', true);
+  update public.snowball_pots set current_jackpot_amount = 160.00
+   where id = 'f6000000-0000-4000-8000-000000000004';
+  perform pg_temp.win('f3000000-0000-4000-8000-000000000008', 'f4000000-0000-4000-8000-000000000082', '£10 Cash', true);
+
+  perform t('money :: tied jackpot winners whose pools disagree are credited no jackpot share',
+            (select array_agg(jackpot_pool_pence order by created_at, id) = array[14000, 16000]
+                    and bool_and(jackpot_share_pence is null)
+               from public.winners where game_id = 'f3000000-0000-4000-8000-000000000008'),
+            pg_temp.shares('f3000000-0000-4000-8000-000000000008'));
+  perform t('money :: the ordinary prize is still split between them',
+            (select array_agg(prize_share_pence order by created_at, id) = array[500, 500]
+               from public.winners where game_id = 'f3000000-0000-4000-8000-000000000008'),
+            pg_temp.shares('f3000000-0000-4000-8000-000000000008'));
+
+  update public.winners set is_void = true, void_reason = 'test'
+   where client_request_id = 'f4000000-0000-4000-8000-000000000081';
+  perform t('money :: voiding one leaves a single pool, and the other takes it whole',
+            (select jackpot_share_pence = 16000 from public.winners
+              where client_request_id = 'f4000000-0000-4000-8000-000000000082'),
+            pg_temp.shares('f3000000-0000-4000-8000-000000000008'));
+
+  -- A known pool tied with an unknown one cannot be split either: the stage's
+  -- pool is not known, so neither share is.
+  update public.winners set is_void = false, void_reason = null, jackpot_pool_pence = null
+   where client_request_id = 'f4000000-0000-4000-8000-000000000081';
+  perform t('money :: a known pool tied with an unknown one is credited no jackpot share',
+            (select bool_and(jackpot_share_pence is null) and count(*) = 2
+               from public.winners where game_id = 'f3000000-0000-4000-8000-000000000008'),
+            pg_temp.shares('f3000000-0000-4000-8000-000000000008'));
+end $$;
+
+-- ===========================================================================
 -- A void recomputes both components
 -- ===========================================================================
 do $$

@@ -682,10 +682,43 @@ begin
   perform t('manual :: a retry of the manual award adds nothing',
             v is null and (select count(*) = 1 from public.winners where game_id = 'd3000000-0000-4000-8000-000000000003'),
             coalesce(v, 'no error'));
+
+  -- A lost response and a re-opened modal: the same jackpot again, under a
+  -- new key. It must not become a second, phantom jackpot winner.
+  v := pg_temp.err($q$select public.record_winner_atomic('d2000000-0000-4000-8000-000000000001',
+        'd3000000-0000-4000-8000-000000000003', 'Full House', '£212.50 (Manual Snowball Win)', true, true, true,
+        'b0000000-0000-4000-8000-000000000012')$q$);
+  perform t('manual :: a second manual award under a new key is refused while a live jackpot winner stands',
+            v = 'jackpot_already_won'
+              and (select count(*) = 1 from public.winners where game_id = 'd3000000-0000-4000-8000-000000000003')
+              and not exists (select 1 from public.winners
+                               where client_request_id = 'b0000000-0000-4000-8000-000000000012'),
+            coalesce(v, 'no error'));
+
+  -- The idempotency lookup still comes first: the original key is answered
+  -- with the winner on record, never with jackpot_already_won.
+  v := pg_temp.err($q$select public.record_winner_atomic('d2000000-0000-4000-8000-000000000001',
+        'd3000000-0000-4000-8000-000000000003', 'Full House', '£212.50 (Manual Snowball Win)', true, true, true,
+        'b0000000-0000-4000-8000-000000000007')$q$);
+  perform t('manual :: after that refusal, a retry with the original key still returns the winner on record',
+            v is null and (select count(*) = 1 from public.winners where game_id = 'd3000000-0000-4000-8000-000000000003'),
+            coalesce(v, 'no error'));
+
+  -- A voided jackpot winner does not count, so the jackpot can be awarded again.
+  update public.winners set is_void = true, void_reason = 'test'
+   where client_request_id = 'b0000000-0000-4000-8000-000000000007';
+  v := pg_temp.err($q$select public.record_winner_atomic('d2000000-0000-4000-8000-000000000001',
+        'd3000000-0000-4000-8000-000000000003', 'Full House', '£212.50 (Manual Snowball Win)', true, true, true,
+        'b0000000-0000-4000-8000-000000000013')$q$);
+  perform t('manual :: once the jackpot winner is voided, a new manual award is accepted',
+            v is null and exists (select 1 from public.winners
+                                   where client_request_id = 'b0000000-0000-4000-8000-000000000013'
+                                     and is_snowball_jackpot and coalesce(is_void, false) = false),
+            coalesce(v, 'no error'));
 end $$;
 
 do $$
-declare s public.game_states; w public.winners;
+declare s public.game_states; w public.winners; v text;
 begin
   perform pg_temp.valid_claim('d3000000-0000-4000-8000-000000000006', 'b0000000-0000-4000-8000-000000000008');
   s := public.record_winner_atomic('d2000000-0000-4000-8000-000000000001',
@@ -700,6 +733,18 @@ begin
   perform t('money text :: the ordinary prize is still parsed from the ordinary text',
             w.prize_amount_pence = 2500 and w.jackpot_pool_pence = 125000,
             'amount=' || coalesce(w.prize_amount_pence::text, 'null') || ' pool=' || coalesce(w.jackpot_pool_pence::text, 'null'));
+
+  -- A jackpot winner recorded through a checked claim blocks a manual award
+  -- just the same: the guard asks whether a live jackpot winner exists, not
+  -- which route recorded it.
+  v := pg_temp.err($q$select public.record_winner_atomic('d2000000-0000-4000-8000-000000000001',
+        'd3000000-0000-4000-8000-000000000006', 'Full House', '£1,250 (Manual Snowball Win)', true, true, true,
+        'b0000000-0000-4000-8000-000000000014')$q$);
+  perform t('manual :: a manual award after a checked jackpot winner is refused',
+            v = 'jackpot_already_won'
+              and not exists (select 1 from public.winners
+                               where client_request_id = 'b0000000-0000-4000-8000-000000000014'),
+            coalesce(v, 'no error'));
 
   perform pg_temp.valid_claim('d3000000-0000-4000-8000-000000000006', 'b0000000-0000-4000-8000-000000000011');
   s := public.record_winner_atomic('d2000000-0000-4000-8000-000000000001',

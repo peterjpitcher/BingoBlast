@@ -25,7 +25,11 @@
 --   jackpot_share_pence  new: the jackpot split between the live (non-void)
 --                        jackpot winners of the stage only; the odd penny goes to
 --                        the earliest by created_at, then id. Null for everyone
---                        else, for a voided winner, and where the pool is null.
+--                        else, for a voided winner, and for every live jackpot
+--                        winner of a stage whose pools are not all one known
+--                        value (one unknown, or two that disagree): there is one
+--                        pot, so each taking its own pool could pay out more
+--                        than the pot held.
 --   A winner's total is prize_share_pence + jackpot_share_pence.
 --
 --   The recompute on insert, void and edit covers both components. It still
@@ -82,7 +86,7 @@ comment on column public.winners.jackpot_pool_pence is
   'The snowball jackpot this winner shared in, in pence: the pot amount under the pot lock when the win was recorded. Null when the row is not a jackpot winner, and on jackpot rows from before 2026-10-01 unless a jackpot_won settlement for the game records the amount.';
 
 comment on column public.winners.jackpot_share_pence is
-  'This winner''s share of the jackpot, in pence: the pool split between the non-void jackpot winners of the stage, odd penny to the earliest. Null for everyone else, for a voided winner, and where the pool is unknown.';
+  'This winner''s share of the jackpot, in pence: the pool split between the non-void jackpot winners of the stage, odd penny to the earliest. Null for everyone else, for a voided winner, and when the live jackpot winners of the stage do not all carry one known pool (one unknown, or two that disagree), because one pot cannot be paid twice over.';
 
 -- ---------------------------------------------------------------------------
 -- The split, both components
@@ -199,14 +203,17 @@ begin
 
   if v_live > 0 then
     if v_distinct <> 1 or v_nulls > 0 then
-      -- Pools that disagree, or an unknown pool, are not split: each row keeps
-      -- its own pool, and an unknown one stays unknown.
+      -- Pools that disagree, or any unknown pool, are not split and not paid
+      -- whole either. Unlike the ordinary prize there is only ever one pot, so
+      -- each row keeping its own pool would credit more than the pot held,
+      -- and nothing says which pool is right. No share is recorded, and the
+      -- screens say "jackpot amount not recorded". The pools stay as a record.
       update public.winners
-         set jackpot_share_pence = jackpot_pool_pence
+         set jackpot_share_pence = null
        where game_id = p_game_id and stage = p_stage
          and coalesce(is_void, false) = false
          and coalesce(is_snowball_jackpot, false) = true
-         and jackpot_share_pence is distinct from jackpot_pool_pence;
+         and jackpot_share_pence is not null;
     else
       select max(jackpot_pool_pence) into v_amount
         from public.winners

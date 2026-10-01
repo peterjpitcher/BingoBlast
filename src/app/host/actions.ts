@@ -90,6 +90,10 @@ const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
   cash_jackpot_stage_count: {
     error: 'This jackpot game is not set to Full House only, so the cash amount cannot be applied. Ask an admin to set it to Full House only.',
   },
+  // start_game re-opening a snowball game whose pot has already settled.
+  snowball_settled: {
+    error: "This snowball game's pot has already been settled, so it cannot be re-opened.",
+  },
 
   // Claims (begin_claim_check, set_claim_draft, check_claim, the bound undo,
   // and the checks record_winner_atomic makes on a new winner).
@@ -149,6 +153,13 @@ const HOST_RPC_ERRORS: Readonly<Record<string, MappedRpcError | undefined>> = {
     error: 'This win has been voided, so its prize cannot be marked as given.',
     conflict: true,
     code: 'winner_void',
+  },
+  // Manual Snowball Win while a live jackpot winner already stands, most often
+  // a save whose response was lost. A conflict, so the host screen refreshes
+  // and shows the winner already on record.
+  jackpot_already_won: {
+    error: 'A snowball jackpot has already been recorded for this game.',
+    conflict: true,
   },
 
   stage_mismatch: { error: 'The live stage has moved on. Refreshing now.', conflict: true },

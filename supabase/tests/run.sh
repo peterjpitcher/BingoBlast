@@ -382,32 +382,68 @@ psql_strict -d "$db" -f "$HERE/money.test.sql" >/dev/null
 # connection B starts once A is seen asleep and must WAIT (seen in
 # pg_stat_activity as a Lock wait), then, once A commits, see A's result and
 # refuse. Results go into the database's test_results like every other
-# assertion. Needs lifecycle.test.sql to have created the host account.
+# assertion. Needs lifecycle.test.sql to have created the host and admin
+# accounts.
 # ---------------------------------------------------------------------------
 lifecycle_races() {
 local db="$1"
 local host='c1000000-0000-4000-8000-000000000001'
+local admin='c1000000-0000-4000-8000-000000000003'
 local seq='(select array_agg(g order by g) from generate_series(1, 90) g)'
 local log_a log_b
 log_a="$(mktemp "${TMPDIR:-/tmp}/bingo-race-a.XXXXXX")"
 log_b="$(mktemp "${TMPDIR:-/tmp}/bingo-race-b.XXXXXX")"
 
+# Games 3 and 4 are each in progress with ten balls called and a checked,
+# valid Line claim (attempts c7...01 and c7...02), ready to be recorded.
 psql_strict -d "$db" >/dev/null <<SQL
 insert into public.sessions (id, name, status) values
   ('c4000000-0000-4000-8000-000000000001', 'Race: end then start', 'running'),
-  ('c4000000-0000-4000-8000-000000000002', 'Race: start then end', 'running');
+  ('c4000000-0000-4000-8000-000000000002', 'Race: start then end', 'running'),
+  ('c4000000-0000-4000-8000-000000000003', 'Race: record under finish', 'running'),
+  ('c4000000-0000-4000-8000-000000000004', 'Race: record under reset', 'running');
 insert into public.games (id, session_id, game_index, name) values
   ('c5000000-0000-4000-8000-000000000001', 'c4000000-0000-4000-8000-000000000001', 1, 'Race game 1'),
   ('c5000000-0000-4000-8000-000000000002', 'c4000000-0000-4000-8000-000000000002', 1, 'Race game 2');
+insert into public.games (id, session_id, game_index, name, type, stage_sequence, prizes) values
+  ('c5000000-0000-4000-8000-000000000003', 'c4000000-0000-4000-8000-000000000003', 1, 'Race game 3',
+   'standard', '["Line"]', '{"Line": "£10 Cash"}'),
+  ('c5000000-0000-4000-8000-000000000004', 'c4000000-0000-4000-8000-000000000004', 1, 'Race game 4',
+   'standard', '["Line"]', '{"Line": "£10 Cash"}');
+insert into public.game_states (
+  game_id, number_sequence, called_numbers, numbers_called_count,
+  current_stage_index, status, controlling_host_id, controller_last_seen_at, started_at, last_call_at
+)
+select g.id,
+       (select jsonb_agg(n order by n) from generate_series(1, 90) n),
+       (select jsonb_agg(n order by n) from generate_series(1, 10) n),
+       10, 0, 'in_progress', '$host', now(), now(), now() - interval '5 seconds'
+  from public.games g
+ where g.id in ('c5000000-0000-4000-8000-000000000003', 'c5000000-0000-4000-8000-000000000004');
+update public.sessions set active_game_id = 'c5000000-0000-4000-8000-000000000003'
+ where id = 'c4000000-0000-4000-8000-000000000003';
+update public.sessions set active_game_id = 'c5000000-0000-4000-8000-000000000004'
+ where id = 'c4000000-0000-4000-8000-000000000004';
+select set_config('request.jwt.claim.sub', '$host', false);
+select public.begin_claim_check('c5000000-0000-4000-8000-000000000003', 'c7000000-0000-4000-8000-000000000001');
+select public.check_claim('c5000000-0000-4000-8000-000000000003', 'c7000000-0000-4000-8000-000000000001',
+                          array[6, 7, 8, 9, 10]);
+select public.begin_claim_check('c5000000-0000-4000-8000-000000000004', 'c7000000-0000-4000-8000-000000000002');
+select public.check_claim('c5000000-0000-4000-8000-000000000004', 'c7000000-0000-4000-8000-000000000002',
+                          array[6, 7, 8, 9, 10]);
 SQL
 
-# $1 = the call A makes and holds, $2 = the call B makes, $3 = B's function name.
+# $1 = the call A makes and holds, $2 = the call B makes, $3 = B's function name,
+# $4 = optional: a call A makes after its sleep, while B waits, before A commits,
+# $5 = optional: the account B acts as (default the host).
 race_pair() {
+  local after="${4:-}" uid_b="${5:-$host}"
   psql -d "$db" -c "
     select set_config('request.jwt.claim.sub', '$host', false);
     begin;
     select $1;
     select pg_sleep(4);
+    ${after:+select $after;}
     commit;" >"$log_a" 2>&1 &
   local a=$!
   # Start B only once A is asleep inside its transaction, so A certainly holds
@@ -422,7 +458,7 @@ race_pair() {
     sleep 0.1
   done
   psql -d "$db" -c "
-    select set_config('request.jwt.claim.sub', '$host', false);
+    select set_config('request.jwt.claim.sub', '$uid_b', false);
     select $2;" >"$log_b" 2>&1 &
   local b=$!
   local waiting=0
@@ -460,6 +496,45 @@ ok=$(psql -d "$db" -At -c "
 if grep -q 'game_in_progress' "$log_b" && ! grep -q ERROR "$log_a" && [ "$ok" = "t" ]; then ok=true; else ok=false; fi
 detail="waiting=$waiting; B said: $(tr '\n' ' ' < "$log_b" | sed "s/'/''/g" | cut -c1-200)"
 psql_strict -d "$db" -c "select t('race :: end_night waits for a start_game holding the session lock, then refuses game_in_progress', $ok, '$detail');" >/dev/null
+
+# The deadlock these two catch: a lifecycle function holds the session row and
+# waits for the game row, while record_winner_atomic holds the game row and
+# inserts a winner, whose foreign key to sessions takes KEY SHARE on the same
+# session row. With the session held FOR UPDATE that is a cycle, and Postgres
+# kills one side. Held FOR NO KEY UPDATE it is not: the winner lands, and the
+# lifecycle call goes on once the game row is free. A holds the game row,
+# sleeps so that B is seen waiting on it with the session row in hand, then
+# records the winner and commits.
+waiting=$(race_pair "1 from public.game_states where game_id = 'c5000000-0000-4000-8000-000000000003' for update" \
+                    "public.finish_game('c5000000-0000-4000-8000-000000000003') ->> 'session_completed'" \
+                    "finish_game" \
+                    "(public.record_winner_atomic(p_session_id => 'c4000000-0000-4000-8000-000000000003', p_game_id => 'c5000000-0000-4000-8000-000000000003', p_stage => 'Line', p_prize_description => '£10 Cash', p_client_request_id => 'c7000000-0000-4000-8000-000000000001')).state_version")
+ok=$(psql -d "$db" -At -c "
+  select ${waiting:-0} = 1
+     and exists (select 1 from public.winners where client_request_id = 'c7000000-0000-4000-8000-000000000001')
+     and (select status = 'completed' from public.game_states where game_id = 'c5000000-0000-4000-8000-000000000003');")
+if ! grep -q ERROR "$log_a" "$log_b" && [ "$ok" = "t" ]; then ok=true; else ok=false; fi
+detail="waiting=$waiting; errors: $({ grep -h ERROR "$log_a" "$log_b" || echo none; } | tr '\n' ' ' | sed "s/'/''/g" | cut -c1-300)"
+psql_strict -d "$db" -c "select t('race :: a winner recorded while finish_game holds the session lock lands, and the finish completes after it (no deadlock)', $ok, '$detail');" >/dev/null
+
+# The same shape against reset_session_safe, which also locks the game rows of
+# the night after the session row. The winner must not survive the reset: the
+# reset waits for it, then sees it, logs it and removes it.
+waiting=$(race_pair "1 from public.game_states where game_id = 'c5000000-0000-4000-8000-000000000004' for update" \
+                    "(public.reset_session_safe('c4000000-0000-4000-8000-000000000004')).winners_deleted" \
+                    "reset_session_safe" \
+                    "(public.record_winner_atomic(p_session_id => 'c4000000-0000-4000-8000-000000000004', p_game_id => 'c5000000-0000-4000-8000-000000000004', p_stage => 'Line', p_prize_description => '£10 Cash', p_client_request_id => 'c7000000-0000-4000-8000-000000000002')).state_version" \
+                    "$admin")
+ok=$(psql -d "$db" -At -c "
+  select ${waiting:-0} = 1
+     and not exists (select 1 from public.winners where session_id = 'c4000000-0000-4000-8000-000000000004')
+     and not exists (select 1 from public.game_states where game_id = 'c5000000-0000-4000-8000-000000000004')
+     and (select status = 'ready' from public.sessions where id = 'c4000000-0000-4000-8000-000000000004')
+     and (select count(*) = 1 and bool_and(winners_deleted = 1) from public.session_reset_log
+           where session_id = 'c4000000-0000-4000-8000-000000000004');")
+if ! grep -q ERROR "$log_a" "$log_b" && [ "$ok" = "t" ]; then ok=true; else ok=false; fi
+detail="waiting=$waiting; errors: $({ grep -h ERROR "$log_a" "$log_b" || echo none; } | tr '\n' ' ' | sed "s/'/''/g" | cut -c1-300)"
+psql_strict -d "$db" -c "select t('race :: a winner recorded while reset_session_safe holds the session lock lands, and the reset then logs and removes it (no deadlock, no stray winner)', $ok, '$detail');" >/dev/null
 
 rm -f "$log_a" "$log_b"
 }

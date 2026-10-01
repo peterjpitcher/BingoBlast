@@ -25,6 +25,20 @@
 --   run one after the other. No trigger on game_states writes to sessions,
 --   because that would take the locks in the opposite order.
 --
+--   The session row is locked FOR NO KEY UPDATE, not FOR UPDATE, here and in
+--   reset_session_safe. It serialises these four against each other just the
+--   same, but does not block the KEY SHARE lock a foreign key check takes.
+--   record_winner_atomic holds the game_states row while it inserts a winner,
+--   and that insert's foreign key to sessions takes KEY SHARE on the session
+--   row; under FOR UPDATE, a lifecycle call holding the session and waiting
+--   for the game row would deadlock with it.
+--
+--   start_game refuses to re-open a snowball game whose pot has already
+--   settled. A Full House won after such a re-open would be judged against
+--   the pot as it now stands, already reset or rolled over, and
+--   settle_snowball_pot would answer already_settled, so the pot would be paid
+--   at the wrong value and never move for that win.
+--
 --   start_game also takes the cash jackpot amount for a 'jackpot' game, and
 --   writes its Full House prize text ("£125 Cash Jackpot") in the same
 --   transaction. games UPDATE is admin only in RLS, so a host could not save
@@ -57,6 +71,11 @@
 --   cash_jackpot_stage_count start_game given a cash jackpot amount for a
 --                            jackpot game whose stage_sequence is not exactly
 --                            one stage
+--   snowball_settled         start_game re-opening a finished snowball game
+--                            whose pot has already settled: a
+--                            snowball_pot_history row for this game and its
+--                            pot, the record settle_snowball_pot answers
+--                            already_settled on
 --
 -- IDEMPOTENT: yes. Columns use "if not exists", functions "create or replace"
 -- (start_game drops its earlier two-argument signature first), the trigger is
@@ -155,7 +174,9 @@ $$;
 --                                        cleared, pause, break and win cleared,
 --                                        stage and board kept. The claim fields
 --                                        clear with the pause (guard_claim_fields
---                                        from 20261001000200).
+--                                        from 20261001000200). Refused with
+--                                        snowball_settled for a snowball game
+--                                        whose pot has settled.
 --   in_progress                          a takeover: the caller becomes the
 --                                        controller. The heartbeat check stays
 --                                        in startGame, as it is today.
@@ -219,11 +240,13 @@ begin
     end if;
   end if;
 
-  -- Lock order: the session first, always.
+  -- Lock order: the session first, always. FOR NO KEY UPDATE, so a winner
+  -- being inserted for this night (a KEY SHARE on this row) is not blocked;
+  -- see the header.
   select * into v_session
     from public.sessions
    where id = v_game.session_id
-   for update;
+   for no key update;
 
   if v_session.id is null then
     raise exception 'session_not_found' using errcode = 'P0001';
@@ -345,6 +368,24 @@ begin
     returning * into v_state;
 
   elsif v_state.status = 'completed'::public.game_status then
+    -- A snowball game whose pot has settled stays finished. "Settled" is
+    -- exactly the test settle_snowball_pot makes for already_settled: a
+    -- snowball_pot_history row for this game and its pot
+    -- (snowball_pot_history_pot_game_unique, 20260729231841). Read under the
+    -- game_states lock: settle_snowball_pot (from 20261001000300) takes a
+    -- share lock on that row before it writes the record, so a settlement in
+    -- flight is waited for and then seen here.
+    if v_game.type = 'snowball'::public.game_type
+       and v_game.snowball_pot_id is not null
+       and exists (
+         select 1
+           from public.snowball_pot_history h
+          where h.snowball_pot_id = v_game.snowball_pot_id
+            and h.game_id = p_game_id
+       ) then
+      raise exception 'snowball_settled' using errcode = 'P0001';
+    end if;
+
     update public.game_states
        set status = 'in_progress'::public.game_status,
            ended_at = null,
@@ -385,7 +426,7 @@ revoke all on function public.start_game(uuid, integer[], numeric) from public, 
 grant execute on function public.start_game(uuid, integer[], numeric) to authenticated, service_role;
 
 comment on function public.start_game(uuid, integer[], numeric) is
-  'Starts, re-opens or takes over a game under the session lock then the game_states lock. Refuses night_ended and other_game_in_progress. On a fresh start of a jackpot game, p_cash_jackpot_amount (pounds, at most two decimals) becomes its one stage''s prize text, "£125 Cash Jackpot", in the same transaction; refuses invalid_cash_jackpot, cash_jackpot_not_allowed and cash_jackpot_stage_count. Host or admin; call with the cookie client, it records auth.uid() as the controller.';
+  'Starts, re-opens or takes over a game under the session lock then the game_states lock. Refuses night_ended and other_game_in_progress, and snowball_settled for a re-open of a snowball game whose pot has already settled. On a fresh start of a jackpot game, p_cash_jackpot_amount (pounds, at most two decimals) becomes its one stage''s prize text, "£125 Cash Jackpot", in the same transaction; refuses invalid_cash_jackpot, cash_jackpot_not_allowed and cash_jackpot_stage_count. Host or admin; call with the cookie client, it records auth.uid() as the controller.';
 
 -- ---------------------------------------------------------------------------
 -- finish_game
@@ -411,10 +452,12 @@ begin
     raise exception 'game_not_found' using errcode = 'P0001';
   end if;
 
+  -- FOR NO KEY UPDATE, see the header: this waits for the game row below,
+  -- and a winner being recorded on that row needs KEY SHARE on this one.
   select * into v_session
     from public.sessions
    where id = v_game.session_id
-   for update;
+   for no key update;
 
   if v_session.id is null then
     raise exception 'session_not_found' using errcode = 'P0001';
@@ -508,10 +551,11 @@ declare
 begin
   perform public.assert_is_host();
 
+  -- FOR NO KEY UPDATE, like the other lifecycle functions (see the header).
   select * into v_session
     from public.sessions
    where id = p_session_id
-   for update;
+   for no key update;
 
   if v_session.id is null then
     raise exception 'session_not_found' using errcode = 'P0001';
@@ -549,8 +593,17 @@ comment on function public.end_night(uuid) is
 
 -- ---------------------------------------------------------------------------
 -- reset_session_safe: the body from 20260825080604, with started_at cleared in
--- the final update. The trigger clears completed_at as the status leaves
--- completed. It already locks the session first.
+-- the final update, and two lock changes. The trigger clears completed_at as
+-- the status leaves completed.
+--
+-- The session row is locked FOR NO KEY UPDATE, as in the other lifecycle
+-- functions, so a winner being recorded for the night no longer deadlocks the
+-- reset (see the header). That alone would let such a winner commit after the
+-- reset had deleted the winners and survive it, so the reset then locks every
+-- game_states row of the night, in the same session-then-game order. A
+-- winner whose game row is already held commits first, and the reset then
+-- sees it, logs it and removes it; one that comes later waits for the reset
+-- and then finds its game state gone (game_state_not_found).
 -- ---------------------------------------------------------------------------
 create or replace function public.reset_session_safe(p_session_id uuid)
 returns public.session_reset_log
@@ -571,11 +624,19 @@ begin
   select * into v_session
     from public.sessions
    where id = p_session_id
-   for update;
+   for no key update;
 
   if v_session.id is null then
     raise exception 'session_not_found';
   end if;
+
+  -- Then the night's game rows, before anything is read, so a winner being
+  -- recorded right now is either seen below or refused afterwards.
+  perform 1
+     from public.game_states gs
+     join public.games g on g.id = gs.game_id
+    where g.session_id = p_session_id
+      for update of gs;
 
   -- Refuse if any game in this session has already settled the pot. Resetting
   -- would leave the claim in place and the pot where this night put it, and the
@@ -630,4 +691,4 @@ revoke all on function public.reset_session_safe(uuid) from public, anon;
 grant execute on function public.reset_session_safe(uuid) to authenticated, service_role;
 
 comment on function public.reset_session_safe(uuid) is
-  'Wipes a session back to ready and clears started_at (the trigger clears completed_at). Admin only. Records everything it destroys in session_reset_log first, and refuses outright when the session has already settled a snowball pot, because the pot cannot be safely rewound.';
+  'Wipes a session back to ready and clears started_at (the trigger clears completed_at). Admin only. Locks the session row, then every game_states row of the night, so a winner being recorded at the same moment is removed with the rest or refused. Records everything it destroys in session_reset_log first, and refuses outright when the session has already settled a snowball pot, because the pot cannot be safely rewound.';

@@ -22,6 +22,11 @@
 --      a snowball game with a pot AND the Full House stage AND the jackpot
 --      window open, all under the lock, and not a test session (a test session
 --      never computes the window). The flag alone no longer skips anything.
+--      A new manual award is refused while a live (non-void) jackpot winner
+--      already stands at that stage of that game: with no claim attempt to
+--      tie it to, a lost response and a re-opened modal would otherwise record
+--      a second, phantom jackpot winner. A retry with the same key is still
+--      answered by the idempotency lookup in 1, before this check.
 --   4. Stage-specific win text: LINE WINNER!, TWO LINES WINNER!, FULL HOUSE
 --      WINNER!, or the snowball text as before.
 --   5. Money text to two decimal places when there are pence, with thousands
@@ -36,6 +41,8 @@
 --   stale_attempt       the stage moved since the check started
 --   claim_not_valid     the verdict is invalid or late, or the stored numbers no
 --                       longer pass the re-check
+--   jackpot_already_won a manual snowball award while a live jackpot winner
+--                       already stands at that stage of that game
 --   Every key it raised before is unchanged.
 --
 -- IDEMPOTENT: yes, one create or replace.
@@ -171,6 +178,22 @@ begin
   v_manual_exempt := coalesce(p_force_snowball_jackpot, false)
                      and v_is_snowball_full_house
                      and v_window_open;
+
+  -- A manual award has no claim attempt to bind it, so nothing else stops a
+  -- second one under a fresh key. One live jackpot winner at this stage is
+  -- enough to refuse it, whichever route recorded that winner. The game_states
+  -- lock above serialises this with every other record on the game.
+  if v_manual_exempt
+     and exists (
+       select 1
+         from public.winners w
+        where w.game_id = p_game_id
+          and w.stage = p_stage
+          and coalesce(w.is_snowball_jackpot, false)
+          and coalesce(w.is_void, false) = false
+     ) then
+    raise exception 'jackpot_already_won' using errcode = 'P0001';
+  end if;
 
   -- 2. Otherwise a new winner needs the checked, valid attempt.
   if not v_manual_exempt then
@@ -321,4 +344,4 @@ revoke all on function public.record_winner_atomic(uuid, uuid, public.win_stage,
 grant execute on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean, uuid) to authenticated, service_role;
 
 comment on function public.record_winner_atomic(uuid, uuid, public.win_stage, text, boolean, boolean, boolean, uuid) is
-  'Records a winner atomically with the win announcement. Idempotent on client_request_id, checked first. A new winner needs the valid claim attempt (claim_attempt_id = p_client_request_id, claim_result valid, same stage), re-checked against the board; the only exemption is a manual snowball award inside the open jackpot window. Tied winners share a prize: both components are split by the winners_prize_share_sync trigger, not here.';
+  'Records a winner atomically with the win announcement. Idempotent on client_request_id, checked first. A new winner needs the valid claim attempt (claim_attempt_id = p_client_request_id, claim_result valid, same stage), re-checked against the board; the only exemption is a manual snowball award inside the open jackpot window, refused with jackpot_already_won while a live jackpot winner already stands at that stage. Tied winners share a prize: both components are split by the winners_prize_share_sync trigger, not here.';
