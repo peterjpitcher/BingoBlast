@@ -38,8 +38,10 @@ export const eventImageLoader: ImageLoader = ({ src, width }) =>
 
 /**
  * The `sizes` hint for an event image on a TV slide, matching the boxes in
- * event-slide.tsx: a square is 40vh wide, a landscape box 16:9 at 40vh tall.
+ * event-slide.tsx: a square is up to 36vw wide; a landscape box is 16:9 at up
+ * to about 66vh tall, so about 118vh wide. The loader still caps what is
+ * fetched at MAX_EVENT_IMAGE_WIDTH.
  */
 export function eventImageSizes(image: ScreenEventImage): string {
-  return image.square ? '40vh' : '72vh';
+  return image.square ? '36vw' : '118vh';
 }

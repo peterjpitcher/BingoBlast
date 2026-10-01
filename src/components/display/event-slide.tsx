@@ -2,9 +2,11 @@
 //
 // One upcoming event as a pub TV slide (spec 5.5): the artwork, the title, when
 // it is, and a QR code to its page.
-//   - A square image is shown whole, beside the text; a landscape one above it.
+//   - The artwork is the hero. A landscape image takes all the height the
+//     slide has, with the title and the date tucked under it; a square one
+//     stands full height beside the text. Either is shown whole, never cropped.
 //   - An image that fails to load turns the slide into a text-only card.
-//   - The title is clamped to two lines.
+//   - The title is clamped: the artwork usually carries the title too.
 //   - "Tonight" and "7pm" are worked out here, at render time, from the
 //     screen's clock (src/lib/dates.ts), never sent by the server (R10).
 //   - The QR is level M and at least 40% of the screen height; the playlist
@@ -60,9 +62,15 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventS
   const whenLine = formatEventWhenAndTime(event.startsAt, nowMs);
 
   // The artwork is shown whole, so the tile has no scrim over it; its own
-  // surface shows behind an image that does not quite fill the box.
+  // surface shows behind an image that does not quite fill the box. The deep
+  // shadow lifts it off the screen, as a poster on a wall.
   const renderImage = (img: ScreenEventImage, boxClass: string) => (
-    <div className={cn('relative shrink-0 overflow-hidden rounded-card border border-line-gold bg-anchor-green-raised', boxClass)}>
+    <div
+      className={cn(
+        'overflow-hidden rounded-card border border-line-gold bg-anchor-green-raised shadow-[0_2.2vh_7vh_rgba(0,0,0,0.55)]',
+        boxClass
+      )}
+    >
       <Image
         src={img.url}
         alt={img.alt}
@@ -80,31 +88,64 @@ export function EventSlide({ event, qrUrl, nowMs, eyebrow, statusLabel }: EventS
     </div>
   );
 
+  const statusPill = statusLabel ? (
+    // In a pill, so it reads apart from the kicker.
+    <p className={cn(TV_STATUS_LABEL_CLASS, 'shrink-0 self-start rounded-full border border-line-strong px-[0.8em] py-[0.2em]')}>
+      {statusLabel}
+    </p>
+  ) : null;
+
+  // The words. The title takes the slide-title size, not the headline size:
+  // the artwork is the headline now, and a smaller title leaves it more room.
+  const renderText = (titleClampClass: string) => (
+    <div className="flex shrink-0 flex-col gap-[0.8vh]">
+      <p className={TV_KICKER_CLASS}>{eyebrow}</p>
+      {/* leading-[1.15]: the clamp hides overflow, and the title size's
+          tighter 1.05 line shaved the bottoms off descenders such as "g". */}
+      <h2 className={tvText('lg', titleClampClass, 'leading-[1.15]')}>{event.title}</h2>
+      {whenLine && <p className={tvText('base', 'font-semibold text-anchor-gold-bright')}>{whenLine}</p>}
+    </div>
+  );
+
   return (
     <section
       aria-label={event.title}
-      className="mx-auto flex h-full w-full max-w-[1800px] items-center gap-[3vw] overflow-hidden text-anchor-cream-text"
+      className="mx-auto flex h-full w-full max-w-[1800px] items-stretch gap-[3vw] overflow-hidden text-anchor-cream-text"
     >
-      {image?.square && renderImage(image, 'aspect-square h-[40vh]')}
+      {image?.square ? (
+        <>
+          {/* Square artwork: as tall as the slide, capped at 36vw so the text
+              beside it keeps a readable column. That column is narrow, so the
+              title may run to four lines before it is cut. */}
+          <div className="flex shrink-0 items-center">
+            {renderImage(image, 'relative aspect-square h-full max-h-[36vw]')}
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col justify-center gap-[1.6vh] text-left">
+            {statusPill}
+            {renderText('line-clamp-4')}
+          </div>
+        </>
+      ) : (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col justify-center gap-[1.6vh] text-left">
+          {statusPill}
+          {/* Landscape artwork: it takes whatever room the label above and
+              the words below leave, so it is as large as each screen allows
+              (about 1270 by 715 before the night starts at 1920x1080, where
+              it used to be 768 by 432). The stretch is a size container, and
+              the frame is the largest 16:9 box that fits it (cqh and cqw are
+              the stretch's own height and width), so the frame always hugs
+              the artwork. It sits at the bottom of the stretch, next to its
+              caption. */}
+          {image && (
+            <div className="flex min-h-0 flex-1 items-end [container-type:size]">
+              {renderImage(image, 'relative aspect-video h-[min(100cqh,56.25cqw)]')}
+            </div>
+          )}
+          {renderText('line-clamp-2')}
+        </div>
+      )}
 
-      <div className="flex min-w-0 flex-1 flex-col gap-[1.6vh] text-left">
-        {/* First in the column, above the artwork: one more line fits both
-            layouts at 1280x720 (about 545px of the 590px the slides get). In a
-            pill, so it reads apart from the kicker under it. */}
-        {statusLabel && (
-          <p className={cn(TV_STATUS_LABEL_CLASS, 'self-start rounded-full border border-line-strong px-[0.8em] py-[0.2em]')}>
-            {statusLabel}
-          </p>
-        )}
-        {image && !image.square && renderImage(image, 'aspect-video h-[40vh] max-w-full self-start')}
-        <p className={TV_KICKER_CLASS}>{eyebrow}</p>
-        {/* leading-[1.15]: the clamp hides overflow, and the title size's
-            tighter 1.05 line shaved the bottoms off descenders such as "g". */}
-        <h2 className={tvText('xl', 'line-clamp-2 leading-[1.15]')}>{event.title}</h2>
-        {whenLine && <p className={tvText('base', 'font-semibold text-anchor-gold-bright')}>{whenLine}</p>}
-      </div>
-
-      <div className="flex shrink-0 flex-col items-center gap-[1.5vh]">
+      <div className="flex shrink-0 flex-col items-center justify-center gap-[1.5vh]">
         <div className="rounded-card border border-line-gold bg-white p-[clamp(13px,1.85vh,20px)]">
           <QRCodeSVG
             value={qrUrl}
