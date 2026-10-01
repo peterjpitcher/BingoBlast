@@ -100,3 +100,14 @@ Primitives in `src/components/ui`:
 - [x] Run the page itself on the local stack: 10 call sheets, latest session first. The unfixed build on port 3100 shows the error.
 
 **Assumption:** two sessions on the same date are kept apart by `session_id`, so their games do not interleave; which of the two comes first is not meaningful.
+
+
+## Called numbers in rows, and the TV ball centred (1 October 2026)
+
+Three requests from the owner, watching a live game on the TV and a phone.
+
+- [x] Phone: every called number, newest first, in rows (was the last five in one sliding row). A grid of 56px columns, as many as fit, spread to the card's edges: five on a 393px phone, four at 320px.
+- [x] TV: the main ball (and "Ready...") centred on the screen. It was centred in the column beside the corner QR, which put it 162px right of centre at 1080p. It is now a layer over the whole main area; the stage and prize card before the first call stays in the column, as it needs the width. `TV_BALL_SIZE` keeps the ball clear of the QR and the snowball card on a narrow screen.
+- [x] TV footer: no change needed. It already lists every called number, newest first, until the row runs off the right edge; the owner saw ten because ten had been called.
+
+**Browser check on the local stack:** TV ball centre at x = 960 of 1920 and 640 of 1280, with and without the snowball card, `check-render` clean at both sizes; footer with 14 and 40 calls renders every chip and fades out at the edge; phone at 393px and 320px with 40 calls, a new call arriving top left, and the empty state on one line.
