@@ -242,7 +242,9 @@ begin
   perform pg_temp.win('f3000000-0000-4000-8000-000000000008', 'f4000000-0000-4000-8000-000000000082', '£10 Cash', true);
 
   perform t('money :: tied jackpot winners whose pools disagree are credited no jackpot share',
-            (select array_agg(jackpot_pool_pence order by created_at, id) = array[14000, 16000]
+            -- Ordered by the fixed claim key: both rows are inserted in one
+            -- transaction, so created_at ties and id order is random.
+            (select array_agg(jackpot_pool_pence order by client_request_id) = array[14000, 16000]
                     and bool_and(jackpot_share_pence is null)
                from public.winners where game_id = 'f3000000-0000-4000-8000-000000000008'),
             pg_temp.shares('f3000000-0000-4000-8000-000000000008'));
