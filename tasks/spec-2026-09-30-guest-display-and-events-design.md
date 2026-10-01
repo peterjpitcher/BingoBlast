@@ -156,7 +156,7 @@ The claimed numbers and the claim identity never leave the host's device, so a r
 
 - The design-system overhaul.
 - A 1 to 90 board on the TV.
-- Events during breaks.
+- Events during breaks. (Added afterwards at the owner's request, 1 October 2026: see section 18.)
 - A log of refused claims.
 - Audio, digital tickets or winner names.
 - The remaining security and admin backlog (section 13).
@@ -757,7 +757,7 @@ This follows the review's second option (R05): one release outside play, with a 
 - **Later in this repo:**
   - the design-system overhaul (section 14);
   - a 1 to 90 board on the TV;
-  - events during breaks;
+  - events during breaks (done on 1 October 2026, section 18);
   - a refused-claims log.
 - **Follow-up security and admin spec:**
   - `sec-game-states-update-unbounded`, `sec-sessions-update-unbounded`, `sec-profiles-readable-by-every-account`, `sec-login-next-backslash`;
@@ -857,6 +857,18 @@ This follows the review's second option (R05): one release outside play, with a 
 | R17 Hours completeness | No longer applies (D4) | X19 |
 
 ---
+
+## 18. Addendum, 1 October 2026: events during breaks
+
+Asked for by the owner the day after the release. It reverses the non-goal in section 4 and closes the follow-up in section 13. No migration and no new configuration.
+
+- **TV, a break in a game:** the break screen (20 s), the next bingo night if there is one (12 s), then the events two at a time (12 s each) with the break screen again after every two, and the rules (20 s) once a loop. A late look at the TV therefore says the game is paused within about 24 seconds. With no usable events (none, an error, no key) the loop is the break screen and the rules, exactly as in section 5.4.
+- **Label:** event and next-bingo slides carry the same "Break time" label as the rules slide.
+- **One code at a time:** the corner follow-along QR is hidden while a slide with its own QR is up.
+- **Backing panel:** during a game the screen is the game's book colour (section 3), which can be white. Event slides are white text drawn for the green screen, so while the night is paused they sit on the rules slide's dark panel. This was found in the browser test, not by the unit tests; the render check (`scripts/check-render.js`) now also reports low contrast.
+- **Phones:** the events list of section 5.5 appears under the "On Break" card.
+- **Links:** a third link per event, `qrInGame`, from the management app's `in_game_screen` channel, with the same id-link fallback as the other two, so scans from a break are counted apart. `eventLinkForPhase` picks it: pre-event before the night, in-game on a break, post-event after the night and on the idle screen. A cached feed response from before the field existed falls back to the pre-event link.
+- **Between games:** unchanged (the next game, then the rules). Showing events there is a one-argument change, waiting on the owner.
 
 ## Appendix A: backlog status re-verified on 30 September 2026
 
