@@ -14,6 +14,9 @@ const KEYS = [
   'VERCEL_ENV',
   'ANCHOR_API_KEY',
   'ANCHOR_API_BASE_URL',
+  'ERROR_SINK_URL',
+  'ERROR_SINK_TOKEN',
+  'SUPABASE_SERVICE_ROLE_KEY',
 ] as const;
 
 // The shape the management app issues: "anch_" then 32 random bytes in
@@ -220,4 +223,46 @@ test('ANCHOR_API_BASE_URL may be local http outside production only', () => {
   process.env.VERCEL_ENV = 'preview';
   process.env.ANCHOR_API_BASE_URL = 'http://management.local/api';
   assert.throws(() => validateBuildEnv(), /ANCHOR_API_BASE_URL/, 'only loopback hosts may use http');
+});
+
+// --- The error sink ----------------------------------------------------------
+
+const SINK_TOKEN = 'x'.repeat(40);
+
+test('no ERROR_SINK_URL needs no token or service role key', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
+  assert.doesNotThrow(() => validateBuildEnv());
+});
+
+test('ERROR_SINK_URL without a token fails the build', () => {
+  process.env.ERROR_SINK_URL = 'https://bingo.example/api/errors';
+  assert.throws(() => validateBuildEnv(), /ERROR_SINK_TOKEN must be set/);
+  process.env.ERROR_SINK_TOKEN = 'short';
+  assert.throws(() => validateBuildEnv(), /ERROR_SINK_TOKEN must be set/);
+  process.env.ERROR_SINK_TOKEN = SINK_TOKEN;
+  assert.doesNotThrow(() => validateBuildEnv());
+});
+
+test('in production, ERROR_SINK_URL also needs the service role key, and the message never shows a value', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
+  process.env.ERROR_SINK_URL = 'https://bingo.example/api/errors';
+  process.env.ERROR_SINK_TOKEN = SINK_TOKEN;
+  assert.throws(() => validateBuildEnv(), (err: Error) => {
+    assert.match(err.message, /SUPABASE_SERVICE_ROLE_KEY is not set/);
+    assert.doesNotMatch(err.message, /xxxx/);
+    return true;
+  });
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
+  assert.doesNotThrow(() => validateBuildEnv());
+});
+
+test('ERROR_SINK_URL must be https in production', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
+  process.env.ERROR_SINK_TOKEN = SINK_TOKEN;
+  process.env.ERROR_SINK_URL = 'http://bingo.example/api/errors';
+  assert.throws(() => validateBuildEnv(), /ERROR_SINK_URL must use https/);
 });
