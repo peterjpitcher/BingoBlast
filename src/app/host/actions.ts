@@ -1,7 +1,7 @@
 'use server'
 
 import { randomInt } from 'node:crypto'
-import { createClient } from '@/utils/supabase/server'
+import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { WinStage, UserRole } from '@/types/database'
 import type { ClaimRpcResult, Database } from '@/types/database'
@@ -12,6 +12,7 @@ import { HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
 import { logActionFailure, logActionLatency } from '@anchor-nights/kit/errors'
 import { reportError } from '@/lib/report-error'
 import { isUuid } from '@/lib/utils'
+import { readStaffProfile } from '@/lib/auth/staff-role'
 import type {
   BeginClaimCheckData,
   CheckClaimData,
@@ -272,11 +273,7 @@ async function authorizeHost(
     return { authorized: false, error: "Not authenticated" };
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<{ role: UserRole }>();
+  const { data: profile, error: profileError } = await readStaffProfile(supabase);
 
   if (profileError || !profile || (profile.role !== 'admin' && profile.role !== 'host')) {
     return { authorized: false, error: "Unauthorized: Host or Admin access required" };

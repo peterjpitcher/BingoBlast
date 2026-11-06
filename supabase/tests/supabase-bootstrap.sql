@@ -74,6 +74,11 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'dashboard_user') then
     create role dashboard_user nologin;
   end if;
+  -- The role Supabase Auth runs as, and so the role that calls the Before
+  -- User Created hook (kit_auth_hooks_and_retention grants it EXECUTE).
+  if not exists (select 1 from pg_roles where rolname = 'supabase_auth_admin') then
+    create role supabase_auth_admin nologin noinherit;
+  end if;
 end
 $$;
 
@@ -97,6 +102,12 @@ create table if not exists auth.users (
   id uuid primary key default gen_random_uuid(),
   email text
 );
+-- The columns the kit's active-identity gate reads (kit_staff_role_for): a
+-- banned or deleted Auth user is not active staff. Added separately so a
+-- database bootstrapped before them gains them too.
+alter table auth.users add column if not exists banned_until timestamptz;
+alter table auth.users add column if not exists deleted_at timestamptz;
+alter table auth.users add column if not exists last_sign_in_at timestamptz;
 
 -- auth.uid() and auth.role() read session settings so a test can act as a given
 -- user. On a real project these read the JWT claims; the shape of the answer is

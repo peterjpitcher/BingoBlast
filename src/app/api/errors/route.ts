@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
 import {
@@ -8,7 +7,7 @@ import {
   type AppErrorInsert,
   type InsertResult,
 } from '@/lib/error-sink'
-import type { Database } from '@/types/database'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 /**
  * Where src/lib/report-error.ts sends a report: set ERROR_SINK_URL to this
@@ -23,13 +22,13 @@ export const dynamic = 'force-dynamic'
 const allow = createRateLimiter()
 
 async function insertWithServiceRole(row: AppErrorInsert): Promise<InsertResult> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !serviceKey) return { ok: false, code: 'not_configured' }
-
-  const supabase = createClient<Database>(url, serviceKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+  // The shared admin client (auth standard section 2); it throws without the key.
+  let supabase: ReturnType<typeof createAdminClient>
+  try {
+    supabase = createAdminClient()
+  } catch {
+    return { ok: false, code: 'not_configured' }
+  }
 
   // .select() so a write that stored nothing is a failure, not a success.
   const { data, error } = await supabase.from('app_errors').insert(row).select('id').single()

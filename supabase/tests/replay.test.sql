@@ -137,18 +137,21 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Tables and row level security
 -- ---------------------------------------------------------------------------
-select t('tables :: the ten expected tables exist',
-         (select count(*) = 10 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+-- Thirteen since the kit's sign-in (20261107090001 to 090003): auth_audit,
+-- invites and recovery_grants. Their behaviour is in kit-auth.test.sql.
+select t('tables :: the thirteen expected tables exist',
+         (select count(*) = 13 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'
              and c.relname in ('profiles','sessions','games','game_states',
                                'game_states_public','winners','snowball_pots',
-                               'snowball_pot_history','session_reset_log','app_errors')),
+                               'snowball_pot_history','session_reset_log','app_errors',
+                               'auth_audit','invites','recovery_grants')),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'));
 
 select t('tables :: no unexpected tables were created',
-         (select count(*) = 10 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         (select count(*) = 13 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
@@ -193,8 +196,11 @@ select t('enums :: win_stage is exactly {Line,Two Lines,Full House}',
 -- ---------------------------------------------------------------------------
 -- Functions: presence, security settings and search_path
 -- ---------------------------------------------------------------------------
-select t('functions :: the thirty-one expected functions exist and nothing else',
-         (select count(*) = 31 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+-- Thirty-one of Cash Bingo's own plus twenty-two from the kit's sign-in
+-- (20261107090000 to 090004: current_staff_role, is_active_staff,
+-- is_active_admin and the kit_* functions), each named in the matrix below.
+select t('functions :: the fifty-three expected functions exist and nothing else',
+         (select count(*) = 53 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname <> 't'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
@@ -291,13 +297,15 @@ select t('functions :: the new trigger functions are security INVOKER',
 
 -- The general form, as for tables below: under the current defaults a function
 -- nobody granted to service_role fails this. Eight did until 20260929103018.
+-- One deliberate exception: kit_before_user_created is the Before User Created
+-- hook and only supabase_auth_admin (Supabase Auth) may call it.
 select t('grants :: every public function is executable by service_role',
          (select count(*) = 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and p.proname <> 't'
+           where n.nspname = 'public' and p.proname not in ('t', 'kit_before_user_created')
              and not has_function_privilege('service_role', p.oid, 'EXECUTE')),
          (select coalesce(string_agg(p.proname, ',' order by p.proname), '(all fine)') from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and p.proname <> 't'
+           where n.nspname = 'public' and p.proname not in ('t', 'kit_before_user_created')
              and not has_function_privilege('service_role', p.oid, 'EXECUTE')));
 
 -- The whole matrix, function by function, as read from production on
@@ -307,8 +315,11 @@ select t('grants :: every public function is executable by service_role',
 -- and one trigger function; M2a (20261001075215) three claim functions, the
 -- stage count helper and the guard trigger function; M3 (20261001075401)
 -- list_unsettled_snowball_games. M2b adds none; 20261106194703 adds
--- list_app_errors_safe (admin read of the error reports). It must come out the same in
--- both worlds, or a rebuilt project is not the project it rebuilds.
+-- list_app_errors_safe (admin read of the error reports). The kit's sign-in
+-- (20261107090000 to 090004) adds three callable by authenticated
+-- (current_staff_role, is_active_staff, is_active_admin), the hook callable by
+-- nobody but supabase_auth_admin, and the rest service role only. It must come
+-- out the same in both worlds, or a rebuilt project is not the project it rebuilds.
 with expected(fname, authd, svc) as (
   values ('archive_snowball_pot', true, true),
          ('assert_is_admin', true, true),
@@ -317,12 +328,34 @@ with expected(fname, authd, svc) as (
          ('bump_game_state_version', false, true),
          ('call_next_number', true, true),
          ('check_claim', true, true),
+         ('current_staff_role', true, true),
          ('delete_game_safe', true, true),
          ('delete_session_safe', true, true),
          ('end_night', true, true),
          ('finish_game', true, true),
          ('guard_claim_fields', false, true),
          ('handle_new_user', false, true),
+         ('is_active_admin', true, true),
+         ('is_active_staff', true, true),
+         ('kit_attach_invite_user', false, true),
+         ('kit_auth_throttle', false, true),
+         ('kit_before_user_created', false, false),
+         ('kit_cancel_invite', false, true),
+         ('kit_claim_invite', false, true),
+         ('kit_claim_recovery_grant', false, true),
+         ('kit_complete_invite', false, true),
+         ('kit_deactivate_staff', false, true),
+         ('kit_fail_invite', false, true),
+         ('kit_invalidate_recovery_grants_for_email', false, true),
+         ('kit_issue_invite', false, true),
+         ('kit_mint_recovery_grant', false, true),
+         ('kit_profile_role_type', false, true),
+         ('kit_profiles_guard', false, true),
+         ('kit_prune_auth_data', false, true),
+         ('kit_reactivate_staff', false, true),
+         ('kit_set_staff_role', false, true),
+         ('kit_staff_role_for', false, true),
+         ('kit_stale_invites', false, true),
          ('list_app_errors_safe', true, true),
          ('list_unsettled_snowball_games', true, true),
          ('parse_prize_pence', true, true),
@@ -385,14 +418,20 @@ select t('table grants :: authenticated can SELECT session_reset_log (RLS keeps 
 
 -- The general form of the same bug, so the next new table cannot repeat it: under
 -- the current defaults a table nobody granted on fails this for service_role.
+-- The kit's three sign-in tables are the deliberate exception: auth_audit is
+-- append-only for every API role (service role SELECT and INSERT only), and
+-- invites and recovery_grants are never deleted through the API (only
+-- kit_prune_auth_data deletes, as their owner). kit-auth.test.sql asserts them.
 select t('table grants :: every public table grants service_role SELECT, INSERT, UPDATE and DELETE',
          (select bool_and(string_to_array(pg_temp.table_privs('service_role', format('public.%I', c.relname)), ',')
                           @> array['SELECT','INSERT','UPDATE','DELETE'])
             from pg_class c join pg_namespace n on n.oid = c.relnamespace
-           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
+           where n.nspname = 'public' and c.relkind = 'r'
+             and c.relname not in ('test_results', 'auth_audit', 'invites', 'recovery_grants')),
          (select coalesce(string_agg(c.relname || '=' || pg_temp.table_privs('service_role', format('public.%I', c.relname)), ' | '), '(all fine)')
             from pg_class c join pg_namespace n on n.oid = c.relnamespace
-           where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'
+           where n.nspname = 'public' and c.relkind = 'r'
+             and c.relname not in ('test_results', 'auth_audit', 'invites', 'recovery_grants')
              and not string_to_array(pg_temp.table_privs('service_role', format('public.%I', c.relname)), ',')
                      @> array['SELECT','INSERT','UPDATE','DELETE']));
 
@@ -558,15 +597,23 @@ select t('realtime :: winners is NOT published',
 -- Policies. The count is a tripwire: a migration that adds or drops one without
 -- updating this number has to say so out loud.
 -- ---------------------------------------------------------------------------
-select t('policies :: twenty one policies exist across the public schema',
-         (select count(*) = 21 from pg_policies where schemaname = 'public'),
+-- Thirty-three since the kit's sign-in: the restrictive active_staff_gate on
+-- the nine staff tables and auth_audit (ten), kit_profiles_read_own,
+-- kit_profiles_admin_read and kit_auth_audit_admin_read (three), less
+-- "Authenticated users can view profiles", dropped by
+-- 20261107090006_kit_auth_cash_profiles (21 + 10 + 3 - 1 = 33).
+select t('policies :: thirty three policies exist across the public schema',
+         (select count(*) = 33 from pg_policies where schemaname = 'public'),
          (select count(*)::text || ' :: ' || string_agg(tablename || '.' || policyname, ', ' order by tablename, policyname)
             from pg_policies where schemaname = 'public'));
 
+-- Permissive policies only: the restrictive active_staff_gate grants nothing,
+-- it only narrows what the permissive ones allow.
 select t('policies :: game_states_public has a read policy and no write policy',
-         (select count(*) = 1 from pg_policies where schemaname = 'public' and tablename = 'game_states_public')
+         (select count(*) = 1 from pg_policies where schemaname = 'public' and tablename = 'game_states_public'
+             and permissive = 'PERMISSIVE')
          and (select bool_and(cmd = 'SELECT') from pg_policies
-               where schemaname = 'public' and tablename = 'game_states_public'),
+               where schemaname = 'public' and tablename = 'game_states_public' and permissive = 'PERMISSIVE'),
          (select string_agg(policyname || '=' || cmd, ',' order by policyname) from pg_policies
            where schemaname = 'public' and tablename = 'game_states_public'));
 
@@ -630,9 +677,9 @@ select t('policies :: snowball_pot_history has no DELETE policy, so the money au
 
 select t('audit :: session_reset_log is readable by admins and writable by nobody',
          (select count(*) = 1 from pg_policies
-           where schemaname = 'public' and tablename = 'session_reset_log')
+           where schemaname = 'public' and tablename = 'session_reset_log' and permissive = 'PERMISSIVE')
          and (select bool_and(cmd = 'SELECT') from pg_policies
-               where schemaname = 'public' and tablename = 'session_reset_log'),
+               where schemaname = 'public' and tablename = 'session_reset_log' and permissive = 'PERMISSIVE'),
          (select coalesce(string_agg(policyname || '=' || cmd, ',' order by policyname), '(none)')
             from pg_policies where schemaname = 'public' and tablename = 'session_reset_log'));
 

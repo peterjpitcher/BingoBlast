@@ -377,6 +377,15 @@ psql_strict -d "$db" -f "$HERE/money.test.sql" >/dev/null
 # read refuses everyone but an admin. Acts as anon and authenticated directly.
 echo "==> suite $suite: app_errors (error reports)"
 psql_strict -d "$db" -f "$HERE/app-errors.test.sql" >/dev/null
+
+# 20261107090000 to 090006: the kit's sign-in (spec C-5). The active-identity
+# gate on every reachable table, a deactivated host refused by the guarded
+# functions and reading nothing, pending and profile-less accounts reading
+# nothing, hosts reading only their own profile, the invite-only hook and the
+# append-only auth audit. Runs last because it deactivates and bans fixtures
+# of its own.
+echo "==> suite $suite: kit sign-in (active-identity gate, leaver, profiles, hook)"
+psql_strict -d "$db" -f "$HERE/kit-auth.test.sql" >/dev/null
 }
 
 # ---------------------------------------------------------------------------

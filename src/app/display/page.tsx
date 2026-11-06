@@ -1,6 +1,6 @@
 import React from 'react';
 import { redirect } from 'next/navigation';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { getTodayIsoDateInLondon } from '@/lib/dates';
 import { getEventsFeed } from '@/lib/events-feed';
 import {
