@@ -46,3 +46,48 @@ next-env.d.ts
 
 # Supabase CLI per-machine cache (created by db push / link)
 supabase/.temp/
+
+# ---- Workspace ignore baseline: rules this file was missing (6 November 2026) ----
+# Private data (traffic figures, Search Console or Keyword Planner exports, client
+# numbers) lives in private/ or a raw/ folder and is never committed.
+# Build output
+/dist/
+/.turbo/
+node-compile-cache/
+
+# Tests
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+.playwright-mcp/
+.eslintcache
+
+# Environment and secrets (templates stay tracked)
+*.key
+*.p12
+*.pfx
+
+# Logs and editor or OS noise
+*.log
+*.swp
+*.swo
+*.bak
+Thumbs.db
+.idea/
+
+# Supabase
+supabase/.branches/
+
+# Agent tooling
+.worktrees/
+tasks/claude-audit-backups/
+graphify-out/
+
+# Local private data: never committed
+private/
+**/raw/
+
+# Env templates stay tracked
+!.env.example
+!.env.*.example
