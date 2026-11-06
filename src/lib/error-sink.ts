@@ -7,7 +7,7 @@
 //
 // WHO POSTS HERE
 //   Only this app's own server. reportError() runs in server actions, server
-//   pages and the events-feed projection; nothing in the browser posts a
+//   pages and the events feed (src/lib/events-feed.ts); nothing in the browser posts a
 //   report. So the route is not a public form: every report must carry
 //   `Authorization: Bearer <ERROR_SINK_TOKEN>`, the header reportError already
 //   sends when that variable is set. With no token configured the route refuses

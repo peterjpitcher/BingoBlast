@@ -8,7 +8,7 @@ import { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
 import { getTodayIsoDateInLondon } from '@/lib/dates';
-import { getEventsProjection } from '@/lib/events-feed/projection';
+import { getEventsFeed } from '@/lib/events-feed';
 import { getRequestOrigin, getSiteOrigin } from '@anchor-nights/kit/qr';
 import {
   CANDIDATE_SESSION_STATUSES,
@@ -49,8 +49,8 @@ export default async function DisplayPage({ params, searchParams }: PageProps) {
   // Upcoming events for the start and end of the night (spec 5.5), read
   // alongside the session rather than after it. Cached, and never throws, so
   // a management app outage can never stop the TV loading; at worst it waits
-  // for the projection's own 8 second refresh limit on a cold cache.
-  const eventsPromise = getEventsProjection();
+  // for the feed's own 8 second refresh limit on a cold cache.
+  const eventsPromise = getEventsFeed();
 
   const supabase = await createClient();
 

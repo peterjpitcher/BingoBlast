@@ -13,20 +13,13 @@
 export const KITCHEN_OPEN_UNTIL = '9pm';
 
 /**
- * The review invitation's destination: a short link to the management app's
- * feedback page, with no expiry. Source: spec sections 2 and 5.6.
+ * Cash Bingo's own review short link, on the TV's end-of-night "Review us"
+ * card and the phone's "Tell us how we did" button. It leads to the
+ * management app's feedback page (https://management.orangejelly.co.uk/feedback
+ * ?src=review-ask&utm_source=in_game_screen..., checked live 6 November 2026),
+ * which offers Google and private feedback equally (management app PR 320),
+ * so it is always on. Never a Google review URL: the kit draws no card for
+ * anything that is not an https the-anchor.pub link (website docs/SSOT.md
+ * section 17). Source: Anchor Nights standard X-2 (Cash Bingo keeps cvf4k7).
  */
 export const REVIEW_URL = 'https://l.the-anchor.pub/cvf4k7';
-
-/** The website's what's-on page, for the idle TV loop. Source: spec 5.5. */
-export const WHATS_ON_URL = 'https://www.the-anchor.pub/whats-on';
-
-/**
- * Whether the TV and phones show the review invitation. Off unless
- * NEXT_PUBLIC_REVIEW_INVITE_ENABLED is exactly 'true' (spec A5: it stays off
- * until the feedback page offers Google to every guest). Read by its literal
- * name so Next.js inlines it into the browser bundle.
- */
-export function isReviewInviteEnabled(): boolean {
-  return process.env.NEXT_PUBLIC_REVIEW_INVITE_ENABLED === 'true';
-}

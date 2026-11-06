@@ -28,18 +28,19 @@ import { formatWinHeadline } from '@/lib/win-headline';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
 import {
   buildPlaylist,
+  NEXT_BINGO_LABEL,
   slideAllowsCornerQr,
   slideShowsStatusInTopBar,
-  type EventsProjection,
   type Slide,
-  type SlideKind,
 } from '@/lib/playlist';
+import type { ScreenFeed } from '@anchor-nights/kit/events/shared';
+import { PromoSlide, SlideLoop, SlidePreload, useScreenFeed } from '@anchor-nights/kit/promo';
 import { buildFollowUrl } from '@/lib/follow-link';
 import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
 import { createPollRunner, type PollRunner } from '@/lib/poll-runner';
-import { KITCHEN_OPEN_UNTIL, isReviewInviteEnabled } from '@/lib/venue-links';
+import { KITCHEN_OPEN_UNTIL } from '@/lib/venue-links';
 import { useConnectionHealth, useClockOffset, useWakeLock, ConnectionBanner } from '@anchor-nights/kit/tv';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
 import { useBuildCheck } from '@/hooks/use-build-check';
@@ -49,9 +50,6 @@ import { cardClass, AnchorLogo, Grain } from '@anchor-nights/kit/ui';
 import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
 import { CORNER_QR_CARD_WIDTH, FollowAlongSlide, FollowQrBadge } from '@/components/display/follow-qr';
 import { RulesSlide } from '@/components/display/rules-slide';
-import { SlideLoop } from '@/components/display/slide-loop';
-import { PromoSlide, SlidePreload } from '@/components/display/promo-slide';
-import { useEventsProjection } from '@/components/display/use-events-projection';
 import { useMinuteClock, useWindowOrigin } from '@/components/display/screen-hooks';
 import { useSessionOverview } from '@/components/display/use-session-overview';
 import { useDisplayLifecycle } from '@/components/display/use-display-lifecycle';
@@ -84,8 +82,8 @@ interface DisplayUIProps {
   initialIsUniqueSession: boolean;
   /** `?rehearsal=1`: test sessions count, and the TV returns to the rehearsal lobby. */
   rehearsal: boolean;
-  /** The upcoming events as the server page read them (getEventsProjection); refreshed here. */
-  initialEvents: EventsProjection | null;
+  /** The upcoming events as the server page read them (getEventsFeed); refreshed here. */
+  initialEvents: ScreenFeed | null;
 }
 
 /**
@@ -154,6 +152,11 @@ const readCalledNumbers = (state: GameState | null): number[] =>
 
 const POLL_INTERVAL_MS = 3000;
 const LOG_SCOPE = 'display';
+
+/** A failed events refresh is logged, never shown; stable for useScreenFeed. */
+function logEventsError(err: unknown): void {
+  logError(LOG_SCOPE, err);
+}
 
 /**
  * The TV's layout budget, as CSS variables on the screen's root. Each is
@@ -850,21 +853,20 @@ export default function DisplayUI({
   // minutes and on each change of phase. Never shown as an error. It runs in
   // every phase, a game in progress included, so the list is already here and
   // no more than 10 minutes old when a break starts.
-  const events = useEventsProjection(initialEvents, { refreshKey: nightPhase, logScope: LOG_SCOPE });
+  const events = useScreenFeed(initialEvents, { refreshKey: nightPhase, onError: logEventsError });
 
   // The TV's clock, corrected like the reveal delay, to the minute: enough to
   // drop events as they start and to say "Tonight". 0 before the browser runs.
   const minuteMs = useMinuteClock();
   const slideNowMs = minuteMs > 0 ? minuteMs + clockOffsetMs : 0;
   const sessionDate = currentSession.start_date ?? null;
-  const reviewEnabled = isReviewInviteEnabled();
   const playlist = useMemo(
-    () => buildPlaylist(nightPhase, events, new Date(slideNowMs), sessionDate, { inGameSubState, reviewEnabled }),
-    [nightPhase, events, slideNowMs, sessionDate, inGameSubState, reviewEnabled]
+    () => buildPlaylist(nightPhase, events, slideNowMs, sessionDate, { inGameSubState }),
+    [nightPhase, events, slideNowMs, sessionDate, inGameSubState]
   );
-  // Which kind of slide the loop is showing (null with no loop), reported by
-  // SlideLoop before the browser paints. Decides the corner QR below.
-  const [activeSlideKind, setActiveSlideKind] = useState<SlideKind | null>(null);
+  // Which slide the loop is showing (null with no loop), reported by SlideLoop
+  // before the browser paints. Decides the corner QR below.
+  const [activeSlide, setActiveSlide] = useState<Slide | null>(null);
 
   // Rule 8 uses the live pot during a snowball game, else the night's first snowball pot.
   const houseRules = getHouseRules(currentSnowballPot ?? overview?.rulesPot ?? null);
@@ -921,7 +923,7 @@ export default function DisplayUI({
   // and its column go, which also gives the event slide the full width it is
   // laid out for. They go for the Break time card too, so it sits in the
   // middle of the screen on its own (slideAllowsCornerQr).
-  const slideHidesCornerQr = playlist.length > 0 && activeSlideKind !== null && !slideAllowsCornerQr(activeSlideKind);
+  const slideHidesCornerQr = playlist.length > 0 && activeSlide !== null && !slideAllowsCornerQr(activeSlide);
   const showCornerQr =
     !!followUrl && (hasRenderableGame || nightPhase === 'between_games') && !slideHidesCornerQr;
 
@@ -1041,12 +1043,13 @@ export default function DisplayUI({
   // does not: while one is up, the top bar says it, in place of the game and
   // book colour, and the slide keeps all its room for the artwork.
   const topBarStatusLabel =
-    pauseStatusLabel && playlist.length > 0 && activeSlideKind !== null && slideShowsStatusInTopBar(activeSlideKind)
+    pauseStatusLabel && playlist.length > 0 && activeSlide !== null && slideShowsStatusInTopBar(activeSlide)
       ? pauseStatusLabel
       : null;
 
-  const renderSlideContent = (slide: Slide) => {
-    switch (slide.kind) {
+  // Bingo's own slides (the kit's `app` slides), drawn here.
+  const renderBingoSlide = (id: string) => {
+    switch (id) {
       case 'follow_along':
         return followUrl ? <FollowAlongSlide url={followUrl} /> : null;
       case 'rules':
@@ -1056,14 +1059,24 @@ export default function DisplayUI({
       case 'next_game':
         return renderNextGameSlide();
       default:
-        // Events, next bingo, thanks, review: shared with the idle /display.
-        // On a break and between games the top bar carries the status label
-        // for them (topBarStatusLabel above). They need no backing panel: the
-        // screen stays dark green and the book colour is only the band under
-        // the top bar.
-        return <PromoSlide slide={slide} nowMs={slideNowMs} />;
+        return null;
     }
   };
+
+  // Events, the next bingo night, what's on and the thank-you come from the
+  // shared kit, as on the idle /display. On a break and between games the top
+  // bar carries the status label for them (topBarStatusLabel above). They
+  // need no backing panel: the screen stays dark green and the book colour is
+  // only the band under the top bar.
+  const renderSlideContent = (slide: Slide) => (
+    <PromoSlide
+      slide={slide}
+      nowMs={slideNowMs}
+      nextNightLabel={NEXT_BINGO_LABEL}
+      thankYou={{ kicker: 'Anchor Bingo Night' }}
+      renderApp={(appSlide) => renderBingoSlide(appSlide.id)}
+    />
+  );
 
   const renderSlide = (slide: Slide) => (
     <>
@@ -1191,7 +1204,7 @@ export default function DisplayUI({
                 className="h-full w-full"
                 slides={playlist}
                 renderSlide={renderSlide}
-                onSlideChange={setActiveSlideKind}
+                onSlideChange={setActiveSlide}
               />
             )}
 
