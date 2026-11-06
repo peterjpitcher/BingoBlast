@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install
@@ -47,8 +47,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests
+      # Twice, on purpose. `npm test` pins TZ=Europe/London, the business zone;
+      # `npm run test:utc` runs the same suite under UTC, which is what the
+      # Vercel serverless runtime uses. Date bugs that only show in one of the
+      # two (daylight saving, a night that crosses midnight) fail one of these.
+      - name: Unit tests (Europe/London)
         run: npm test
+
+      - name: Unit tests (UTC)
+        run: npm run test:utc
 
       # The build needs the public Supabase env vars to exist, but never needs
       # them to be real: nothing in the build talks to Supabase. Placeholders
@@ -89,7 +96,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install
