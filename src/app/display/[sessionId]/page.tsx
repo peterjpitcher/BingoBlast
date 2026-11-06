@@ -9,7 +9,7 @@ import { isUuid } from '@/lib/utils';
 import { logError } from '@/lib/log-error';
 import { getTodayIsoDateInLondon } from '@/lib/dates';
 import { getEventsProjection } from '@/lib/events-feed/projection';
-import { getRequestOrigin, getSiteOrigin } from '@/lib/site-origin';
+import { getRequestOrigin, getSiteOrigin } from '@anchor-nights/kit/qr';
 import {
   CANDIDATE_SESSION_STATUSES,
   resolveDisplaySession,

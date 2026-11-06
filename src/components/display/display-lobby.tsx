@@ -27,11 +27,9 @@ import {
 import { logError } from '@/lib/log-error';
 import { buildPlaylist, type EventsProjection, type Slide } from '@/lib/playlist';
 import { useBuildCheck } from '@/hooks/use-build-check';
-import { useWakeLock } from '@/hooks/wake-lock';
+import { useWakeLock } from '@anchor-nights/kit/tv';
 import { cn } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import { AnchorLogo, Grain } from '@/components/ui/logo';
+import { Badge, Card, AnchorLogo, Grain } from '@anchor-nights/kit/ui';
 import { PromoSlide, SlidePreload } from './promo-slide';
 import { useMinuteClock } from './screen-hooks';
 import { SlideLoop } from './slide-loop';
@@ -67,7 +65,7 @@ export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobby
 
   // A TV can sit here for days: keep it awake and on the current release.
   useWakeLock();
-  useBuildCheck({ mode: 'auto', safe: true });
+  useBuildCheck({ mode: 'auto', isSafeToReload: () => true });
 
   const delayMs = RECHECK_MS[state.kind];
 

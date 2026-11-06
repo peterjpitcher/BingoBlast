@@ -9,7 +9,7 @@ import type { ActionFailureCode, ActionResult } from '@/types/actions'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { isCashJackpotGame, parseCashJackpotAmount } from '@/lib/jackpot'
 import { HOST_MIN_CALL_GAP_MS } from '@/lib/call-timing'
-import { logActionFailure, logActionLatency } from '@/lib/log-action-failure'
+import { logActionFailure, logActionLatency } from '@anchor-nights/kit/errors'
 import { reportError } from '@/lib/report-error'
 import { isUuid } from '@/lib/utils'
 import type {

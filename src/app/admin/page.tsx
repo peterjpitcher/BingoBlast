@@ -4,9 +4,7 @@ import { redirect } from 'next/navigation';
 import { signout } from '@/app/login/actions';
 import AdminDashboard from './dashboard';
 import type { Database } from '@/types/database';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
+import { Button, Card, Kicker } from '@anchor-nights/kit/ui';
 
 export default async function AdminPage() {
   const supabase = await createClient();

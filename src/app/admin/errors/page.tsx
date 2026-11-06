@@ -1,9 +1,7 @@
 import React from 'react';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/utils/supabase/server';
-import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
+import { Badge, Card, Kicker } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 import { formatShortDateTimeInLondon } from '@/lib/dates';
 import type { Database } from '@/types/database';

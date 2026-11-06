@@ -5,9 +5,7 @@ import { signout } from '@/app/login/actions';
 import HostDashboard from './dashboard';
 import { listUnsettledSnowballGames } from './actions';
 import { Database } from '@/types/database';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
+import { Button, Card, Kicker } from '@anchor-nights/kit/ui';
 import { HostHeader } from '@/components/host/host-header';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {

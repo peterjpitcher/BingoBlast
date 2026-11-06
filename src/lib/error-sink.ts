@@ -27,7 +27,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 
-import { redact } from '@/lib/redact';
+import { redact } from '@anchor-nights/kit/errors';
 
 /** The largest body accepted, in bytes. A real report is a few hundred. */
 export const MAX_BODY_BYTES = 8 * 1024;

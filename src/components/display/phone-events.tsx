@@ -16,9 +16,7 @@
 import React, { useState } from 'react';
 import Image from 'next/image';
 import { useMinuteClock } from './screen-hooks';
-import { buttonClass } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
+import { buttonClass, Card, Kicker } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 import {
   eventLinkForPhase,

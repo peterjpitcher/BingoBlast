@@ -1,21 +1,37 @@
 // src/lib/env.ts
 //
-// Environment variables, checked in one place.
+// Cash Bingo's environment rules, on top of the shared kit's checks
+// (@anchor-nights/kit/env).
 //
 // `validateBuildEnv()` is called from next.config.ts, so it runs when the app
 // is built (and when `next dev` starts): a missing or malformed variable fails
 // the build with a message naming it, instead of shipping and failing on a pub
-// night. `getPublicSupabaseEnv()` is what the Supabase clients use at runtime.
+// night. The kit checks the Supabase pair, NEXT_PUBLIC_SITE_URL and the
+// management API key; the error sink rules below are this app's own, because
+// they tie three variables together and the kit's rules are one variable each.
 //
 // next.config.ts imports this file directly, so it must stay free of path
-// aliases, imports and TypeScript-only runtime syntax (enums, namespaces).
+// aliases and TypeScript-only runtime syntax (enums, namespaces). The kit's
+// env module is plain JavaScript with no imports, so importing it here is safe.
 //
-// Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin comes from
-// src/lib/site-origin.ts, which falls back to Vercel's own production or
-// preview address) and SUPABASE_SERVICE_ROLE_KEY on its own (only /api/setup
-// and /api/errors use it). Once ERROR_SINK_URL is set, though, the sink needs
-// a token and, on Vercel production, the service role key to store anything,
-// so those become required together.
+// Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin falls back to
+// Vercel's own production or preview address, @anchor-nights/kit/qr) and
+// SUPABASE_SERVICE_ROLE_KEY on its own (only /api/setup and /api/errors use
+// it). Once ERROR_SINK_URL is set, though, the sink needs a token and, on
+// Vercel production, the service role key to store anything, so those become
+// required together.
+
+import {
+  ANCHOR_API_ENV,
+  SITE_URL_ENV,
+  SUPABASE_PUBLIC_ENV,
+  checkEnv,
+  getPublicSupabaseEnv,
+  type EnvRule,
+  type PublicSupabaseEnv,
+} from '@anchor-nights/kit/env';
+
+export { getPublicSupabaseEnv, type PublicSupabaseEnv };
 
 /**
  * Whether production builds need the management API key for the events feed.
@@ -25,98 +41,49 @@
  */
 export const EVENTS_FEED_REQUIRED = true;
 
-/**
- * The shape of a management app API key: "anch_" then the key in base64url
- * (generateApiKey in the management app makes 32 random bytes, 43 characters).
- * The length is a floor, not an exact match, so a longer key format still
- * passes; the point is to reject text that is plainly not a key.
- */
-const MANAGEMENT_API_KEY_SHAPE = /^anch_[A-Za-z0-9_-]{20,}$/;
-
 /** The shortest ERROR_SINK_TOKEN accepted: long enough that guessing it is hopeless. */
 export const ERROR_SINK_TOKEN_MIN_LENGTH = 32;
 
-export interface PublicSupabaseEnv {
-  url: string;
-  anonKey: string;
-}
-
 /**
- * The public Supabase URL and anon key. Throws a clear error naming whatever is
- * missing. Each variable is read by its literal name so Next.js can inline it
- * into the browser bundle.
+ * The sink URL may be local http outside production (a local run posting to
+ * itself), like ANCHOR_API_BASE_URL, so it takes the kit's api-base-url check
+ * rather than its https-only ERROR_SINK_ENV preset.
  */
-export function getPublicSupabaseEnv(): PublicSupabaseEnv {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const missing: string[] = [];
-  if (!url) missing.push('NEXT_PUBLIC_SUPABASE_URL');
-  if (!anonKey) missing.push('NEXT_PUBLIC_SUPABASE_ANON_KEY');
-  if (!url || !anonKey) {
-    throw new Error(
-      `Missing environment variable ${missing.join(' and ')}. ` +
-        'Set it in .env.local for local runs, or in the Vercel project settings.',
-    );
-  }
-  return { url, anonKey };
-}
-
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Why a NEXT_PUBLIC_SITE_URL value is not usable as the QR origin, or null
- * when it is fine. It must be a bare https origin; plain http is accepted only
- * for a loopback host outside production, so a local run can point at itself.
- */
-function siteUrlProblem(value: string, isProduction: boolean): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return 'is not a URL';
-  }
-  const isLocalHttp = parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname) && !isProduction;
-  if (parsed.protocol !== 'https:' && !isLocalHttp) return 'must use https';
-  if (parsed.username || parsed.password) return 'must not contain a username or password';
-  if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
-    return 'must be an origin only, with no path, query or fragment';
-  }
-  return null;
-}
-
-/**
- * Why an ANCHOR_API_BASE_URL value is not usable, or null when it is fine. The
- * management key travels in a header on every request to it, so it must be
- * https; plain http is accepted only for a loopback host outside production,
- * so a local run can point at a local management app. A path is allowed (the
- * default is https://management.orangejelly.co.uk/api).
- */
-function apiBaseUrlProblem(value: string, isProduction: boolean): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return 'is not a URL';
-  }
-  const isLocalHttp = parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname) && !isProduction;
-  if (parsed.protocol !== 'https:' && !isLocalHttp) return 'must use https';
-  if (parsed.username || parsed.password) return 'must not contain a username or password';
-  if (parsed.search || parsed.hash) return 'must not contain a query or fragment';
-  return null;
-}
+const ERROR_SINK_URL_RULE: EnvRule = { name: 'ERROR_SINK_URL', kind: 'api-base-url' };
 
 export interface ValidateBuildEnvOptions {
   /** Overrides EVENTS_FEED_REQUIRED; for tests. */
   eventsFeedRequired?: boolean;
+}
+
+/** The kit's rules this app uses, with the events key optional when the feed is not required. */
+function buildEnvRules(eventsFeedRequired: boolean): EnvRule[] {
+  const anchorApi = eventsFeedRequired
+    ? ANCHOR_API_ENV
+    : ANCHOR_API_ENV.map((rule) => ({ ...rule, required: undefined }));
+  return [...SUPABASE_PUBLIC_ENV, ...SITE_URL_ENV, ...anchorApi];
+}
+
+/**
+ * The error sink (src/app/api/errors/route.ts) refuses every report without
+ * a matching bearer token, and cannot store one without the service role.
+ * Setting the URL without them would ship reporting that records nothing,
+ * which is the state this replaced. Values are never put in the message.
+ */
+function errorSinkProblems(): string[] {
+  if (!process.env.ERROR_SINK_URL?.trim()) return [];
+  // The kit quotes a bad URL back; this app never has, so the value is cut.
+  const problems = checkEnv([ERROR_SINK_URL_RULE]).map((problem) => problem.replace(/ \(got ".*"\)\.$/, '.'));
+  const sinkToken = process.env.ERROR_SINK_TOKEN?.trim() ?? '';
+  if (sinkToken.length < ERROR_SINK_TOKEN_MIN_LENGTH) {
+    problems.push(
+      `ERROR_SINK_TOKEN must be set to a random value of at least ${ERROR_SINK_TOKEN_MIN_LENGTH} characters when ERROR_SINK_URL is set.`,
+    );
+  }
+  if (process.env.VERCEL_ENV === 'production' && !process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
+    problems.push('SUPABASE_SERVICE_ROLE_KEY is not set, and production needs it to store error reports when ERROR_SINK_URL is set.');
+  }
+  return problems;
 }
 
 /**
@@ -125,70 +92,7 @@ export interface ValidateBuildEnvOptions {
  */
 export function validateBuildEnv(options: ValidateBuildEnvOptions = {}): void {
   const eventsFeedRequired = options.eventsFeedRequired ?? EVENTS_FEED_REQUIRED;
-  const isProduction = process.env.VERCEL_ENV === 'production';
-  const problems: string[] = [];
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl) {
-    problems.push('NEXT_PUBLIC_SUPABASE_URL is not set.');
-  } else if (!isHttpUrl(supabaseUrl)) {
-    problems.push('NEXT_PUBLIC_SUPABASE_URL is not a URL.');
-  }
-
-  if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    problems.push('NEXT_PUBLIC_SUPABASE_ANON_KEY is not set.');
-  }
-
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
-  if (siteUrl) {
-    const problem = siteUrlProblem(siteUrl, isProduction);
-    if (problem) problems.push(`NEXT_PUBLIC_SITE_URL ${problem} (got "${siteUrl}").`);
-  }
-
-  // Trimmed, as src/lib/events-feed/client.ts reads it: a key of only spaces
-  // is no key, and passing the build with one would ship a feed that can
-  // never authenticate.
-  const apiKey = process.env.ANCHOR_API_KEY?.trim();
-  if (eventsFeedRequired && isProduction && !apiKey) {
-    problems.push('ANCHOR_API_KEY is not set, and production builds need it for the events feed.');
-  }
-
-  // A value that is set but is not a key is worse than a missing one: it
-  // passes "is it set" and the feed then answers 401 for ever. On 1 October
-  // 2026 production held the text of the CLI command pasted as the value.
-  // The value itself is never put in the message.
-  if (apiKey && !MANAGEMENT_API_KEY_SHAPE.test(apiKey)) {
-    problems.push(
-      'ANCHOR_API_KEY does not look like a management API key ("anch_" followed by the key, no spaces). ' +
-        'Paste the key itself from the management app, not a command or a label.',
-    );
-  }
-
-  const apiBaseUrl = process.env.ANCHOR_API_BASE_URL?.trim();
-  if (apiBaseUrl) {
-    const problem = apiBaseUrlProblem(apiBaseUrl, isProduction);
-    if (problem) problems.push(`ANCHOR_API_BASE_URL ${problem} (got "${apiBaseUrl}").`);
-  }
-
-  // The error sink (src/app/api/errors/route.ts) refuses every report without
-  // a matching bearer token, and cannot store one without the service role.
-  // Setting the URL without them would ship reporting that records nothing,
-  // which is the state this replaced. Values are never put in the message.
-  const sinkUrl = process.env.ERROR_SINK_URL?.trim();
-  if (sinkUrl) {
-    const problem = apiBaseUrlProblem(sinkUrl, isProduction);
-    if (problem) problems.push(`ERROR_SINK_URL ${problem}.`);
-    const sinkToken = process.env.ERROR_SINK_TOKEN?.trim() ?? '';
-    if (sinkToken.length < ERROR_SINK_TOKEN_MIN_LENGTH) {
-      problems.push(
-        `ERROR_SINK_TOKEN must be set to a random value of at least ${ERROR_SINK_TOKEN_MIN_LENGTH} characters when ERROR_SINK_URL is set.`,
-      );
-    }
-    if (isProduction && !process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
-      problems.push('SUPABASE_SERVICE_ROLE_KEY is not set, and production needs it to store error reports when ERROR_SINK_URL is set.');
-    }
-  }
-
+  const problems = [...checkEnv(buildEnvRules(eventsFeedRequired)), ...errorSinkProblems()];
   if (problems.length > 0) {
     throw new Error(`Environment check failed:\n  - ${problems.join('\n  - ')}`);
   }

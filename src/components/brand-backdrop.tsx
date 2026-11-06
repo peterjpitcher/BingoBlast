@@ -1,6 +1,6 @@
 import * as React from "react";
 import Image from "next/image";
-import { Grain } from "@/components/ui/logo";
+import { Grain } from "@anchor-nights/kit/ui";
 
 /**
  * The front door's backdrop (landing, sign in, pending): the bar photo under

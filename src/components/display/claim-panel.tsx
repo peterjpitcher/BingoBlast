@@ -15,7 +15,7 @@ import { Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ClaimBall, ClaimPanelState } from '@/lib/claim-panel';
 import { BingoBall } from '@/components/ui/bingo-ball';
-import { Kicker } from '@/components/ui/kicker';
+import { Kicker } from '@anchor-nights/kit/ui';
 import { TV_KICKER_CLASS, tvText } from './tv-text';
 
 export type ClaimPanelVariant = 'tv' | 'phone';

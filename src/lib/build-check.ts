@@ -1,34 +1,18 @@
 // src/lib/build-check.ts
 //
-// Whether a long-lived screen should pick up a new release, and how.
+// When the TV and the phones may reload themselves for a new release: Cash
+// Bingo's own rule, which it hands to the shared kit's build check
+// (useBuildCheck in @anchor-nights/kit/tv, through src/hooks/use-build-check.ts).
+// The generic part (comparing release ids, deciding reload, prompt or wait)
+// lives in the kit.
 //
-// The pub TV and the phones stay on one page for hours (the TV for days), so
-// without this they keep running whatever release was live when the page was
-// opened. The client's own build id is baked in at build time
-// (NEXT_PUBLIC_BUILD_ID, from VERCEL_GIT_COMMIT_SHA in next.config.ts), and
-// GET /api/build says what the server is running now.
-//
-// - 'auto' (TV and phone): reload by themselves, but only at a safe moment:
+// - TV and phone ('auto'): reload by themselves, but only at a safe moment:
 //   no game in progress, or the game on a break. Never while numbers are being
 //   called, and never over a claim check or a win (isPublicReloadSafe below).
-// - 'prompt' (host): never reload by themselves. Offer a Reload button, and
-//   hold even that back while the host is in a claim.
-// - 'dev' is what a local build reports. It never triggers anything.
+// - Host ('prompt'): never reload by themselves. Offer a Reload button, and
+//   hold even that back while the host is in a claim (game-control.tsx).
 
 import { getInGameSubState, type NightPhaseGameState } from './night-phase';
-
-export const DEV_BUILD_ID = 'dev';
-
-export type BuildCheckMode = 'auto' | 'prompt';
-export type BuildAction = 'none' | 'reload' | 'prompt' | 'wait';
-
-export interface BuildDecisionInput {
-  clientBuild: string | null | undefined;
-  serverBuild: string | null | undefined;
-  mode: BuildCheckMode;
-  /** Public: isPublicReloadSafe(). Host: no claim open. */
-  safe: boolean;
-}
 
 /** The parts of a game state the public reload decision reads. */
 export type PublicReloadGameState = Pick<
@@ -50,20 +34,4 @@ export type PublicReloadGameState = Pick<
 export function isPublicReloadSafe(state: PublicReloadGameState | null | undefined): boolean {
   if (!state || state.status !== 'in_progress') return true;
   return getInGameSubState(state) === 'break';
-}
-
-/** True only when both ids are real release ids and they differ. */
-export function isNewBuild(
-  clientBuild: string | null | undefined,
-  serverBuild: string | null | undefined,
-): boolean {
-  if (!clientBuild || !serverBuild) return false;
-  if (clientBuild === DEV_BUILD_ID || serverBuild === DEV_BUILD_ID) return false;
-  return clientBuild !== serverBuild;
-}
-
-export function decideBuildAction({ clientBuild, serverBuild, mode, safe }: BuildDecisionInput): BuildAction {
-  if (!isNewBuild(clientBuild, serverBuild)) return 'none';
-  if (!safe) return 'wait';
-  return mode === 'auto' ? 'reload' : 'prompt';
 }

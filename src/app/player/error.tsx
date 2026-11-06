@@ -5,7 +5,7 @@
 // itself back (src/hooks/use-error-recovery.ts).
 
 import { RefreshCw } from 'lucide-react';
-import { cardClass } from '@/components/ui/card';
+import { cardClass } from '@anchor-nights/kit/ui';
 import { useErrorRecovery } from '@/hooks/use-error-recovery';
 
 interface PlayerErrorProps {

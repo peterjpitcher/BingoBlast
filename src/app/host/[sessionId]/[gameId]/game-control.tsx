@@ -12,21 +12,13 @@ import { CLAIM_DRAFT_FLUSH_TIMEOUT_MS, createClaimDraftQueue, type ClaimDraftQue
 import { createPollRunner } from '@/lib/poll-runner';
 import { describeWinnerTotal, winnerTotalPence } from '@/lib/money';
 import { Check, Coffee, Flag, Pause, TriangleAlert, Trophy, Undo2, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Kicker } from '@/components/ui/kicker';
-import { Modal } from '@/components/ui/modal';
-import { Sheet } from '@/components/ui/sheet';
-import { Input, fieldClass, fieldLabelClass } from '@/components/ui/input';
+import { Button, Card, Badge, Kicker, Modal, Sheet, Input, fieldClass, fieldLabelClass } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
-import { useWakeLock } from '@/hooks/wake-lock';
-import { useConnectionHealth } from '@/hooks/use-connection-health';
+import { useWakeLock, useConnectionHealth, ConnectionBanner } from '@anchor-nights/kit/tv';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
 import { useBuildCheck } from '@/hooks/use-build-check';
 import { NewVersionBanner } from '@/components/new-version-banner';
-import { ConnectionBanner } from '@/components/connection-banner';
 import { formatPounds, getSnowballCallsLabel, getSnowballCallsRemaining, isSnowballJackpotEligible } from '@/lib/snowball';
 import { isFreshGameState } from '@/lib/game-state-version';
 import { getRequiredSelectionCountForStage } from '@/lib/win-stages';
@@ -261,7 +253,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         missingLastBall !== null;
     const { showPrompt: showNewVersionPrompt, reload: reloadForNewVersion } = useBuildCheck({
         mode: 'prompt',
-        safe: !isInClaim,
+        isSafeToReload: () => !isInClaim,
     });
 
     // One Supabase client for the screen: every subscription shares its
@@ -274,7 +266,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     // callbacks destructured below may appear in a dependency array. Putting
     // `health` itself in one is what stopped the host screen updating: the 3
     // second poll was cleared before it fired and the Realtime channel was
-    // re-subscribed every second. See src/hooks/use-connection-health.ts.
+    // re-subscribed every second. See useConnectionHealth in @anchor-nights/kit/tv.
     const health = useConnectionHealth();
     const { markPollSuccess, markPollFailure, markRealtimeStatus } = health;
 
@@ -1751,6 +1743,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     visible={health.shouldShowBanner}
                     shouldAutoRefresh={health.shouldAutoRefresh}
                     hasUnsavedWork={hasUnsavedWork}
+                    confirmMessage="Reloading will clear what is on screen, including any numbers you have tapped in. Reload anyway?"
                 />
 
                 <NewVersionBanner visible={showNewVersionPrompt} onReload={reloadForNewVersion} />
@@ -1783,7 +1776,7 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                                     number={currentNumber}
                                     size={176}
                                     numberScale={0.52}
-                                    className="shadow-[var(--shadow-gold),inset_0_-10px_24px_rgba(0,0,0,0.25)]"
+                                    className="shadow-[var(--anchor-shadow-gold),inset_0_-10px_24px_rgba(0,0,0,0.25)]"
                                 />
                             ) : (
                                 // Edge case: numbers_called_count > 0 but no current number resolvable.

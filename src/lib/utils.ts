@@ -1,39 +1,9 @@
-import { type ClassValue, clsx } from "clsx";
-import { extendTailwindMerge } from "tailwind-merge";
+// cn() and the tailwind-merge name lists come from the shared kit
+// (@anchor-nights/kit/ui), which knows the kit's TV sizes, radii and shadows.
+// Re-exported here because about forty files import cn from '@/lib/utils'.
+export { BRAND_RADII, BRAND_SHADOWS, TV_FONT_SIZES, cn } from '@anchor-nights/kit/ui';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * The pub TV text sizes, `fontSize` in tailwind.config.ts. Keep the two lists
- * in step: a size missing here is read by tailwind-merge as a text colour, so
- * cn('text-tv-base', 'text-white') would silently drop the size.
- */
-export const TV_FONT_SIZES = ['tv-xs', 'tv-sm', 'tv-base', 'tv-lg', 'tv-xl', 'tv-2xl', 'tv-3xl', 'tv-4xl'] as const;
-
-/**
- * The brand's own radius and shadow names (tailwind.config.ts). Unregistered,
- * tailwind-merge does not see `rounded-card` as a radius or `shadow-gold` as a
- * shadow, so cn('rounded-card', 'rounded-full') would keep both and leave the
- * winner to stylesheet order.
- */
-export const BRAND_RADII = ['card', 'input'] as const;
-export const BRAND_SHADOWS = ['gold', 'lift', 'sheet'] as const;
-
-const twMerge = extendTailwindMerge({
-  extend: {
-    theme: {
-      radius: [...BRAND_RADII],
-      shadow: [...BRAND_SHADOWS],
-    },
-    classGroups: {
-      'font-size': [{ text: [...TV_FONT_SIZES] }],
-    },
-  },
-});
-
-export function cn(...inputs: ClassValue[]): string {
-  return twMerge(clsx(inputs));
-}
 
 export function isUuid(value: string): boolean {
   return UUID_REGEX.test(value);

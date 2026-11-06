@@ -18,7 +18,7 @@ import {
   type InsertResult,
   type SinkRequest,
 } from './error-sink';
-import { redact } from './redact';
+import { redact } from '@anchor-nights/kit/errors';
 
 const TOKEN = 'test-token-0123456789abcdef';
 

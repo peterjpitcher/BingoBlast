@@ -3,8 +3,7 @@ import { ChevronRight, Mic, Settings, Tv } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { BrandBackdrop } from '@/components/brand-backdrop';
 import { CopyrightLine } from '@/components/copyright-line';
-import { cardClass } from '@/components/ui/card';
-import { AnchorLogo } from '@/components/ui/logo';
+import { cardClass, AnchorLogo } from '@anchor-nights/kit/ui';
 
 interface RoleLink {
   href: string;

@@ -1,158 +1,15 @@
 @import "tailwindcss";
-@config "../../tailwind.config.ts";
+/* The Anchor look (palette, both registers, fonts, radii, shadows, motion,
+   TV text sizes, .kicker, .grain-overlay, reduced motion) comes from the
+   shared kit. Components use its Tailwind names, never a raw hex. */
+@import "@anchor-nights/kit/tokens.css";
+/* So Tailwind sees the classes the kit's components use. Relative to this file. */
+@source "../../node_modules/@anchor-nights/kit/src";
 
-/* The Anchor brand (design handoff, 1 Oct 2026): deep green cinematic
-   surfaces, cream text, gold accents. The app is dark everywhere, so the dark
-   theme semantics sit on :root and there is no light theme.
-
-   These variables are the single source of the palette. tailwind.config.ts
-   maps them to utilities (bg-anchor-green-card, text-anchor-sage,
-   border-line-gold and so on); components use those, never a raw hex. */
-:root {
-  /* Raw palette */
-  --anchor-green: #005131;
-  --anchor-green-dark: #003d25;
-  --anchor-green-deep: #0c1d11;
-  --anchor-green-raised: #132318;
-  --anchor-green-card: #172d1e;
-  --anchor-green-light: #006b45;
-  --anchor-sage: #7a8b7f;
-  --anchor-gold: #a57626;
-  --anchor-gold-dark: #8b6914;
-  --anchor-gold-bright: #c9a020;
-  --anchor-charcoal: #1a1a1a;
-  --anchor-cream: #faf8f3;
-  --anchor-cream-text: #f0e6c6;
-  --anchor-sand: #f5e6d3;
-  --anchor-grey-500: #6f6a61;
-  --anchor-success: #006b45;
-  --anchor-danger: #b1372f;
-  /* Status text on a dark surface. The success value is the design's own
-     dark-theme badge colour. The danger value is ours: the brand danger
-     (#b1372f) is about 2.4:1 on a dark card, below the 3:1 floor that
-     scripts/check-render.js enforces, so text uses this lighter tint and the
-     brand value stays for fills and borders. */
-  --anchor-success-text: #6ddaa1;
-  --anchor-danger-text: #e57368;
-
-  /* Semantics */
-  --bg: #0c1d11;
-  --surface: #172d1e;
-  --surface-raised: #132318;
-  --surface-sunk: #081509;
-  --text: #f0e6c6;
-  --text-muted: #7a8b7f;
-  --accent: #c9a020;
-  --border: rgba(201, 160, 32, 0.22);
-  --border-strong: rgba(201, 160, 32, 0.45);
-  --border-gold: rgba(201, 160, 32, 0.55);
-  --focus-ring: #c9a020;
-
-  /* Effects */
-  --shadow-gold: 0 6px 24px rgba(165, 118, 38, 0.28);
-  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.1);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --dur-fast: 0.15s;
-  --dur: 0.2s;
-  --dur-slow: 0.4s;
-  --scrim: rgba(8, 21, 9, 0.78);
-  --scrim-bottom: linear-gradient(180deg, rgba(12, 29, 17, 0) 0%, rgba(12, 29, 17, 0) 40%, rgba(12, 29, 17, 0.85) 100%);
-  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-@layer base {
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-body), system-ui, -apple-system, "Segoe UI", sans-serif;
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-  }
-
-  /* DM Serif Display has one weight. Its contrast is the boldness, so a
-     heading is never faux-bolded: the weight is fixed here and synthesis is
-     off, which keeps a stray font-bold from thickening it. A heading that
-     should be body type takes font-sans. */
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6,
-  .font-display {
-    font-family: var(--font-display), "Times New Roman", serif;
-    font-weight: 400;
-    font-synthesis-weight: none;
-    letter-spacing: -0.02em;
-    text-wrap: balance;
-  }
-
-  .font-script {
-    font-weight: 400;
-    font-synthesis-weight: none;
-    line-height: 1;
-  }
-
-  /* One focus treatment everywhere. */
-  :focus-visible {
-    outline: 3px solid var(--focus-ring);
-    outline-offset: 2px;
-  }
-}
-
-/* Section label: the only ALL-CAPS text in the app, and only through CSS, so
-   the source stays sentence case. Prefer the <Kicker> component; the class is
-   for places a component cannot go. In the components layer, so a utility on
-   the same element (text-[11px] in a tight card, a TV size) still wins. */
-@layer components {
-  .kicker {
-    font-family: var(--font-body), system-ui, sans-serif;
-    font-size: 12px;
-    font-weight: 600;
-    line-height: 1.3;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--anchor-gold-bright);
-  }
-}
-
-/* Film grain, for the full-screen dark surfaces (TV, landing, admin). Not on
-   the host's phone screens. The parent must be positioned. */
-.grain-overlay {
-  position: absolute;
-  inset: 0;
-  background-image: var(--grain);
-  opacity: 0.05;
-  pointer-events: none;
-}
-
-@keyframes anchor-fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes anchor-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes anchor-sheet-up {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: none;
-  }
+/* Cash Bingo's own additions to the kit's tokens. */
+@theme inline {
+  /* The bingo ball's arrival: a short scale and fade, never a bounce. */
+  --animate-ball-in: anchor-ball-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes anchor-ball-in {
@@ -166,33 +23,9 @@
   }
 }
 
-/* Reduced motion (spec 5.7): no animation and no transitions at all, so a
-   rise, slide or fade never plays for someone who has asked the system for
-   less movement. Unlayered and !important, so it beats every Tailwind
-   animate-* and transition-* utility. The hover lifts on buttons and link
-   cards are written motion-safe:, so they are dropped too; transforms are not
-   blanked here because some position an element (a centred banner, say).
-   The slide loop's fade is a script animation and checks the same media query
-   itself. */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
-  }
-}
-
-/* Simple utility for full-height screens until we fully migrate layouts */
-.min-h-screen-safe {
-  min-height: 100vh; /* Fallback */
-  min-height: 100dvh;
-}
-
 /* Warning colour for "Prize not set" and other host-facing prize warnings.
-   Tailwind has no `destructive` colour in tailwind.config.ts, so the class is
-   defined here. It is the danger tint that stays readable on a dark surface.
-   Unlayered, so it beats Tailwind's utility layer without !important. */
+   The danger tint that stays readable on a dark surface. Unlayered, so it
+   beats Tailwind's utility layer without !important. */
 .text-destructive {
   color: var(--anchor-danger-text);
 }

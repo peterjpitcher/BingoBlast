@@ -10,7 +10,7 @@ import { QR_BACKGROUND, QR_FOREGROUND } from '@/lib/brand';
 import { stripScheme } from '@/lib/follow-link';
 import { cn } from '@/lib/utils';
 import { KITCHEN_OPEN_UNTIL } from '@/lib/venue-links';
-import { cardClass } from '@/components/ui/card';
+import { cardClass } from '@anchor-nights/kit/ui';
 import { TV_KICKER_CLASS, TV_SIZE, tvText } from './tv-text';
 
 const QR_TITLE = 'QR code: follow the numbers on your phone';

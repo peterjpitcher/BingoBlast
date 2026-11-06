@@ -6,12 +6,8 @@ import { Database } from '@/types/database';
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
 import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
-import { AnchorLogo } from '@/components/ui/logo';
-import { Sheet } from '@/components/ui/sheet';
-import { useWakeLock } from '@/hooks/wake-lock';
+import { Button, Card, Kicker, AnchorLogo, Sheet } from '@anchor-nights/kit/ui';
+import { useWakeLock, useConnectionHealth, useClockOffset, ConnectionBanner } from '@anchor-nights/kit/tv';
 import {
   formatPounds,
   getSnowballCallsLabel,
@@ -34,12 +30,9 @@ import { shouldApplyPolledPot } from '@/lib/snowball-pot-poll';
 import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
 import { createPollRunner, type PollRunner } from '@/lib/poll-runner';
-import { useConnectionHealth } from '@/hooks/use-connection-health';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
-import { useClockOffset } from '@/hooks/use-clock-offset';
 import { useBuildCheck } from '@/hooks/use-build-check';
 import { isPublicReloadSafe } from '@/lib/build-check';
-import { ConnectionBanner } from '@/components/connection-banner';
 import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
 import { PhoneRules } from '@/components/display/phone-rules';
 import { PhoneEvents, PhoneReviewButton } from '@/components/display/phone-events';
@@ -727,7 +720,7 @@ export default function PlayerUI({
 
   // New releases: reload by itself, but only with no game in progress or on a
   // break. Never while numbers are being called, a claim check or a win.
-  useBuildCheck({ mode: 'auto', safe: isPublicReloadSafe(currentGameState) });
+  useBuildCheck({ mode: 'auto', isSafeToReload: () => isPublicReloadSafe(currentGameState) });
 
   // The rest of the night: game numbers, the next game and the rules' pot.
   const overview = useSessionOverview({
