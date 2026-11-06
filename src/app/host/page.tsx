@@ -1,12 +1,13 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import { signout } from '@/app/login/actions';
+import { signOutFromForm } from '@/app/auth/actions';
 import HostDashboard from './dashboard';
 import { listUnsettledSnowballGames } from './actions';
 import { Database } from '@/types/database';
 import { Button, Card, Kicker } from '@anchor-nights/kit/ui';
 import { HostHeader } from '@/components/host/host-header';
+import { readStaffProfile } from '@/lib/auth/staff-role';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {
@@ -30,11 +31,7 @@ export default async function HostPage() {
   // once they pressed something. RLS and assert_is_host() would still deny the
   // data, but a screen that looks live and does nothing is worse than a screen
   // that says why.
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<Pick<Database['public']['Tables']['profiles']['Row'], 'role'>>();
+  const { data: profile } = await readStaffProfile(supabase);
 
   if (profile?.role !== 'admin' && profile?.role !== 'host') {
     redirect('/pending');
@@ -60,7 +57,7 @@ export default async function HostPage() {
                 <Kicker>Host console</Kicker>
                 <h1 className="text-[28px] leading-[1.05] text-anchor-cream-text">Error loading sessions</h1>
                 <p className="text-[15px] leading-normal text-anchor-sage">Could not retrieve sessions. Please try again later.</p>
-                <form action={signout} className="mt-1.5 w-full">
+                <form action={signOutFromForm} className="mt-1.5 w-full">
                     <Button type="submit" variant="outline" block>Sign out</Button>
                 </form>
             </Card>

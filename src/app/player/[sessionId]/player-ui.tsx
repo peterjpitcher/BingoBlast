@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Coffee, RefreshCw } from 'lucide-react';
 import { Database } from '@/types/database';
-import { createClient } from '@/utils/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
 import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
 import { Button, Card, Kicker, AnchorLogo, Sheet } from '@anchor-nights/kit/ui';

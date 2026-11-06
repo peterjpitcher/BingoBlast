@@ -1,11 +1,12 @@
 'use server'
 
-import { createClient } from '@/utils/supabase/server'
+import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import type { Database, GameType, WinStage, GameStatus, UserRole } from '@/types/database'
 import type { ActionResult } from '@/types/actions'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { validateGamePrizes } from '@/lib/prize-validation'
+import { readStaffProfile } from '@/lib/auth/staff-role'
 
 type GameInsert = Database['public']['Tables']['games']['Insert']
 
@@ -37,11 +38,7 @@ async function authorizeAdmin(
     return { authorized: false, error: "Not authenticated" }
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<{ role: UserRole }>()
+  const { data: profile, error: profileError } = await readStaffProfile(supabase)
 
   if (profileError || !profile || profile.role !== 'admin') {
     return { authorized: false, error: "Unauthorized: Admin access required" }

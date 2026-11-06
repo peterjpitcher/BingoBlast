@@ -5,7 +5,7 @@
 // runs from next.config.ts, so the build itself fails with a clear message.
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EVENTS_FEED_REQUIRED, getPublicSupabaseEnv, validateBuildEnv } from './env';
+import { EVENTS_FEED_REQUIRED, getPublicSupabaseEnv, isAuthEnvRequired, validateBuildEnv } from './env';
 
 const KEYS = [
   'NEXT_PUBLIC_SUPABASE_URL',
@@ -17,7 +17,22 @@ const KEYS = [
   'ERROR_SINK_URL',
   'ERROR_SINK_TOKEN',
   'SUPABASE_SERVICE_ROLE_KEY',
+  'NEXT_PUBLIC_APP_URL',
+  'NEXT_PUBLIC_TURNSTILE_SITE_KEY',
+  'TURNSTILE_SECRET_KEY',
+  'AUDIT_HMAC_KEY',
 ] as const;
+
+// The sign-in variables (the kit's AUTH_ENV), all fake. Set in every test so
+// the older cases keep testing what they were written for; the auth cases
+// below remove them one at a time.
+const AUTH_VALUES = {
+  SUPABASE_SERVICE_ROLE_KEY: 'service-role-key-for-tests-only',
+  NEXT_PUBLIC_APP_URL: 'https://bingo.example.test',
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
+  TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
+  AUDIT_HMAC_KEY: `v1:${'a'.repeat(48)}`,
+} as const;
 
 // The shape the management app issues: "anch_" then 32 random bytes in
 // base64url. Not a real key.
@@ -33,6 +48,7 @@ beforeEach(() => {
   }
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+  Object.assign(process.env, AUTH_VALUES);
 });
 
 afterEach(() => {
@@ -249,6 +265,7 @@ test('in production, ERROR_SINK_URL also needs the service role key, and the mes
   process.env.ANCHOR_API_KEY = VALID_KEY;
   process.env.ERROR_SINK_URL = 'https://bingo.example/api/errors';
   process.env.ERROR_SINK_TOKEN = SINK_TOKEN;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   assert.throws(() => validateBuildEnv(), (err: Error) => {
     assert.match(err.message, /SUPABASE_SERVICE_ROLE_KEY is not set/);
     assert.doesNotMatch(err.message, /xxxx/);
@@ -265,4 +282,39 @@ test('ERROR_SINK_URL must be https in production', () => {
   process.env.ERROR_SINK_TOKEN = SINK_TOKEN;
   process.env.ERROR_SINK_URL = 'http://bingo.example/api/errors';
   assert.throws(() => validateBuildEnv(), /ERROR_SINK_URL must use https/);
+});
+
+// ---------------------------------------------------------------- sign-in (C-5)
+
+test('a build without the sign-in variables fails, naming each one', () => {
+  for (const key of Object.keys(AUTH_VALUES)) delete process.env[key];
+  assert.throws(
+    () => validateBuildEnv({ eventsFeedRequired: false }),
+    (err: Error) =>
+      Object.keys(AUTH_VALUES).every((key) => err.message.includes(key)),
+  );
+});
+
+test('a Vercel production build without AUDIT_HMAC_KEY fails', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
+  delete process.env.AUDIT_HMAC_KEY;
+  assert.throws(() => validateBuildEnv(), /AUDIT_HMAC_KEY/);
+});
+
+test('a malformed AUDIT_HMAC_KEY fails the build without quoting it', () => {
+  process.env.AUDIT_HMAC_KEY = 'not-versioned-secret-value';
+  assert.throws(
+    () => validateBuildEnv({ eventsFeedRequired: false }),
+    (err: Error) => err.message.includes('AUDIT_HMAC_KEY') && !err.message.includes('not-versioned-secret-value'),
+  );
+});
+
+test('a Vercel preview builds without the sign-in variables (its sign-in fails closed instead)', () => {
+  process.env.VERCEL_ENV = 'preview';
+  for (const key of Object.keys(AUTH_VALUES)) delete process.env[key];
+  assert.doesNotThrow(() => validateBuildEnv({ eventsFeedRequired: false }));
+  assert.equal(isAuthEnvRequired('preview'), false);
+  assert.equal(isAuthEnvRequired('production'), true);
+  assert.equal(isAuthEnvRequired('development'), true);
 });

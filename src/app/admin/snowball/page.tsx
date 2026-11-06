@@ -1,9 +1,9 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import SnowballList from './snowball-list';
 import { PotHistory } from './pot-history';
-import type { Database } from '@/types/database';
+import { readStaffProfile } from '@/lib/auth/staff-role';
 
 export default async function SnowballAdminPage() {
   const supabase = await createClient();
@@ -15,11 +15,7 @@ export default async function SnowballAdminPage() {
   }
 
   // Check role
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+  const { data: profile } = await readStaffProfile(supabase);
 
   if (profile?.role !== 'admin') {
     redirect('/');

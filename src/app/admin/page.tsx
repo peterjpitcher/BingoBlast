@@ -1,10 +1,10 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
-import { signout } from '@/app/login/actions';
+import { signOutFromForm } from '@/app/auth/actions';
 import AdminDashboard from './dashboard';
-import type { Database } from '@/types/database';
 import { Button, Card, Kicker } from '@anchor-nights/kit/ui';
+import { readStaffProfile } from '@/lib/auth/staff-role';
 
 export default async function AdminPage() {
   const supabase = await createClient();
@@ -16,11 +16,7 @@ export default async function AdminPage() {
   }
 
   // Check role
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+  const { data: profile } = await readStaffProfile(supabase);
 
   if (profile?.role !== 'admin') {
     return (
@@ -29,7 +25,7 @@ export default async function AdminPage() {
           <Kicker>Admin</Kicker>
           <h1 className="text-[28px] leading-[1.05] text-anchor-cream-text">Access denied</h1>
           <p className="text-[15px] leading-normal text-anchor-sage">You do not have administrator privileges.</p>
-          <form action={signout} className="mt-2 w-full">
+          <form action={signOutFromForm} className="mt-2 w-full">
             <Button variant="outline" size="md" block>Sign out</Button>
           </form>
         </Card>

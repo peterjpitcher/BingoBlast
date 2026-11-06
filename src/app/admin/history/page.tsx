@@ -1,11 +1,12 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { Badge, Card, Kicker } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 import type { Database } from '@/types/database';
 import { formatShortDateTimeInLondon } from '@/lib/dates';
 import { describeWinnerTotal, formatPence, JACKPOT_NOT_RECORDED, totalPaidOutPence, winnerTotalPence } from '@/lib/money';
+import { readStaffProfile } from '@/lib/auth/staff-role';
 
 type WinnerWithRelations = Database['public']['Tables']['winners']['Row'] & {
   session: Pick<Database['public']['Tables']['sessions']['Row'], 'name' | 'start_date'> | null;
@@ -34,11 +35,7 @@ export default async function HistoryPage() {
     redirect('/login');
   }
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+  const { data: profile } = await readStaffProfile(supabase);
 
   if (profile?.role !== 'admin') {
     redirect('/');

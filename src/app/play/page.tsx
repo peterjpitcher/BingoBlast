@@ -2,7 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ChevronRight } from 'lucide-react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { formatDateInLondon, getTodayIsoDateInLondon } from '@/lib/dates';
 import { isUuid } from '@/lib/utils';
 import {

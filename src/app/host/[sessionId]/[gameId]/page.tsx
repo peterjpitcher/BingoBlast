@@ -1,5 +1,5 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import GameControl from './game-control';
 import { Database } from '@/types/database';
@@ -8,6 +8,7 @@ import { HostHeader, HostHeaderGameStatus } from '@/components/host/host-header'
 import { getColourName } from '@/lib/colour-name';
 import { isUuid } from '@/lib/utils';
 import { reportError } from '@/lib/report-error';
+import { readStaffProfile } from '@/lib/auth/staff-role';
 
 interface PageProps {
   params: Promise<{ sessionId: string; gameId: string }>;
@@ -62,11 +63,7 @@ export default async function GameControlPage({ params }: PageProps) {
   // that says why.
   const retryHref = `/host/${sessionId}/${gameId}`;
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<Pick<Database['public']['Tables']['profiles']['Row'], 'role'>>();
+  const { data: profile, error: profileError } = await readStaffProfile(supabase);
 
   // A failed read is not an answer about the role. Sending a working host to
   // /pending on a blip is what this used to do.

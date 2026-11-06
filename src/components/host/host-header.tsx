@@ -1,7 +1,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { ChevronLeft, LogOut } from "lucide-react";
-import { signout } from "@/app/login/actions";
+import { signOutFromForm } from "@/app/auth/actions";
 import { AnchorLogo } from "@anchor-nights/kit/ui";
 
 interface HostHeaderProps {
@@ -35,7 +35,7 @@ export function HostHeader({ title, children, backHref, backLabel = "Back to hos
         <h1 className="truncate font-sans text-[15px] font-semibold leading-tight tracking-normal text-anchor-cream-text">{title}</h1>
         {children}
       </div>
-      <form action={signout}>
+      <form action={signOutFromForm}>
         <button type="submit" aria-label="Sign out" className={`${ICON_BUTTON} text-anchor-sage`}>
           <LogOut aria-hidden="true" size={20} strokeWidth={2} />
         </button>

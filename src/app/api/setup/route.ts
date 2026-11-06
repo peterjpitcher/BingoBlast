@@ -1,8 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
-import { Database } from '@/types/database'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 type SetupPayload = {
   email?: string
@@ -65,22 +64,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Email required' }, { status: 400 })
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseServiceKey) {
+  // The shared admin client (auth standard section 2: no ad-hoc clients). It
+  // throws when the service role key is missing.
+  let supabase: ReturnType<typeof createAdminClient>
+  try {
+    supabase = createAdminClient()
+  } catch {
     return NextResponse.json(
       { error: 'Service key not configured' },
       { status: 500 }
     )
   }
-
-  const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  })
 
   const { data, error: userError } = await supabase.auth.admin.listUsers({
     page: 1,

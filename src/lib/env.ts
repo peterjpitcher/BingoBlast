@@ -15,14 +15,19 @@
 // env module is plain JavaScript with no imports, so importing it here is safe.
 //
 // Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin falls back to
-// Vercel's own production or preview address, @anchor-nights/kit/qr) and
-// SUPABASE_SERVICE_ROLE_KEY on its own (only /api/setup and /api/errors use
-// it). Once ERROR_SINK_URL is set, though, the sink needs a token and, on
-// Vercel production, the service role key to store anything, so those become
-// required together.
+// Vercel's own production or preview address, @anchor-nights/kit/qr). Once
+// ERROR_SINK_URL is set, the sink needs a token of its own.
+//
+// The sign-in variables (the kit's AUTH_ENV: SUPABASE_SERVICE_ROLE_KEY,
+// NEXT_PUBLIC_APP_URL, the Turnstile pair and AUDIT_HMAC_KEY) are required on
+// every build except a Vercel preview. A preview builds without them so the TV
+// and phone screens can still be checked there; its sign-in then fails closed
+// ("sign-in is unavailable", src/lib/auth/server.ts), never open. Production,
+// CI and local builds fail without them.
 
 import {
   ANCHOR_API_ENV,
+  AUTH_ENV,
   SITE_URL_ENV,
   SUPABASE_PUBLIC_ENV,
   checkEnv,
@@ -56,12 +61,24 @@ export interface ValidateBuildEnvOptions {
   eventsFeedRequired?: boolean;
 }
 
+/**
+ * Whether this build must carry the sign-in variables: every build except a
+ * Vercel preview (see the header).
+ */
+export function isAuthEnvRequired(vercelEnv: string | undefined = process.env.VERCEL_ENV): boolean {
+  return vercelEnv !== 'preview';
+}
+
+/** Makes every rule in a list optional (still checked for shape when set). */
+function optional(rules: readonly EnvRule[]): EnvRule[] {
+  return rules.map((rule) => ({ ...rule, required: undefined }));
+}
+
 /** The kit's rules this app uses, with the events key optional when the feed is not required. */
 function buildEnvRules(eventsFeedRequired: boolean): EnvRule[] {
-  const anchorApi = eventsFeedRequired
-    ? ANCHOR_API_ENV
-    : ANCHOR_API_ENV.map((rule) => ({ ...rule, required: undefined }));
-  return [...SUPABASE_PUBLIC_ENV, ...SITE_URL_ENV, ...anchorApi];
+  const anchorApi = eventsFeedRequired ? [...ANCHOR_API_ENV] : optional(ANCHOR_API_ENV);
+  const auth = isAuthEnvRequired() ? [...AUTH_ENV] : optional(AUTH_ENV);
+  return [...SUPABASE_PUBLIC_ENV, ...SITE_URL_ENV, ...anchorApi, ...auth];
 }
 
 /**
