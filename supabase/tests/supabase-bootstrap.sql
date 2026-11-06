@@ -77,6 +77,12 @@ begin
 end
 $$;
 
+-- Roles are cluster-wide, and suite A's harness-schema.sql creates service_role
+-- first, without BYPASSRLS, so the conditional create above never runs for it.
+-- On a real project service_role bypasses RLS; without this, a test acting as
+-- service_role on a table with RLS and no policy (app_errors) sees nothing.
+alter role service_role bypassrls;
+
 grant anon, authenticated, service_role to authenticator;
 grant anon, authenticated, service_role to postgres;
 grant usage on schema public to anon, authenticated, service_role;

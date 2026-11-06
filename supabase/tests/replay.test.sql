@@ -137,18 +137,18 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Tables and row level security
 -- ---------------------------------------------------------------------------
-select t('tables :: the nine expected tables exist',
-         (select count(*) = 9 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+select t('tables :: the ten expected tables exist',
+         (select count(*) = 10 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'
              and c.relname in ('profiles','sessions','games','game_states',
                                'game_states_public','winners','snowball_pots',
-                               'snowball_pot_history','session_reset_log')),
+                               'snowball_pot_history','session_reset_log','app_errors')),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'));
 
 select t('tables :: no unexpected tables were created',
-         (select count(*) = 9 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         (select count(*) = 10 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
@@ -193,8 +193,8 @@ select t('enums :: win_stage is exactly {Line,Two Lines,Full House}',
 -- ---------------------------------------------------------------------------
 -- Functions: presence, security settings and search_path
 -- ---------------------------------------------------------------------------
-select t('functions :: the thirty expected functions exist and nothing else',
-         (select count(*) = 30 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+select t('functions :: the thirty-one expected functions exist and nothing else',
+         (select count(*) = 31 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname <> 't'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
@@ -306,7 +306,8 @@ select t('grants :: every public function is executable by service_role',
 -- migrations add: M1 (20261001075034) three caller-facing lifecycle functions
 -- and one trigger function; M2a (20261001075215) three claim functions, the
 -- stage count helper and the guard trigger function; M3 (20261001075401)
--- list_unsettled_snowball_games. M2b adds none. It must come out the same in
+-- list_unsettled_snowball_games. M2b adds none; 20261106194703 adds
+-- list_app_errors_safe (admin read of the error reports). It must come out the same in
 -- both worlds, or a rebuilt project is not the project it rebuilds.
 with expected(fname, authd, svc) as (
   values ('archive_snowball_pot', true, true),
@@ -322,6 +323,7 @@ with expected(fname, authd, svc) as (
          ('finish_game', true, true),
          ('guard_claim_fields', false, true),
          ('handle_new_user', false, true),
+         ('list_app_errors_safe', true, true),
          ('list_unsettled_snowball_games', true, true),
          ('parse_prize_pence', true, true),
          ('recompute_prize_shares', true, true),
