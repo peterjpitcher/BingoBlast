@@ -39,7 +39,7 @@ export const BINGO_CATEGORY_SLUG = NIGHT_CATEGORY_SLUGS.cashBingo;
  * response has gone. Outside a request (a script, a test) it simply runs
  * untracked.
  */
-function scheduleReport(scope: string, err: unknown): void {
+export function scheduleReport(scope: string, err: unknown): void {
   const reporting = reportError({ scope }, err);
   try {
     after(reporting);
