@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import { NextResponse, type NextRequest } from 'next/server'
 import { authMaintenance } from '@/lib/auth/server'
 import { reportError } from '@/lib/report-error'
+import { tvPairing } from '@/lib/tv-pairing'
 
 // The daily sign-in clean-up (kit README step 6), run by Vercel Cron
 // (vercel.json, once a day, inside the free tier):
@@ -11,6 +12,9 @@ import { reportError } from '@/lib/report-error'
 //   * reconcileInvites: invite acceptances stuck half way (a crash between
 //     creating the banned user and switching it on) are failed and the
 //     still-banned user deleted.
+//   * prunePairing (TV pairing, kit README step 6): pairing codes after a
+//     day, pairing attempts (with their IP addresses) after 30 days, removed
+//     TVs 12 months after removal.
 //
 // Never callable from a browser: Vercel sends `Authorization: Bearer
 // <CRON_SECRET>`. With CRON_SECRET unset the route refuses everything (503),
@@ -40,7 +44,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const maintenance = authMaintenance()
     const pruned = await maintenance.pruneAuthData()
     const invites = await maintenance.reconcileInvites()
-    return NextResponse.json({ ok: true, pruned, invites }, { headers: NO_STORE })
+    const pairing = await tvPairing().maintenance.prunePairing()
+    return NextResponse.json({ ok: true, pruned, invites, pairing }, { headers: NO_STORE })
   } catch (error) {
     // Fails loudly: Vercel shows the 500 on the cron run and the report lands
     // on /admin/errors.

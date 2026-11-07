@@ -26,6 +26,7 @@ App Router maps `src/app/<segments>/page.tsx` → URL paths. Dynamic segments us
 | `/host/[sessionId]/[gameId]` | `src/app/host/[sessionId]/[gameId]/page.tsx` | `getUser()` → redirect `/login` |
 | `/display` | `src/app/display/page.tsx` | Public (auto-redirects to single active session) |
 | `/display/[sessionId]` | `src/app/display/[sessionId]/page.tsx` | Public |
+| `/tv` | `src/app/tv/page.tsx` | Public, off the proxy. Paired with a device cookie (kit pairing, row C-6): unpaired shows a 6-digit code; paired draws the same screen as `/display/[sessionId]` for tonight's session (`src/lib/tv-tonight.ts`), or the idle loop; an outage shows "Reconnecting" |
 | `/player/[sessionId]` | `src/app/player/[sessionId]/page.tsx` | Public (guest-friendly) |
 | `/play` | `src/app/play/page.tsx` | Public. The permanent follow-along link behind the TV's QR code: `?s=<uuid>` redirects to `/player/<uuid>`; otherwise exactly one qualifying session redirects to it, none shows "No bingo running right now" with upcoming events, and several shows a list of the qualifying sessions (running first) linking to `/play?s=<id>`. Only a well-formed uuid ever goes into the redirect, and only to `/player` on this site |
 
@@ -48,7 +49,7 @@ App Router maps `src/app/<segments>/page.tsx` → URL paths. Dynamic segments us
 
 | Surface | Routes | Middleware? |
 |---------|--------|-------------|
-| Public | `/`, `/display`, `/display/[sessionId]`, `/player/[sessionId]`, `/play`, `/api/time`, `/api/build`, `/api/screen/events`, `/api/setup` (secret-gated) | No: they bypass the proxy |
+| Public | `/`, `/tv`, `/api/tv/pairing`, `/display`, `/display/[sessionId]`, `/player/[sessionId]`, `/play`, `/api/time`, `/api/build`, `/api/screen/events`, `/api/setup` (secret-gated) | No: they bypass the proxy |
 | Auth | `/admin`, `/admin/*`, `/host`, `/host/*`, `/login` | Yes — proxy runs `updateSession()` |
 
 ## Auth Flow

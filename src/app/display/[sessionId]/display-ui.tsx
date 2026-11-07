@@ -70,7 +70,7 @@ type PublicClient = ReturnType<typeof createClient>;
  */
 export type InitialLoadStatus = 'ready' | 'failed';
 
-interface DisplayUIProps {
+export interface DisplayUIProps {
   session: Session;
   activeGame: Game | null;
   initialGameState: GameState | null;
@@ -82,6 +82,8 @@ interface DisplayUIProps {
   initialIsUniqueSession: boolean;
   /** `?rehearsal=1`: test sessions count, and the TV returns to the rehearsal lobby. */
   rehearsal: boolean;
+  /** Drawn by the paired /tv (row C-6): after the night it goes back to /tv, not /display. */
+  tv?: boolean;
   /** The upcoming events as the server page read them (getEventsFeed); refreshed here. */
   initialEvents: ScreenFeed | null;
 }
@@ -322,6 +324,7 @@ export default function DisplayUI({
   followOrigin,
   initialIsUniqueSession,
   rehearsal,
+  tv = false,
   initialEvents,
 }: DisplayUIProps) {
   // One client for the life of the screen. Held in state rather than a ref so
@@ -838,6 +841,7 @@ export default function DisplayUI({
     supabase,
     sessionId: session.id,
     rehearsal,
+    tv,
     nightPhase: loadPhase === 'ready' ? nightPhase : null,
     completedAt: currentSession.completed_at ?? null,
     clockOffsetMs,

@@ -378,6 +378,12 @@ psql_strict -d "$db" -f "$HERE/money.test.sql" >/dev/null
 echo "==> suite $suite: app_errors (error reports)"
 psql_strict -d "$db" -f "$HERE/app-errors.test.sql" >/dev/null
 
+# 20261107120000 and 120001: the kit's TV pairing (spec C-6). The three tables
+# are service role only, the kit_tv_* functions likewise, and a code an active
+# host types pairs a TV that an admin can then remove.
+echo "==> suite $suite: kit TV pairing (tables, functions, pair and remove)"
+psql_strict -d "$db" -f "$HERE/kit-tv-pairing.test.sql" >/dev/null
+
 # 20261107090000 to 090006: the kit's sign-in (spec C-5). The active-identity
 # gate on every reachable table, a deactivated host refused by the guarded
 # functions and reading nothing, pending and profile-less accounts reading

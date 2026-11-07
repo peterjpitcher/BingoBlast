@@ -11,6 +11,8 @@
 //   - many:  a list for staff to choose from, refreshed every 30 seconds;
 //   - error: a retrying screen, re-checked every 15 seconds.
 // A failed re-check keeps the last good screen rather than flashing an error.
+// On the paired /tv (row C-6) only the idle loop is drawn here: when a session
+// qualifies it re-renders /tv, whose server page picks the session itself.
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -57,6 +59,8 @@ interface DisplayLobbyProps {
   rehearsal: boolean;
   /** The upcoming events as the server page read them (getEventsFeed); refreshed here. */
   initialEvents: ScreenFeed | null;
+  /** Drawn by the paired /tv: a session to join re-renders /tv instead of opening /display/<id>. */
+  tv?: boolean;
 }
 
 /** A failed events refresh is logged, never shown; stable for useScreenFeed. */
@@ -64,7 +68,7 @@ function logEventsError(err: unknown): void {
   logError('display', err);
 }
 
-export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobbyProps) {
+export function DisplayLobby({ initial, rehearsal, initialEvents, tv = false }: DisplayLobbyProps) {
   const [supabase] = useState(createClient);
   const [state, setState] = useState<LobbyState>(initial);
   const router = useRouter();
@@ -108,6 +112,10 @@ export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobby
         return;
       }
       const resolution = resolveDisplaySession(data, getTodayIsoDateInLondon(), { includeTest: rehearsal });
+      if (tv) {
+        if (resolution.kind !== 'none') router.refresh();
+        return;
+      }
       if (resolution.kind === 'one') {
         router.replace(displayPathFor(resolution.id, { rehearsal }));
       } else if (resolution.kind === 'none') {
@@ -131,7 +139,7 @@ export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobby
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [supabase, delayMs, rehearsal, router]);
+  }, [supabase, delayMs, rehearsal, router, tv]);
 
   if (state.kind === 'many') {
     return (

@@ -139,19 +139,22 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Thirteen since the kit's sign-in (20261107090001 to 090003): auth_audit,
 -- invites and recovery_grants. Their behaviour is in kit-auth.test.sql.
-select t('tables :: the thirteen expected tables exist',
-         (select count(*) = 13 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+-- Sixteen since the kit's TV pairing (20261107120000): tv_devices,
+-- tv_pairing_codes and tv_pairing_attempts (kit-tv-pairing.test.sql).
+select t('tables :: the sixteen expected tables exist',
+         (select count(*) = 16 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'
              and c.relname in ('profiles','sessions','games','game_states',
                                'game_states_public','winners','snowball_pots',
                                'snowball_pot_history','session_reset_log','app_errors',
-                               'auth_audit','invites','recovery_grants')),
+                               'auth_audit','invites','recovery_grants',
+                               'tv_devices','tv_pairing_codes','tv_pairing_attempts')),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'));
 
 select t('tables :: no unexpected tables were created',
-         (select count(*) = 13 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         (select count(*) = 16 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'test_results'),
          (select string_agg(c.relname, ',' order by c.relname) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
@@ -199,8 +202,9 @@ select t('enums :: win_stage is exactly {Line,Two Lines,Full House}',
 -- Thirty-one of Cash Bingo's own plus twenty-two from the kit's sign-in
 -- (20261107090000 to 090004: current_staff_role, is_active_staff,
 -- is_active_admin and the kit_* functions), each named in the matrix below.
-select t('functions :: the fifty-three expected functions exist and nothing else',
-         (select count(*) = 53 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+-- Sixty since the kit's TV pairing (20261107120001): seven kit_tv_* functions.
+select t('functions :: the sixty expected functions exist and nothing else',
+         (select count(*) = 60 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname <> 't'),
          (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
@@ -318,7 +322,8 @@ select t('grants :: every public function is executable by service_role',
 -- list_app_errors_safe (admin read of the error reports). The kit's sign-in
 -- (20261107090000 to 090004) adds three callable by authenticated
 -- (current_staff_role, is_active_staff, is_active_admin), the hook callable by
--- nobody but supabase_auth_admin, and the rest service role only. It must come
+-- nobody but supabase_auth_admin, and the rest service role only. The kit's TV
+-- pairing (20261107120001) adds seven kit_tv_* functions, service role only. It must come
 -- out the same in both worlds, or a rebuilt project is not the project it rebuilds.
 with expected(fname, authd, svc) as (
   values ('archive_snowball_pot', true, true),
@@ -356,6 +361,13 @@ with expected(fname, authd, svc) as (
          ('kit_set_staff_role', false, true),
          ('kit_staff_role_for', false, true),
          ('kit_stale_invites', false, true),
+         ('kit_tv_claim', false, true),
+         ('kit_tv_device_seen', false, true),
+         ('kit_tv_issue_code', false, true),
+         ('kit_tv_list_devices', false, true),
+         ('kit_tv_pair', false, true),
+         ('kit_tv_prune_pairing', false, true),
+         ('kit_tv_revoke', false, true),
          ('list_app_errors_safe', true, true),
          ('list_unsettled_snowball_games', true, true),
          ('parse_prize_pence', true, true),
@@ -422,16 +434,18 @@ select t('table grants :: authenticated can SELECT session_reset_log (RLS keeps 
 -- append-only for every API role (service role SELECT and INSERT only), and
 -- invites and recovery_grants are never deleted through the API (only
 -- kit_prune_auth_data deletes, as their owner). kit-auth.test.sql asserts them.
+-- tv_pairing_attempts (the kit's TV pairing) is append-only too: the service
+-- role may SELECT, INSERT and DELETE (the daily prune), never UPDATE.
 select t('table grants :: every public table grants service_role SELECT, INSERT, UPDATE and DELETE',
          (select bool_and(string_to_array(pg_temp.table_privs('service_role', format('public.%I', c.relname)), ',')
                           @> array['SELECT','INSERT','UPDATE','DELETE'])
             from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'
-             and c.relname not in ('test_results', 'auth_audit', 'invites', 'recovery_grants')),
+             and c.relname not in ('test_results', 'auth_audit', 'invites', 'recovery_grants', 'tv_pairing_attempts')),
          (select coalesce(string_agg(c.relname || '=' || pg_temp.table_privs('service_role', format('public.%I', c.relname)), ' | '), '(all fine)')
             from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind = 'r'
-             and c.relname not in ('test_results', 'auth_audit', 'invites', 'recovery_grants')
+             and c.relname not in ('test_results', 'auth_audit', 'invites', 'recovery_grants', 'tv_pairing_attempts')
              and not string_to_array(pg_temp.table_privs('service_role', format('public.%I', c.relname)), ',')
                      @> array['SELECT','INSERT','UPDATE','DELETE']));
 

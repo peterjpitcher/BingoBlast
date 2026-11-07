@@ -11,6 +11,8 @@
  */
 export type ActionFailureCode =
   | 'winner_on_ball'
+  // The controller heartbeat matched no row: another host took over (row C-6).
+  | 'lost_control'
   // Night lifecycle: start_game, finish_game, end_night
   // (supabase/migrations/20261001075034_night_lifecycle.sql).
   | 'night_ended'
