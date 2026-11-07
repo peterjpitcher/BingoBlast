@@ -36,7 +36,7 @@ import { isPublicReloadSafe } from '@/lib/build-check';
 import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
 import { PhoneRules } from '@/components/display/phone-rules';
 import { PhoneEvents, PhoneReviewButton } from '@/components/display/phone-events';
-import type { EventsProjection } from '@/lib/playlist';
+import type { ScreenFeed } from '@anchor-nights/kit/events/shared';
 import { useSessionOverview } from '@/components/display/use-session-overview';
 import { logError } from '@/lib/log-error';
 import { KITCHEN_OPEN_UNTIL } from '@/lib/venue-links';
@@ -62,7 +62,7 @@ interface PlayerUIProps {
   initialPrizeText: string;
   initialLoadStatus: InitialLoadStatus;
   /** Upcoming events as the server page read them (spec 5.5); phones read them once, on load. */
-  initialEvents: EventsProjection | null;
+  initialEvents: ScreenFeed | null;
 }
 
 /**
@@ -890,12 +890,12 @@ export default function PlayerUI({
           </Card>
         )}
 
-        {/* The end of the night (spec 5.5, 5.6): the review button when it is
-            switched on, then what is coming up, next bingo night first. */}
+        {/* The end of the night (spec 5.5, 5.6; Anchor Nights S7.7): the
+            review button, then what is coming up, next bingo night first. */}
         {isNightOver && (
           <>
             <PhoneReviewButton />
-            <PhoneEvents projection={initialEvents} sessionDate={currentSession.start_date ?? null} phase="night_over" />
+            <PhoneEvents feed={initialEvents} sessionDate={currentSession.start_date ?? null} phase="night_over" />
           </>
         )}
 
@@ -912,7 +912,7 @@ export default function PlayerUI({
               <PhoneRules rules={houseRules} />
             </Card>
             {/* What else is on (spec 5.5), next bingo night first. */}
-            <PhoneEvents projection={initialEvents} sessionDate={currentSession.start_date ?? null} phase="before_start" />
+            <PhoneEvents feed={initialEvents} sessionDate={currentSession.start_date ?? null} phase="before_start" />
           </>
         )}
 
@@ -940,7 +940,7 @@ export default function PlayerUI({
               )}
             </Card>
             <PhoneEvents
-              projection={initialEvents}
+              feed={initialEvents}
               sessionDate={currentSession.start_date ?? null}
               phase="between_games"
             />
@@ -959,7 +959,7 @@ export default function PlayerUI({
                 first: the same list as the TV's break loop, with the in-game
                 links. Nothing shows when there are no events. */}
             <PhoneEvents
-              projection={initialEvents}
+              feed={initialEvents}
               sessionDate={currentSession.start_date ?? null}
               phase="in_game"
               inGameSubState="break"

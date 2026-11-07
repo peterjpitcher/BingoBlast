@@ -13,8 +13,8 @@ import {
   type ResolvableSession,
 } from '@/lib/session-resolution';
 import { logError } from '@/lib/log-error';
-import { getEventsProjection } from '@/lib/events-feed/projection';
-import type { EventsProjection } from '@/lib/playlist';
+import { getEventsFeed } from '@/lib/events-feed';
+import type { ScreenFeed } from '@anchor-nights/kit/events/shared';
 import { PhoneEvents } from '@/components/display/phone-events';
 import { buttonClass, cardClass, Kicker, AnchorLogo } from '@anchor-nights/kit/ui';
 
@@ -58,7 +58,7 @@ export default async function PlayPage({ searchParams }: PlayPageProps) {
   }
 
   // Read alongside the sessions; cached, and never throws.
-  const eventsPromise = getEventsProjection();
+  const eventsPromise = getEventsFeed();
 
   const { data: sessions, error: sessionsError } = await supabase
     .from('sessions')
@@ -127,7 +127,7 @@ interface PlayMessageProps {
   body?: string;
   retry?: boolean;
   /** Listed under the message, next bingo night first; links to the post-event pages, as on the idle TV. */
-  events?: EventsProjection | null;
+  events?: ScreenFeed | null;
   /** Inside the card, under the message (the list of games). */
   children?: React.ReactNode;
 }
@@ -156,7 +156,7 @@ function PlayMessage({ title, body, retry = false, events = null, children }: Pl
           </Link>
         )}
       </div>
-      {events && <PhoneEvents projection={events} sessionDate={null} phase="idle" className="w-full" />}
+      {events && <PhoneEvents feed={events} sessionDate={null} phase="idle" className="w-full" />}
     </main>
   );
 }

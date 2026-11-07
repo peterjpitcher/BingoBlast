@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 import { buildIdFromEnv } from "@anchor-nights/kit/env";
 import { validateBuildEnv } from "./src/lib/env";
-import { EVENT_IMAGE_HOST, EVENT_IMAGE_PATH_PREFIX } from "./src/lib/events-feed/image-host";
+import { EVENT_IMAGE_REMOTE_PATTERN } from "@anchor-nights/kit/events/image-host";
 
 // Fails the build (and `next dev` start-up) with a message naming any missing or
 // malformed variable, rather than shipping and failing on a pub night.
@@ -19,17 +19,9 @@ const nextConfig: NextConfig = {
   },
   images: {
     // Event artwork from the management app's event-images bucket, and nothing
-    // else. The projection drops any image URL outside this pattern
-    // (src/lib/events-feed/image-host.ts), so next/image never refuses one.
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: EVENT_IMAGE_HOST,
-        port: "",
-        pathname: `${EVENT_IMAGE_PATH_PREFIX}**`,
-        search: "",
-      },
-    ],
+    // else. The kit's events feed drops any image URL outside this pattern
+    // (@anchor-nights/kit/events/image-host), so the optimiser never refuses one.
+    remotePatterns: [EVENT_IMAGE_REMOTE_PATTERN],
   },
 };
 
