@@ -657,6 +657,45 @@ export interface Database {
         }
         Relationships: []
       }
+      /**
+       * Redacted technical failures from src/lib/report-error.ts, written by
+       * /api/errors with the service role. anon and authenticated hold no
+       * privilege on it; admins read it through list_app_errors_safe. See
+       * supabase/migrations/20261106194703_app_errors.sql.
+       */
+      app_errors: {
+        Row: {
+          id: string
+          created_at: string
+          source: string
+          message: string
+          digest: string | null
+          path: string | null
+          context: Record<string, unknown>
+          user_agent: string | null
+        }
+        Insert: {
+          id?: string
+          created_at?: string
+          source: string
+          message: string
+          digest?: string | null
+          path?: string | null
+          context?: Record<string, unknown>
+          user_agent?: string | null
+        }
+        Update: {
+          id?: string
+          created_at?: string
+          source?: string
+          message?: string
+          digest?: string | null
+          path?: string | null
+          context?: Record<string, unknown>
+          user_agent?: string | null
+        }
+        Relationships: []
+      }
       snowball_pot_history: {
         Row: {
           id: string
@@ -889,6 +928,14 @@ export interface Database {
       list_unsettled_snowball_games: {
         Args: { p_session_id?: string | null }
         Returns: UnsettledSnowballGameRow[]
+      }
+      /**
+       * The newest error reports, at most 200 (50 by default). Admin only:
+       * raises "unauthorized: admin role required" for anyone else.
+       */
+      list_app_errors_safe: {
+        Args: { p_limit?: number }
+        Returns: Database['public']['Tables']['app_errors']['Row'][]
       }
       delete_game_safe: { Args: { p_game_id: string }; Returns: undefined }
       delete_session_safe: { Args: { p_session_id: string }; Returns: undefined }

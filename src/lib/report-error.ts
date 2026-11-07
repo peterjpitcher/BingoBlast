@@ -2,13 +2,14 @@
 //
 // Where a technical failure goes so somebody can find it the morning after.
 //
-// WHY THIS IS NOT A DATABASE TABLE
-//   The obvious design is an errors table. It is the wrong one: the failures
-//   that matter most on a bingo night are Supabase being unreachable, and a sink
-//   that lives inside the thing that broke records nothing at exactly the moment
-//   you need it. The business audit trail belongs in the database, because it is
-//   a record of what the pub did. Technical failures belong outside it, because
-//   they are a record of the database not answering.
+// WHERE THE REPORTS GO
+//   ERROR_SINK_URL points at this app's own /api/errors route, which stores the
+//   report in public.app_errors (spec assumption A3, Anchor Nights standard, 6
+//   November 2026: no paid service) and lists it on /admin/errors. The obvious
+//   objection still stands and is accepted: when Supabase itself is down, the
+//   insert fails too. That is why the console line below goes out first and
+//   unconditionally, so Vercel's logs still hold the failure that the table
+//   could not.
 //
 // WHY A GENERIC ENDPOINT RATHER THAN AN SDK
 //   Installing an error-tracking SDK changes the build, adds a large dependency
@@ -26,25 +27,15 @@
 //   This app deliberately does not identify players. An error reporter that
 //   ships raw Postgres detail undoes that in one line: Postgres puts the failing
 //   ROW into DETAIL on a constraint violation, so an un-redacted winners insert
-//   failure would post prize amounts, and once upon a time customer names, to a
-//   third party. Only the message and code are ever sent, uuids are stripped,
-//   and anything that looks like a pound amount is masked.
+//   failure would post prize amounts, and once upon a time customer names, to the
+//   sink. Only the message and code are ever sent, and src/lib/redact.ts masks
+//   uuids, email addresses, phone numbers and pound amounts.
 
 import { logActionFailure } from '@/lib/log-action-failure';
-
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const MONEY_RE = /£\s?\d[\d,]*(\.\d{1,2})?/g;
-const EMAIL_RE = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
+import { redact } from '@/lib/redact';
 
 /** How long to wait before giving up on the sink. A slow sink must never slow a game. */
 const SINK_TIMEOUT_MS = 2000;
-
-function redact(value: string): string {
-  return value
-    .replace(UUID_RE, '[uuid]')
-    .replace(EMAIL_RE, '[email]')
-    .replace(MONEY_RE, '[amount]');
-}
 
 /**
  * Pulls the safe fields off an unknown thrown value.

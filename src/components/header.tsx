@@ -20,6 +20,7 @@ const NAV_ITEMS = [
   { href: '/admin', label: 'Sessions' },
   { href: '/admin/snowball', label: 'Snowball' },
   { href: '/admin/history', label: 'Winners' },
+  { href: '/admin/errors', label: 'Errors' },
   { href: '/host', label: 'Host console' },
 ];
 

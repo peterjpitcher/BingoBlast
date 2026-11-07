@@ -372,6 +372,11 @@ psql_strict -d "$db" -f "$HERE/claims.test.sql" >/dev/null
 
 echo "==> suite $suite: jackpot money components (M3)"
 psql_strict -d "$db" -f "$HERE/money.test.sql" >/dev/null
+
+# 20261106194703: the error reports table is service-role only, and the admin
+# read refuses everyone but an admin. Acts as anon and authenticated directly.
+echo "==> suite $suite: app_errors (error reports)"
+psql_strict -d "$db" -f "$HERE/app-errors.test.sql" >/dev/null
 }
 
 # ---------------------------------------------------------------------------

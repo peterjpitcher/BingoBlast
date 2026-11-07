@@ -215,6 +215,10 @@ export const NEVER_ALLOWLIST: readonly string[] = [
   'delete_session_safe',
   'reset_session_safe',
   'update_game_safe',
+  // The admin read of the error reports (20261106194703_app_errors.sql). The
+  // app_errors table itself is not on ANON_ALLOWLIST, so the live check fails
+  // if anon ever gains any privilege on it.
+  'list_app_errors_safe',
   // Trigger functions. Nothing should call these directly, least of all anon.
   'bump_game_state_version',
   'handle_new_user',

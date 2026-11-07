@@ -12,8 +12,10 @@
 //
 // Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin comes from
 // src/lib/site-origin.ts, which falls back to Vercel's own production or
-// preview address) and SUPABASE_SERVICE_ROLE_KEY (production does not set it;
-// only /api/setup uses it).
+// preview address) and SUPABASE_SERVICE_ROLE_KEY on its own (only /api/setup
+// and /api/errors use it). Once ERROR_SINK_URL is set, though, the sink needs
+// a token and, on Vercel production, the service role key to store anything,
+// so those become required together.
 
 /**
  * Whether production builds need the management API key for the events feed.
@@ -30,6 +32,9 @@ export const EVENTS_FEED_REQUIRED = true;
  * passes; the point is to reject text that is plainly not a key.
  */
 const MANAGEMENT_API_KEY_SHAPE = /^anch_[A-Za-z0-9_-]{20,}$/;
+
+/** The shortest ERROR_SINK_TOKEN accepted: long enough that guessing it is hopeless. */
+export const ERROR_SINK_TOKEN_MIN_LENGTH = 32;
 
 export interface PublicSupabaseEnv {
   url: string;
@@ -163,6 +168,25 @@ export function validateBuildEnv(options: ValidateBuildEnvOptions = {}): void {
   if (apiBaseUrl) {
     const problem = apiBaseUrlProblem(apiBaseUrl, isProduction);
     if (problem) problems.push(`ANCHOR_API_BASE_URL ${problem} (got "${apiBaseUrl}").`);
+  }
+
+  // The error sink (src/app/api/errors/route.ts) refuses every report without
+  // a matching bearer token, and cannot store one without the service role.
+  // Setting the URL without them would ship reporting that records nothing,
+  // which is the state this replaced. Values are never put in the message.
+  const sinkUrl = process.env.ERROR_SINK_URL?.trim();
+  if (sinkUrl) {
+    const problem = apiBaseUrlProblem(sinkUrl, isProduction);
+    if (problem) problems.push(`ERROR_SINK_URL ${problem}.`);
+    const sinkToken = process.env.ERROR_SINK_TOKEN?.trim() ?? '';
+    if (sinkToken.length < ERROR_SINK_TOKEN_MIN_LENGTH) {
+      problems.push(
+        `ERROR_SINK_TOKEN must be set to a random value of at least ${ERROR_SINK_TOKEN_MIN_LENGTH} characters when ERROR_SINK_URL is set.`,
+      );
+    }
+    if (isProduction && !process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
+      problems.push('SUPABASE_SERVICE_ROLE_KEY is not set, and production needs it to store error reports when ERROR_SINK_URL is set.');
+    }
   }
 
   if (problems.length > 0) {
