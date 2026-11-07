@@ -148,6 +148,7 @@ Rollback note: the pre-2026-07-29 application reads `call_delay_seconds` as the 
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public | yes | `utils/supabase/{client,server,middleware}.ts`, `app/login/page.tsx` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only | yes | `app/api/setup/route.ts` only. The host actions no longer use it: every host write goes through a cookie-client RPC |
 | `SETUP_SECRET` | Server-only | yes | `app/api/setup/route.ts` |
-| `NEXT_PUBLIC_SITE_URL` | Public | yes | `app/display/[sessionId]/page.tsx` — fallback origin for the player follower QR URL when request headers are unavailable in production |
+| `NEXT_PUBLIC_SITE_URL` | Public | yes | The QR origin (`getSiteOrigin` in `@anchor-nights/kit/qr`); required on a Vercel production build (`lib/env.ts`, row C-7) |
+| `NEXT_PUBLIC_QUIZ_NIGHT_URL`, `NEXT_PUBLIC_MUSIC_BINGO_URL`, `NEXT_PUBLIC_TASTING_NIGHT_URL` | Public | yes | `lib/other-nights.ts`: the front page's "Other nights" row; optional, origins only (`lib/env.ts`) |
 
 See [[overview]] for the full stack profile.

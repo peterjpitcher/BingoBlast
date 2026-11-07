@@ -20,7 +20,7 @@ The full Product Requirements Document (PRD) is available in [docs/PRD.md](docs/
    ```
 
 2. **Environment Setup:**
-   Copy `.env.example` to `.env.local` and fill in your Supabase credentials and `SETUP_SECRET`. For production deployments, also set `NEXT_PUBLIC_SITE_URL` to your public origin (e.g. `https://bingo.theanchor.pub`) so the display QR builds an absolute join URL.
+   Copy `.env.example` to `.env.local` and fill in your Supabase credentials and `SETUP_SECRET`. Production builds also need `NEXT_PUBLIC_SITE_URL`, the public origin every QR code uses (`https://bingo.the-anchor.pub` once that domain is live); the build fails without it. See `.env.example` for the optional sister-night addresses on the front page.
    ```bash
    cp .env.example .env.local
    ```
