@@ -153,7 +153,7 @@ test('no previous reveal means no dwell, even just after page load', () => {
 
 // --- Clock skew -------------------------------------------------------------
 //
-// The caller passes nowMs = Date.now() + clock offset (src/lib/clock-offset.ts).
+// The caller passes nowMs = Date.now() + clock offset (useClockOffset in @anchor-nights/kit/tv).
 
 test('a TV clock five seconds FAST is corrected, so the delay is kept', () => {
   const deviceNow = SERVER_NOW + 5000; // the TV thinks it is five seconds later

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 
 /**
  * The server's clock, for the public screens' clock offset
- * (src/lib/clock-offset.ts). A TV whose own clock runs fast would otherwise
+ * (useClockOffset in @anchor-nights/kit/tv). A TV whose own clock runs fast would otherwise
  * see every ball as already old and skip the public reveal delay.
  *
  * Never cached: a cached reading is a wrong reading.

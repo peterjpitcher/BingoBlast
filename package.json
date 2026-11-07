@@ -18,16 +18,14 @@
     "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@anchor-nights/kit": "github:peterjpitcher/OJ-AnchorNights-kit#v1.1.0",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.91.0",
-    "clsx": "^2.1.1",
     "lucide-react": "^1.49.0",
     "next": "16.4.1",
-    "nosleep.js": "^0.12.0",
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "tailwind-merge": "^3.4.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {

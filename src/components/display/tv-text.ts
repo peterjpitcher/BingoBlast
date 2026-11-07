@@ -1,46 +1,15 @@
 // src/components/display/tv-text.ts
 //
-// Text sizes for the pub TV (spec 5.7). The sizes themselves are the
-// `text-tv-*` tokens in tailwind.config.ts, so the overhaul can restyle them
-// in one place; this file is how the TV uses them.
-//
-// Use tvText(). cn() in src/lib/utils.ts now knows the `text-tv-*` sizes
-// (TV_FONT_SIZES), so cn('text-tv-base', 'text-anchor-cream-text') keeps both,
-// but before that fix tailwind-merge read them as text colours and silently
-// dropped the size. tvText() merges the other classes and adds the size
-// afterwards, so the size is always present whatever else is passed.
+// Text sizes for the pub TV (spec 5.7). The `text-tv-*` sizes and tvText()
+// come from the shared kit (@anchor-nights/kit/tv and its tokens.css);
+// tvText() merges the other classes and adds the size afterwards, so the size
+// is always present whatever else is passed. Re-exported here beside the
+// sizes that are Cash Bingo's own (TV_SIZE), so the TV's files keep one import.
 //
 // Whole class names only: Tailwind cannot see a class built at runtime.
-import { type ClassValue } from 'clsx';
-import { cn } from '@/lib/utils';
+import { TV_KICKER_CLASS } from '@anchor-nights/kit/tv';
 
-export type TvTextSize = 'xs' | 'sm' | 'base' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl';
-
-const TV_TEXT_CLASS: Record<TvTextSize, string> = {
-  // Any text: 32px at 1920x1080, 22px at 1280x720.
-  xs: 'text-tv-xs',
-  // Second lines under a headline or title: 38px and 26px.
-  sm: 'text-tv-sm',
-  // Key information (prize, stage, snowball, game and colour, verdicts): 44px and 30px.
-  base: 'text-tv-base',
-  // Slide and card titles: 56px and 37px.
-  lg: 'text-tv-lg',
-  // Screen headlines: 70px and 47px.
-  xl: 'text-tv-xl',
-  // A headline that is the whole slide: 86px and 58px.
-  '2xl': 'text-tv-2xl',
-  // A long headline that is the whole screen ("Next game coming up"): 119px and 79px.
-  '3xl': 'text-tv-3xl',
-  // The one width-based size: 144px and 128px. Not used since the Anchor
-  // restyle: the win takes TV_SIZE.win, which is sized by height like the rest.
-  '4xl': 'text-tv-4xl',
-};
-
-/** A TV text size plus any other classes, merged safely. */
-export function tvText(size: TvTextSize, ...classes: ClassValue[]): string {
-  const rest = cn(...classes);
-  return rest ? `${TV_TEXT_CLASS[size]} ${rest}` : TV_TEXT_CLASS[size];
-}
+export { TV_KICKER_CLASS, tvText, type TvTextSize } from '@anchor-nights/kit/tv';
 
 /**
  * Sizes the Anchor design asks for that are not on the token scale. Each is
@@ -74,13 +43,6 @@ export const TV_SIZE = {
   /** 200px (133px): the win. */
   win: 'text-[length:clamp(133px,18.5vh,300px)]',
 } as const;
-
-/**
- * The kicker (section label) on the TV: the `.kicker` treatment from
- * globals.css (Outfit 600, tracked, gold, in capitals through CSS) at the TV
- * floor size instead of its 12px.
- */
-export const TV_KICKER_CLASS = tvText('xs', 'kicker');
 
 /**
  * The label that keeps the part of the night in view on a slide that is about

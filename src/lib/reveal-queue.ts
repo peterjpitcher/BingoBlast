@@ -18,7 +18,7 @@
  *
  * Two clocks, deliberately:
  *   - `nowMs` is the device clock corrected by the server clock offset
- *     (src/lib/clock-offset.ts), and is only ever compared with `lastCallAtMs`,
+ *     (useClockOffset in @anchor-nights/kit/tv), and is only ever compared with `lastCallAtMs`,
  *     which is a server timestamp. Uncorrected, a TV clock running fast made
  *     every ball look old and removed the delay (X12d).
  *   - `monotonicNowMs`, `lastRevealAtMs` and `newestSeenAtMs` are

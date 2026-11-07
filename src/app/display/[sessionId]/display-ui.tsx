@@ -40,16 +40,12 @@ import { planReveal } from '@/lib/reveal-queue';
 import { DEFAULT_PUBLIC_CALL_DELAY_SECONDS, PUBLIC_MIN_DWELL_MS } from '@/lib/call-timing';
 import { createPollRunner, type PollRunner } from '@/lib/poll-runner';
 import { KITCHEN_OPEN_UNTIL, isReviewInviteEnabled } from '@/lib/venue-links';
-import { useConnectionHealth } from '@/hooks/use-connection-health';
+import { useConnectionHealth, useClockOffset, useWakeLock, ConnectionBanner } from '@anchor-nights/kit/tv';
 import { useRealtimeChannel } from '@/hooks/use-realtime-channel';
-import { useClockOffset } from '@/hooks/use-clock-offset';
 import { useBuildCheck } from '@/hooks/use-build-check';
 import { isPublicReloadSafe } from '@/lib/build-check';
-import { useWakeLock } from '@/hooks/wake-lock';
-import { ConnectionBanner } from '@/components/connection-banner';
 import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
-import { cardClass } from '@/components/ui/card';
-import { AnchorLogo, Grain } from '@/components/ui/logo';
+import { cardClass, AnchorLogo, Grain } from '@anchor-nights/kit/ui';
 import { ClaimBalls, ClaimPanel } from '@/components/display/claim-panel';
 import { CORNER_QR_CARD_WIDTH, FollowAlongSlide, FollowQrBadge } from '@/components/display/follow-qr';
 import { RulesSlide } from '@/components/display/rules-slide';
@@ -823,7 +819,7 @@ export default function DisplayUI({
 
   // New releases: reload by itself, but only with no game in progress or on a
   // break. Never while numbers are being called, a claim check or a win.
-  useBuildCheck({ mode: 'auto', safe: isPublicReloadSafe(currentGameState) });
+  useBuildCheck({ mode: 'auto', isSafeToReload: () => isPublicReloadSafe(currentGameState) });
 
   // The rest of the night: game numbers, the next game and the rules' pot.
   // Re-read whenever the session row moves on (a game starts or finishes).

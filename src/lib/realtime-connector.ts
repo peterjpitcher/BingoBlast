@@ -26,7 +26,7 @@
 //     for a topic it already holds, including one that is still leaving, so a
 //     reused topic can hand back a channel that is about to close.
 
-import type { RealtimeStatus } from './connection-health';
+import type { RealtimeStatus } from '@anchor-nights/kit/tv';
 
 export const REALTIME_BACKOFF_BASE_MS = 1000;
 export const REALTIME_BACKOFF_MAX_MS = 30_000;

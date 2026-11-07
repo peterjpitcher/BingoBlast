@@ -2,7 +2,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ChevronLeft, LogOut } from "lucide-react";
 import { signout } from "@/app/login/actions";
-import { AnchorLogo } from "@/components/ui/logo";
+import { AnchorLogo } from "@anchor-nights/kit/ui";
 
 interface HostHeaderProps {
   /** The first line: "Host console", or the session name on the live game. */

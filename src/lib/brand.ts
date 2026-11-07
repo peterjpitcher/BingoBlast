@@ -1,8 +1,8 @@
 // src/lib/brand.ts
 //
 // Brand values that have to be passed as a literal colour to something that
-// cannot read a CSS variable. Everything else uses the Tailwind names in
-// tailwind.config.ts, which read the variables in globals.css.
+// cannot read a CSS variable. Everything else uses the Tailwind names from
+// the shared kit's tokens.css (@anchor-nights/kit/tokens.css).
 
 /**
  * The QR code's ink: Anchor green on a white tile. `qrcode.react` writes it

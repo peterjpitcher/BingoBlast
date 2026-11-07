@@ -63,7 +63,7 @@ Action files live alongside the page that consumes them, so the immediate caller
 | `@supabase/ssr` (cookie-based SSR) | `src/utils/supabase/client.ts`, `src/utils/supabase/server.ts`, `src/utils/supabase/middleware.ts` |
 | `@supabase/supabase-js` (service-role admin client + types) | `src/app/api/setup/route.ts` (the only service-role client), plus types in `src/app/admin/actions.ts`, `src/app/admin/sessions/[id]/actions.ts`, `src/app/admin/snowball/actions.ts`, `src/app/host/actions.ts`. The host actions use the cookie client only |
 | `qrcode.react` | `src/app/display/[sessionId]/display-ui.tsx`: the QR points at the public follow-along link (`/play`, which redirects to `/player/[sessionId]`), NOT a join-a-card flow |
-| `nosleep.js` | `src/hooks/wake-lock.ts` (consumed by host/display/player game screens) |
+| `@anchor-nights/kit` (shared kit, git tag `v1.1.0`) | Tokens (`src/app/globals.css`), UI primitives, TV plumbing (`useWakeLock`, `useConnectionHealth`, `ConnectionBanner`, `useBuildCheck`, `useClockOffset`, `tvText`), QR origin, dates, env checks and the error reporter, across the host, display, player and admin screens |
 | `zod` | Form validation across server actions (declared in `package.json`) |
 
 ## Shared Helpers (`src/lib/`, `src/hooks/`, `src/components/`)
@@ -73,16 +73,15 @@ These cross-cutting helpers underpin the live-event reliability work and are imp
 | Helper | Used by |
 |--------|---------|
 | `src/lib/game-state-version.ts` (`isFreshGameState`) | Host control client, `display-ui.tsx`, `player-ui.tsx` — drops out-of-order Realtime/polling payloads using `state_version` |
-| `src/lib/connection-health.ts` | `src/hooks/use-connection-health.ts` — pure reducer for the connection-health state machine |
 | `src/lib/prize-validation.ts` (`validateGamePrizes`) | `src/app/admin/sessions/[id]/actions.ts` (`createGame`, `updateGame`) |
 | `src/lib/win-stages.ts` (`getRequiredSelectionCountForStage`, etc.) | `game-control.tsx`, `display-ui.tsx`, `player-ui.tsx`. The claim count itself is decided server-side by `required_claim_count` in `check_claim` |
 | `src/lib/log-error.ts` | Server actions and route handlers — shared error logger |
 | `src/lib/jackpot.ts`, `src/lib/snowball.ts` | Whether to ask for a cash jackpot amount and reading the typed amount (`host/actions.ts`); `formatCashJackpotPrize` is the format `start_game` writes; snowball window helpers on the host, TV and phone screens |
 | `src/lib/claim-request-id.ts` (`newClaimRequestId`) | `game-control.tsx`: mints the claim attempt, the call key and the manual snowball award key |
 | `src/lib/claim-draft-queue.ts` | `game-control.tsx`: one `setClaimDraft` at a time, newest list wins |
-| `src/hooks/use-connection-health.ts` | `display-ui.tsx`, `player-ui.tsx` — drives the "Reconnecting…" banner |
-| `src/hooks/wake-lock.ts` (`nosleep.js`) | Host control client, `display-ui.tsx`, `player-ui.tsx` |
-| `src/components/connection-banner.tsx` | `display-ui.tsx`, `player-ui.tsx` — shared "Reconnecting…" banner with auto-refresh |
+| `useConnectionHealth`, `ConnectionBanner` (`@anchor-nights/kit/tv`) | Host control client, `display-ui.tsx`, `player-ui.tsx`: the Reconnecting banner, and the reload of last resort |
+| `useWakeLock` (`@anchor-nights/kit/tv`) | Host control client, `display-ui.tsx`, `player-ui.tsx`, the display lobby |
+| `src/hooks/use-build-check.ts` (the kit's `useBuildCheck` with this app's build id and storage key) and `src/lib/build-check.ts` (`isPublicReloadSafe`) | Host control client, `display-ui.tsx`, `player-ui.tsx`, the display lobby |
 
 ## Auth Flow Map
 

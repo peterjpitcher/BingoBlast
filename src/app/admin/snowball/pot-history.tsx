@@ -1,7 +1,6 @@
 import React from 'react';
 
-import { Card } from '@/components/ui/card';
-import { Badge, type BadgeVariant } from '@/components/ui/badge';
+import { Card, Badge, type BadgeVariant } from '@anchor-nights/kit/ui';
 import { formatPounds } from '@/lib/snowball';
 import { formatShortDateTimeInLondon } from '@/lib/dates';
 import type { Database } from '@/types/database';

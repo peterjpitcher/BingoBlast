@@ -34,7 +34,7 @@ App Router maps `src/app/<segments>/page.tsx` → URL paths. Dynamic segments us
 | URL | Method(s) | File | Auth |
 |-----|-----------|------|------|
 | `/api/setup` | `GET` (returns 405), `POST` | `src/app/api/setup/route.ts` | `x-setup-secret` header validated against `SETUP_SECRET` with `timingSafeEqual`; uses `SUPABASE_SERVICE_ROLE_KEY` for privileged DB ops; returns 404 if `SETUP_SECRET` is unset |
-| `/api/time` | `GET` | `src/app/api/time/route.ts` | Public. The server clock, for the public screens' clock offset (`src/lib/clock-offset.ts`). Never cached |
+| `/api/time` | `GET` | `src/app/api/time/route.ts` | Public. The server clock, for the public screens' clock offset (`useClockOffset` in `@anchor-nights/kit/tv`). Never cached |
 | `/api/build` | `GET` | `src/app/api/build/route.ts` | Public. The deployment this server runs, compared with the id baked into a long-open TV's bundle (`src/lib/build-check.ts`) to spot a new release; `dev` outside Vercel |
 | `/api/screen/events` | `GET` | `src/app/api/screen/events/route.ts` | Public. Upcoming events for the TV and phones from the management app's feed. Takes no parameters, so there is one cached answer for everyone; the projection is cached for five minutes and the response by the CDN for a minute |
 

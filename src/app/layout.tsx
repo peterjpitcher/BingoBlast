@@ -6,23 +6,24 @@ import { LayoutContent } from "@/components/layout-content";
 // The Anchor brand type. DM Serif Display carries headlines, prize figures and
 // large counts; it has one weight and is never faux-bolded. Outfit is the body
 // and every numeral on a ball. Clicker Script is the brand line and the warm
-// asides, used sparingly.
+// asides, used sparingly. The variable names are the ones the kit's
+// tokens.css reads (FONT_VARIABLES in @anchor-nights/kit/tokens).
 const displayFont = DM_Serif_Display({
-  variable: "--font-display",
+  variable: "--font-dm-serif",
   weight: "400",
   subsets: ["latin"],
   display: "swap",
 });
 
 const bodyFont = Outfit({
-  variable: "--font-body",
+  variable: "--font-outfit",
   weight: ["400", "500", "600", "700"],
   subsets: ["latin"],
   display: "swap",
 });
 
 const scriptFont = Clicker_Script({
-  variable: "--font-script",
+  variable: "--font-clicker",
   weight: "400",
   subsets: ["latin"],
   display: "swap",

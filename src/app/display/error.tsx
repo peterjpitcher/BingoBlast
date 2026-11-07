@@ -5,7 +5,7 @@
 // it shows a calm holding screen and gets itself back (src/hooks/use-error-recovery.ts).
 // Every size is a TV token, so nothing is below the 32px / 22px floor.
 
-import { Grain } from '@/components/ui/logo';
+import { Grain } from '@anchor-nights/kit/ui';
 import { TV_KICKER_CLASS, tvText } from '@/components/display/tv-text';
 import { useErrorRecovery } from '@/hooks/use-error-recovery';
 

@@ -1,8 +1,6 @@
 import * as React from 'react';
 import { Check, TriangleAlert, X, type LucideIcon } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Kicker } from '@/components/ui/kicker';
+import { Badge, Button, Kicker } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 
 // Presentational pieces of the host's live game screen. Props in, markup out:

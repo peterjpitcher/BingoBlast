@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { createRealtimeConnector, type RealtimeConnector } from '@/lib/realtime-connector';
-import type { RealtimeStatus } from '@/lib/connection-health';
+import type { RealtimeStatus } from '@anchor-nights/kit/tv';
 
 /** The part of a Supabase client this hook needs. */
 export interface RealtimeCapableClient {

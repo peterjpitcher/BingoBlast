@@ -7,13 +7,8 @@ import { Database } from '@/types/database';
 import { endNight, settleSnowballPotForGame, startGame } from './actions';
 import type { UnsettledSnowballGame } from './claim-action-types';
 import { ChevronDown } from 'lucide-react';
-import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Kicker } from '@/components/ui/kicker';
+import { Card, Button, Badge, Kicker, Modal, Input, fieldLabelClass } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
-import { Modal } from '@/components/ui/modal';
-import { Input, fieldLabelClass } from '@/components/ui/input';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {

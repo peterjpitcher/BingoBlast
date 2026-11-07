@@ -3,7 +3,7 @@ import { unstable_rethrow } from 'next/navigation';
 import { createClient } from '@/utils/supabase/server';
 import { Header } from '@/components/header';
 import { copyrightText } from '@/components/copyright-line';
-import { Grain } from '@/components/ui/logo';
+import { Grain } from '@anchor-nights/kit/ui';
 
 interface AdminHeaderState {
   email: string | null;

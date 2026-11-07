@@ -13,7 +13,7 @@ import {
   realtimeBackoffMs,
   type RealtimeConnectorOptions,
 } from './realtime-connector';
-import type { RealtimeStatus } from './connection-health';
+import type { RealtimeStatus } from '@anchor-nights/kit/tv';
 
 type SubscribeCallback = (status: string, err?: Error) => void;
 

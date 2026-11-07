@@ -5,10 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { login } from './actions';
 import { BrandBackdrop } from '@/components/brand-backdrop';
 import { CopyrightLine } from '@/components/copyright-line';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Input, fieldLabelClass } from '@/components/ui/input';
-import { AnchorLogo } from '@/components/ui/logo';
+import { Button, Card, Input, fieldLabelClass, AnchorLogo } from '@anchor-nights/kit/ui';
 
 function LoginPageContent() {
   const searchParams = useSearchParams();

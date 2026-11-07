@@ -4,7 +4,7 @@ import { Database } from '@/types/database';
 import { CALL_RESPONSES, HOW_TO_WIN, getHouseRules } from '@/lib/house-rules';
 import { getColourName } from '@/lib/colour-name';
 import { formatPounds } from '@/lib/snowball';
-import { Kicker } from '@/components/ui/kicker';
+import { Kicker } from '@anchor-nights/kit/ui';
 
 type Game = Database['public']['Tables']['games']['Row'];
 type SnowballPot = Database['public']['Tables']['snowball_pots']['Row'];

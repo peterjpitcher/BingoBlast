@@ -3,8 +3,7 @@ import { createClient } from '@/utils/supabase/server';
 import { Database } from '@/types/database';
 import { redirect } from 'next/navigation';
 import { formatDateInLondon } from '@/lib/dates';
-import { Card } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
+import { Card, Kicker } from '@anchor-nights/kit/ui';
 
 type GameWithGameState = Database['public']['Tables']['games']['Row'] & {
   game_states: Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence'> | null;

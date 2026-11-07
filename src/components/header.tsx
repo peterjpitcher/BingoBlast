@@ -4,9 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signout } from '@/app/login/actions';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { AnchorLogo } from '@/components/ui/logo';
+import { Badge, Button, AnchorLogo } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 
 interface HeaderProps {

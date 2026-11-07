@@ -2,10 +2,7 @@ import { redirect } from 'next/navigation';
 
 import { signout } from '@/app/login/actions';
 import { BrandBackdrop } from '@/components/brand-backdrop';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
-import { AnchorLogo } from '@/components/ui/logo';
+import { Button, Card, Kicker, AnchorLogo } from '@anchor-nights/kit/ui';
 import { createClient } from '@/utils/supabase/server';
 import type { Database } from '@/types/database';
 

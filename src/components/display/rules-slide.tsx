@@ -13,7 +13,7 @@
 import React from 'react';
 import { CALL_RESPONSES, HOW_TO_WIN } from '@/lib/house-rules';
 import { cn } from '@/lib/utils';
-import { cardClass } from '@/components/ui/card';
+import { cardClass } from '@anchor-nights/kit/ui';
 import { TV_KICKER_CLASS, TV_STATUS_LABEL_CLASS, tvText } from './tv-text';
 
 interface RulesSlideProps {

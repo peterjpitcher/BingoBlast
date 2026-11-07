@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { BRAND_RADII, BRAND_SHADOWS, TV_FONT_SIZES, cn } from './utils';
 
 test('a TV size and a text colour are both kept', () => {
@@ -29,12 +30,6 @@ test('every TV size is known, and colours still merge as before', () => {
   assert.equal(cn('text-white', 'text-slate-400'), 'text-slate-400');
 });
 
-test('the list matches the sizes in tailwind.config.ts', () => {
-  const config = readFileSync(new URL('../../tailwind.config.ts', import.meta.url), 'utf8');
-  const configured = [...config.matchAll(/"(tv-[a-z0-9]+)":\s*\[/g)].map((match) => match[1]);
-  assert.deepEqual([...configured].sort(), [...TV_FONT_SIZES].sort());
-});
-
 test('the brand radius and shadow names merge like the built-in ones', () => {
   assert.equal(cn('rounded-card', 'rounded-full'), 'rounded-full');
   assert.equal(cn('rounded-full', 'rounded-input'), 'rounded-input');
@@ -43,12 +38,21 @@ test('the brand radius and shadow names merge like the built-in ones', () => {
   assert.equal(cn('shadow-gold', 'text-anchor-sage'), 'shadow-gold text-anchor-sage');
 });
 
-test('the brand radius and shadow lists match tailwind.config.ts', () => {
-  const config = readFileSync(new URL('../../tailwind.config.ts', import.meta.url), 'utf8');
-  const block = (name: string): string[] => {
-    const body = new RegExp(`${name}:\\s*\\{([^}]*)\\}`).exec(config)?.[1] ?? '';
-    return [...body.matchAll(/^\s*([a-z]+):/gm)].map((match) => match[1]);
-  };
-  assert.deepEqual(block('borderRadius').sort(), [...BRAND_RADII].sort());
-  assert.deepEqual(block('boxShadow').sort(), [...BRAND_SHADOWS].sort());
+// cn() comes from the kit, and the sizes, radii and shadows from the kit's
+// tokens.css. If the kit adds a name to one and not the other, cn() would
+// silently drop a class on these screens, so the two are checked here too.
+const tokensCss = readFileSync(fileURLToPath(import.meta.resolve('@anchor-nights/kit/tokens.css')), 'utf8');
+const themeNames = (prefix: string): string[] =>
+  [...tokensCss.matchAll(new RegExp(`^\\s*--${prefix}-([a-z0-9-]+):`, 'gm'))]
+    .map((match) => match[1])
+    .filter((name) => !name.includes('--'));
+
+test('the TV size list matches the kit tokens', () => {
+  const sizes = themeNames('text').filter((name) => name.startsWith('tv-') && !name.endsWith('-line-height'));
+  assert.deepEqual([...new Set(sizes)].sort(), [...TV_FONT_SIZES].sort());
+});
+
+test('the brand radius and shadow lists match the kit tokens', () => {
+  assert.deepEqual(themeNames('radius').sort(), [...BRAND_RADII].sort());
+  assert.deepEqual(themeNames('shadow').sort(), [...BRAND_SHADOWS].sort());
 });

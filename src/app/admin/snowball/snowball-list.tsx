@@ -6,11 +6,7 @@ import { Database } from '@/types/database';
 import { archiveSnowballPot, createSnowballPot, resetSnowballPot, updateSnowballPot } from './actions';
 import { formatPounds } from '@/lib/snowball';
 import { formatPoundsAmount } from '@/lib/money';
-import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Kicker } from '@/components/ui/kicker';
-import { Modal } from '@/components/ui/modal';
-import { Input, fieldLabelClass } from '@/components/ui/input';
+import { Card, Button, Kicker, Modal, Input, fieldLabelClass } from '@anchor-nights/kit/ui';
 
 type SnowballPot = Database['public']['Tables']['snowball_pots']['Row'];
 

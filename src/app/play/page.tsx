@@ -16,10 +16,7 @@ import { logError } from '@/lib/log-error';
 import { getEventsProjection } from '@/lib/events-feed/projection';
 import type { EventsProjection } from '@/lib/playlist';
 import { PhoneEvents } from '@/components/display/phone-events';
-import { buttonClass } from '@/components/ui/button';
-import { cardClass } from '@/components/ui/card';
-import { Kicker } from '@/components/ui/kicker';
-import { AnchorLogo } from '@/components/ui/logo';
+import { buttonClass, cardClass, Kicker, AnchorLogo } from '@anchor-nights/kit/ui';
 
 interface PlayPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;

@@ -5,12 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Database } from '@/types/database';
 import { createSession, deleteSession, duplicateSession, updateSession } from './actions';
 import { formatDateInLondon } from '@/lib/dates';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button, buttonClass } from '@/components/ui/button';
-import { Kicker } from '@/components/ui/kicker';
-import { Modal } from '@/components/ui/modal';
-import { Input, fieldClass, fieldLabelClass } from '@/components/ui/input';
+import { Card, Badge, Button, buttonClass, Kicker, Modal, Input, fieldClass, fieldLabelClass } from '@anchor-nights/kit/ui';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
