@@ -5,6 +5,20 @@ import { signOutFromForm } from '@/app/auth/actions';
 import AdminDashboard from './dashboard';
 import { Button, Card, Kicker } from '@anchor-nights/kit/ui';
 import { readStaffProfile } from '@/lib/auth/staff-role';
+import { TvDevicesPanel } from '@anchor-nights/kit/pairing/screens';
+import { revokeTv } from '@/app/tv/actions';
+import { tvPairing } from '@/lib/tv-pairing';
+import { reportError } from '@/lib/report-error';
+
+/** The paired TVs, or null when they could not be read (shown as an error, never as "no TVs"). */
+async function listPairedTvs() {
+  try {
+    return await tvPairing().actions.listTvDevices();
+  } catch (error) {
+    await reportError({ scope: 'admin:listTvDevices' }, error);
+    return null;
+  }
+}
 
 export default async function AdminPage() {
   const supabase = await createClient();
@@ -39,6 +53,21 @@ export default async function AdminPage() {
     .select('*')
     .order('created_at', { ascending: false });
 
+  // Paired pub TVs (spec S3.1): admin only. listTvDevices re-checks the
+  // caller is an active admin and answers null otherwise or on an outage.
+  const tvs = await listPairedTvs();
+
   // The header, the footer and the page container come from the admin layout.
-  return <AdminDashboard sessions={sessions || []} />;
+  return (
+    <>
+      <AdminDashboard sessions={sessions || []} />
+      {tvs === null ? (
+        <p role="alert" className="text-[15px] text-anchor-danger-text">
+          The paired TVs could not be loaded. Refresh to try again; if it keeps failing, check /admin/errors.
+        </p>
+      ) : (
+        <TvDevicesPanel devices={tvs} revokeAction={revokeTv} />
+      )}
+    </>
+  );
 }
