@@ -15,7 +15,12 @@ gone wrong, or that the code says can go wrong.
       easier to fix now.
 - [ ] The snowball game is linked to the pot, and the pot figure is what you
       intend to announce.
-- [ ] The TV is on `/display` and showing the session.
+- [ ] The TV is on `/tv` (paired) or `/display`, and showing the session.
+      A new screen pairs once: open `/tv` on it, then type the 6-digit code
+      it shows into Pair a TV at the foot of `/host` (any host or admin).
+      `/tv` then finds tonight's session by itself. An admin can remove a
+      TV at the foot of `/admin`. If `/tv` shows "Reconnecting", it is
+      retrying by itself; `/display` stays public as a fallback.
 - [ ] The host device is signed in, and its screen timeout is off or the wake
       lock is active (the app asks for it; a tap grants it).
 
