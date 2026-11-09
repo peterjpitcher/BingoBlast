@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install
@@ -47,10 +47,13 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Twice, on purpose. `npm test` pins TZ=Europe/London, the business zone;
+      # `npm run test:utc` runs the same suite under UTC, which is what the
+      # Vercel serverless runtime uses. Date bugs that only show in one of the
+      # two (daylight saving, a night that crosses midnight) fail one of these.
       - name: Unit tests (Europe/London)
         run: npm test
 
-      # The serverless runtime runs in UTC: the same suite again in that zone.
       - name: Unit tests (UTC)
         run: npm run test:utc
 
@@ -100,7 +103,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install
