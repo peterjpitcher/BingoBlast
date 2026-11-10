@@ -14,8 +14,6 @@ name: CI
 #   before it merges.
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
