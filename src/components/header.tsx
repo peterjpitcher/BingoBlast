@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { signout } from '@/app/login/actions';
+import { signOutFromForm } from '@/app/auth/actions';
 import { Badge, Button, AnchorLogo } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 
@@ -19,6 +19,8 @@ const NAV_ITEMS = [
   { href: '/admin/snowball', label: 'Snowball' },
   { href: '/admin/history', label: 'Winners' },
   { href: '/admin/errors', label: 'Errors' },
+  { href: '/admin/staff', label: 'Staff' },
+  { href: '/account', label: 'Account' },
   { href: '/host', label: 'Host console' },
 ];
 
@@ -75,7 +77,7 @@ export function Header({ email, isNightRunning }: HeaderProps): React.ReactEleme
           {email ? (
             <span className="hidden max-w-[28ch] truncate text-sm text-anchor-sage xl:inline">{email}</span>
           ) : null}
-          <form action={signout}>
+          <form action={signOutFromForm}>
             <Button type="submit" variant="ghost" size="sm" tone="quiet" className="px-3.5">
               Sign out
             </Button>

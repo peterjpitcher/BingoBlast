@@ -1,9 +1,10 @@
 // src/app/admin/backup/page.tsx
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { Database } from '@/types/database';
 import { redirect } from 'next/navigation';
 import { formatDateInLondon } from '@/lib/dates';
 import { Card, Kicker } from '@anchor-nights/kit/ui';
+import { readStaffProfile } from '@/lib/auth/staff-role';
 
 type GameWithGameState = Database['public']['Tables']['games']['Row'] & {
   game_states: Pick<Database['public']['Tables']['game_states']['Row'], 'number_sequence'> | null;
@@ -18,11 +19,7 @@ export default async function AdminBackupPage() {
     redirect('/login');
   }
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+  const { data: profile } = await readStaffProfile(supabase);
 
   if (profile?.role !== 'admin') {
     redirect('/host');

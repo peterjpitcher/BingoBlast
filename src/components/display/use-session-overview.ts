@@ -12,7 +12,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { createClient } from '@/utils/supabase/client';
+import type { createClient } from '@/lib/supabase/client';
 import type { GameStatus, GameType } from '@/types/database';
 import type { SnowballRulePot } from '@/lib/house-rules';
 import { logError } from '@/lib/log-error';

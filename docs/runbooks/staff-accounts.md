@@ -1,24 +1,23 @@
 # Runbook: staff accounts
 
-**Owner:** Pete. **Last reviewed:** 25 August 2026.
+**Owner:** Pete. **Last reviewed:** 7 November 2026.
 
-Decision taken 25 August 2026: accounts are managed by hand in the Supabase
-dashboard rather than through a screen in the app. There is one admin and a
-handful of hosts, so a screen would be more code to maintain than it saves. If
-the pub ever has enough staff turnover that this becomes a chore, that is the
-signal to build one.
+From the kit sign-in (spec C-5, PR `feat/kit-auth`), staff accounts are managed
+in the app at **/admin/staff**, not in the Supabase dashboard. Until then
+(25 August to November 2026) accounts were made by hand in the dashboard and
+promoted by SQL; that route is now closed on purpose.
 
-## What changed, and why this runbook exists at all
+## Why it works this way
 
 Until 25 August 2026 anyone on the internet could create an account and it was
-granted the **host** role automatically, which is enough to run a live game.
-Sign-up is now switched off at the project, and even if it were switched back on
-a new account lands as **pending** and can reach nothing.
+granted the **host** role automatically. Now:
 
-That is the right shape, but it means there is now no self-service route in.
-Somebody has to know how to let a new member of staff in, or the tempting
-shortcut is to turn public sign-up back on. That shortcut reopens the hole this
-closed. Use the steps below instead.
+- There is no sign-up anywhere in the app, and sign-up is off at the project.
+- The database's Before User Created hook refuses any new account that is not
+  accepting an invite. **Creating a user in the Supabase dashboard fails** with
+  that hook on: that is intended, not a fault.
+- A leaver's access ends the moment they are deactivated, even if their browser
+  still holds a valid token: every staff table checks the account is active.
 
 ## The three roles
 
@@ -33,75 +32,61 @@ decisions and they stay with an admin.
 
 ## Adding a new member of staff
 
-1. Supabase dashboard, **Authentication**, **Users**, **Add user**, **Create new
-   user**. Enter their email and a temporary password. Tick **Auto Confirm
-   User**, otherwise they cannot sign in until they click an email.
-2. The database creates their profile automatically, as `pending`. They can sign
-   in at this point and will see "This account is not active yet".
-3. Give them the role. Supabase dashboard, **SQL Editor**:
+1. Sign in as an admin and open **/admin/staff**.
+2. Under **Invite**, enter their email and choose **host** (or **admin**).
+3. Copy the link it shows and send it to them yourself (text or WhatsApp). The
+   app does not email invites. The link works once, for 7 days; if it lapses,
+   cancel it and issue another.
+4. They open the link, set a password of at least 12 characters, and land on
+   their home screen with the role you chose.
 
-   ```sql
-   update public.profiles
-      set role = 'host'          -- or 'admin'
-    where email = 'them@example.com';
-   ```
+**Do not** turn "Allow new users to sign up" back on, or switch the Before User
+Created hook off, to make this easier. Those are what stop a stranger creating
+an account.
 
-4. Confirm it took, and that you changed exactly one person:
+## Changing someone's role
 
-   ```sql
-   select email, role from public.profiles order by role, email;
-   ```
-
-5. Tell them to sign in and change their password.
-
-**Do not** turn "Allow new users to sign up" back on to make this easier. That
-setting is what stops a stranger creating an account at all.
+**/admin/staff**, **Make admin** or **Make host** on their row. Role changes from
+the SQL editor still work (the service role is allowed) but leave no audit
+record, so use the screen.
 
 ## Removing access when someone leaves
 
-Two steps, and the second is the one people forget.
+**/admin/staff**, **Deactivate** on their row. That, in one step:
 
-1. Take the role away, which removes every permission immediately:
+- sets their role to pending and marks them deactivated, so every staff table
+  refuses them straight away, even with a token that has not expired;
+- bans the sign-in, so their saved sessions stop working on every device.
 
-   ```sql
-   update public.profiles set role = 'pending' where email = 'them@example.com';
-   ```
+If it reports that a step did not go through, press **Deactivate** again: it is
+safe to repeat. Nothing is deleted: their audit history stays, and recorded
+winners were always anonymous. **Give host access** or **Give admin access** on
+the same row brings back a rehire. **Sign out everywhere** on its own is for a
+lost phone, not a leaver.
 
-2. **Sign out their existing session.** Step 1 stops them doing anything, but
-   their browser may still hold a valid token for up to an hour. Supabase
-   dashboard, **Authentication**, **Users**, find them, and use the row menu to
-   sign the user out of all sessions. To remove the account entirely, delete the
-   user there; their profile row goes with it, and their recorded winners are
-   unaffected because winners are anonymous.
-
-**Timing:** the same night, if they left on bad terms. Otherwise the next time
-you think of it. A `pending` account cannot do anything even if they keep the
-tab open.
+**Timing:** the same night if they left on bad terms. Otherwise the next time
+you think of it.
 
 ## Forgotten password
 
-There is no password reset flow in the app. This is a known gap, recorded in the
-backlog, and until it is built:
-
-Supabase dashboard, **Authentication**, **Users**, find them, row menu, **Send
-password recovery**. They get an email with a link. Alternatively set a temporary
-password in the same menu and tell them what it is over the phone, not by
-message.
+They use **Forgot password** on the sign-in page. The email links to
+`/auth/confirm`, which lasts 60 minutes and works once. A signed-in member of
+staff changes their password at **/account**.
 
 ## When somebody says they cannot get in
 
 Work down this list. It is in order of likelihood.
 
-1. **They see "This account is not active yet"** on `/pending`. Their role is
-   `pending`. Do step 3 above.
-2. **They are bounced back to the login page.** Their session expired. Sign in
-   again. If it happens repeatedly within an hour, say so: that is a real bug
-   and was one of the things fixed on 25 August 2026.
-3. **They land on `/host` but every button refuses.** Their role is `host` but
-   somebody else's device holds the controller lock for that game. They can take
-   control from the game screen once the other device has been idle 30 seconds.
-4. **They see the admin screens but not what they expect.** Check their role is
-   actually `admin` with the query in step 4 above.
+1. **They see "not active yet" on `/pending`.** Their role is pending or they
+   were deactivated. Check their row at /admin/staff.
+2. **Their invite link says it is invalid.** It was used, cancelled or expired.
+   Issue a new one.
+3. **"Sign-in is unavailable".** Supabase, Turnstile or a sign-in setting in
+   Vercel is down or missing. Check `/admin/errors` and the Vercel environment
+   variables. This is the app failing closed, as designed.
+4. **They land on `/host` but every button refuses.** Somebody else's device
+   holds the controller lock for that game. They can take control from the game
+   screen once the other device has been idle 30 seconds.
 
 ## The bootstrap endpoint
 
@@ -115,8 +100,11 @@ time it is needed.
 
 ## Checking who has access, any time
 
+**/admin/staff** lists every account with its role and whether it is active.
+The same from the SQL editor:
+
 ```sql
-select p.email, p.role, p.created_at, u.last_sign_in_at
+select p.email, p.role, p.deactivated_at, u.last_sign_in_at
   from public.profiles p
   join auth.users u on u.id = p.id
  order by p.role, p.email;

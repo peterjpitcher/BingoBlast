@@ -147,18 +147,26 @@ export interface Database {
           email: string | null
           role: UserRole
           created_at: string
+          /**
+           * Set when an admin deactivates the account (the kit's leaver step,
+           * kit_deactivate_staff). Not null means no access, whatever the
+           * role says. Added by the kit_auth_profiles_and_gate migration.
+           */
+          deactivated_at: string | null
         }
         Insert: {
           id: string
           email?: string | null
           role?: UserRole
           created_at?: string
+          deactivated_at?: string | null
         }
         Update: {
           id?: string
           email?: string | null
           role?: UserRole
           created_at?: string
+          deactivated_at?: string | null
         }
         Relationships: [
           {
@@ -762,6 +770,12 @@ export interface Database {
       [_ in never]: never
     }
     Functions: {
+      // The kit's active-identity functions (kit_auth_profiles_and_gate).
+      // current_staff_role is the caller's role while they are active staff,
+      // 'pending' when they have a profile but no access, null with no profile.
+      current_staff_role: { Args: Record<string, never>; Returns: 'admin' | 'host' | 'pending' | null }
+      is_active_staff: { Args: Record<string, never>; Returns: boolean }
+      is_active_admin: { Args: Record<string, never>; Returns: boolean }
       assert_is_admin: { Args: Record<string, never>; Returns: undefined }
       // Host hot-path mutations. Defined in
       // supabase/migrations/20260729231945_atomic_host_mutations.sql. All four are

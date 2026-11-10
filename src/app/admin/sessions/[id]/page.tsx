@@ -1,9 +1,10 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import SessionDetail from './session-detail';
 import type { Database } from '@/types/database';
 import { isUuid } from '@/lib/utils';
+import { readStaffProfile } from '@/lib/auth/staff-role';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -28,11 +29,7 @@ export default async function SessionDetailPage({ params }: PageProps) {
     redirect('/login');
   }
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single<{ role: Database['public']['Tables']['profiles']['Row']['role'] }>();
+  const { data: profile } = await readStaffProfile(supabase);
 
   if (profile?.role !== 'admin') {
     redirect('/host');

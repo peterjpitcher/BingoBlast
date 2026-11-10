@@ -59,12 +59,19 @@ jobs:
 
       # The build needs the public Supabase env vars to exist, but never needs
       # them to be real: nothing in the build talks to Supabase. Placeholders
-      # keep the build honest without putting a live key in CI.
+      # keep the build honest without putting a live key in CI. The sign-in
+      # variables (the kit's AUTH_ENV) are required outside Vercel previews, so
+      # they get placeholders of the right shape too.
       - name: Build
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
           NEXT_PUBLIC_SITE_URL: https://placeholder.invalid
+          SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+          NEXT_PUBLIC_APP_URL: https://placeholder.invalid
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: placeholder-turnstile-site-key
+          TURNSTILE_SECRET_KEY: placeholder-turnstile-secret-key
+          AUDIT_HMAC_KEY: v1:placeholder-audit-hmac-key-for-ci-builds-only
         run: npm run build
 
   database:

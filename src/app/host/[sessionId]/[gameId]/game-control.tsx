@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { ClaimResult, Database, UserRole } from '@/types/database';
-import { createClient } from '@/utils/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 import { callNextNumber, toggleBreak, recordWinner, skipStage, voidLastNumber, resumeGame, toggleWinnerPrizeGiven, takeControl, sendHeartbeat, moveToNextGameOnBreak, moveToNextGameAfterWin, advanceToNextStage, voidWinnerFromHost, endGame, settleSnowballPotForGame, beginClaimCheck, setClaimDraft, checkClaim, undoLastNumberForClaim } from '@/app/host/actions';
 import type { ClaimSnapshot } from '@/app/host/claim-action-types';
 import type { ActionFailureCode, ActionResult } from '@/types/actions';

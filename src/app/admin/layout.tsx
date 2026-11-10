@@ -1,6 +1,6 @@
 import React from 'react';
 import { unstable_rethrow } from 'next/navigation';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { Header } from '@/components/header';
 import { copyrightText } from '@/components/copyright-line';
 import { Grain } from '@anchor-nights/kit/ui';

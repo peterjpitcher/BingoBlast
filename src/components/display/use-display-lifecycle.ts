@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { createClient } from '@/utils/supabase/client';
+import type { createClient } from '@/lib/supabase/client';
 import type { NightPhase } from '@/lib/night-phase';
 import { getTodayIsoDateInLondon, nextLondonFourAm } from '@/lib/dates';
 import {

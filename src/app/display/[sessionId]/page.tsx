@@ -1,5 +1,5 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import DisplayUI from './display-ui';

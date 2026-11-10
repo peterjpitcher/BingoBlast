@@ -1,5 +1,5 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { notFound } from 'next/navigation';
 import PlayerUI from './player-ui';
 import type { InitialLoadStatus } from './player-ui';

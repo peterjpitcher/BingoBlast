@@ -48,11 +48,11 @@ The full Product Requirements Document (PRD) is available in [docs/PRD.md](docs/
 - `src/app/host` — Host controller interface pages.
 - `src/app/display` — Public TV display interface pages.
 - `src/app/player` — Public mobile follower interface.
-- `src/app/login` — Staff login (invite-only — no public sign-up).
+- `src/app/login`, `src/app/invite`, `src/app/forgot-password`, `src/app/auth`, `src/app/account`: staff sign-in from `@anchor-nights/kit/auth` (invite-only, no public sign-up). Staff are managed at `/admin/staff`.
 - `src/app/api/setup` — `SETUP_SECRET`-gated bootstrap endpoint.
 - `src/lib` — Shared utilities (game-state versioning, prize validation, win stages, connection health, etc.).
 - `src/hooks` — `use-connection-health`, `wake-lock`.
 - `src/components` — Shared UI including `connection-banner` and `ui/*` primitives.
-- `src/utils/supabase` — Supabase client variants (browser, server, middleware-style session refresh).
-- `src/proxy.ts` — Next.js middleware export. Matcher is scoped to `/admin/:path*`, `/host/:path*`, and `/login` only.
+- `src/lib/supabase`: Supabase clients (browser, server, and the server-only service-role client). `src/lib/auth`: the kit's sign-in wired for this app.
+- `src/proxy.ts`: the kit's auth proxy (Next.js 16 `proxy()` export), on the staff and sign-in pages only; the public TV and phone pages stay off it.
 - `supabase/migrations` — DB schema (sessions, games, game_states + public mirror, winners, snowball pots).

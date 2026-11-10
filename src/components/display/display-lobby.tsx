@@ -16,7 +16,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/utils/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 import { formatDateInLondon, getTodayIsoDateInLondon } from '@/lib/dates';
 import {
   CANDIDATE_SESSION_STATUSES,
