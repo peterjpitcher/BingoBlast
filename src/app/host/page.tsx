@@ -8,6 +8,8 @@ import { Database } from '@/types/database';
 import { Button, Card, Kicker } from '@anchor-nights/kit/ui';
 import { HostHeader } from '@/components/host/host-header';
 import { readStaffProfile } from '@/lib/auth/staff-role';
+import { PairTvForm } from '@anchor-nights/kit/pairing/screens';
+import { pairTv } from '@/app/tv/actions';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
   games: (Database['public']['Tables']['games']['Row'] & {
@@ -85,6 +87,8 @@ export default async function HostPage() {
           unsettledSnowballGames={unsettled.success ? (unsettled.data ?? []) : []}
           settlementCheckFailed={!unsettled.success}
         />
+        {/* Pair a pub TV (spec S3.1): the screen opens /tv and shows a code. */}
+        <PairTvForm action={pairTv} />
       </main>
     </div>
   );

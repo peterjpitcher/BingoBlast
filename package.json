@@ -18,7 +18,7 @@
     "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@anchor-nights/kit": "github:peterjpitcher/OJ-AnchorNights-kit#v2.0.1",
+    "@anchor-nights/kit": "github:peterjpitcher/OJ-AnchorNights-kit#v2.1.0",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.119.0",
     "lucide-react": "^1.49.0",

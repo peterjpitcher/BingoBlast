@@ -7,7 +7,7 @@ import { Database } from '@/types/database';
 import { endNight, settleSnowballPotForGame, startGame } from './actions';
 import type { UnsettledSnowballGame } from './claim-action-types';
 import { ChevronDown } from 'lucide-react';
-import { Card, Button, Badge, Kicker, Modal, Input, fieldLabelClass } from '@anchor-nights/kit/ui';
+import { Card, Button, Badge, Kicker, Modal, Input, HoldButton, fieldLabelClass } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 
 type SessionWithGames = Database['public']['Tables']['sessions']['Row'] & {
@@ -165,21 +165,25 @@ export default function HostDashboard({
    * unplayed games stay unplayed and their snowball pot is untouched. Safe to
    * repeat: a night that has already ended is returned as it is.
    */
-  const handleConfirmEndNight = async () => {
-    if (!endNightTarget || isEndingNight) return;
+  // Hold-to-confirm (spec S4.2, row C-6): the HoldButton runs this once the
+  // hold is full. False tells it the night did not end, so it never shows done.
+  const handleConfirmEndNight = async (): Promise<boolean> => {
+    if (!endNightTarget || isEndingNight) return false;
     setIsEndingNight(true);
     setEndNightError(null);
     try {
       const result = await endNight(endNightTarget.sessionId);
       if (!result?.success) {
         setEndNightError(result?.error || 'Could not end the night. Try again.');
-        return;
+        return false;
       }
       setEndNightTarget(null);
       router.refresh();
+      return true;
     } catch (err) {
       console.error(err);
       setEndNightError('Could not reach the server to end the night. Check the connection and try again.');
+      return false;
     } finally {
       setIsEndingNight(false);
     }
@@ -538,14 +542,14 @@ export default function HostDashboard({
           <Button variant="ghost" size="sm" className="px-4" onClick={closeEndNight} disabled={isEndingNight}>
             Keep the night open
           </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => { void handleConfirmEndNight(); }}
+          <HoldButton
+            label="Hold to end the night"
+            danger
+            size={44}
+            className="sm:w-auto sm:min-w-[240px]"
+            onDone={handleConfirmEndNight}
             disabled={isEndingNight}
-          >
-            {isEndingNight ? 'Ending…' : 'End the night'}
-          </Button>
+          />
         </div>
       </Modal>
 

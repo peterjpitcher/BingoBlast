@@ -13,6 +13,7 @@ import { logActionFailure, logActionLatency } from '@anchor-nights/kit/errors'
 import { reportError } from '@/lib/report-error'
 import { isUuid } from '@/lib/utils'
 import { readStaffProfile } from '@/lib/auth/staff-role'
+import { LOST_CONTROL_ERROR, writeHeartbeat, type HeartbeatClient } from '@/lib/heartbeat'
 import type {
   BeginClaimCheckData,
   CheckClaimData,
@@ -33,6 +34,7 @@ const CONTROLLER_HEARTBEAT_TIMEOUT_MS = 30000
 // host: they go to logActionFailure instead.
 const GENERIC_ACTION_ERROR = 'Something went wrong. Please try again.'
 const COULD_NOT_READ_GAME_ERROR = 'Could not read this game. Please reload.'
+const NOT_CONTROLLER_ERROR = 'Another host is currently controlling this game.'
 const STATE_MOVED_ERROR = 'The game changed while you were acting. Refreshed now.'
 // Only ever shown when the pot genuinely did not move. A missing audit row is
 // not a missing pot update, and must never reach the host as one.
@@ -262,7 +264,7 @@ function rpcFailure(
 }
 
 type HostAuthResult =
-  | { authorized: false; error: string }
+  | { authorized: false; error: string; notController?: true }
   | { authorized: true; user: User; role: UserRole }
 
 async function authorizeHost(
@@ -304,7 +306,7 @@ async function requireController(
   }
 
   if (!gameState.controlling_host_id || gameState.controlling_host_id !== authResult.user!.id) {
-    return { authorized: false, error: "Another host is currently controlling this game." }
+    return { authorized: false, error: NOT_CONTROLLER_ERROR, notController: true }
   }
 
   return { authorized: true, user: authResult.user!, role: authResult.role }
@@ -784,18 +786,24 @@ export async function takeControl(gameId: string): Promise<ActionResult<{ gameSt
 export async function sendHeartbeat(gameId: string): Promise<ActionResult> {
     const supabase = await createClient();
     const controlResult = await requireController(supabase, gameId)
-    if (!controlResult.authorized) return failure('sendHeartbeat', controlResult.error)
+    if (!controlResult.authorized) {
+        // Someone else holds it now: the same lost control as a zero-row write.
+        if (controlResult.notController) {
+            logActionFailure('sendHeartbeat', 'not the controller')
+            return { success: false, error: LOST_CONTROL_ERROR, conflict: true, code: 'lost_control' }
+        }
+        return failure('sendHeartbeat', controlResult.error)
+    }
 
-    const heartbeatUpdate: Database['public']['Tables']['game_states']['Update'] = {
-        controller_last_seen_at: new Date().toISOString()
-    };
-    const { error } = await supabase
-        .from('game_states')
-        .update(heartbeatUpdate)
-        .eq('game_id', gameId)
-        .eq('controlling_host_id', controlResult.user!.id); // Only update if WE are the controller
-
-    if (error) return failure('sendHeartbeat', GENERIC_ACTION_ERROR, error);
+    // Binds the controller and proves it landed (writeHeartbeat): a takeover
+    // between the check above and this write touches no row, which is lost
+    // control, never a success.
+    const outcome = await writeHeartbeat(supabase as unknown as HeartbeatClient, gameId, controlResult.user!.id);
+    if (outcome.kind === 'error') return failure('sendHeartbeat', GENERIC_ACTION_ERROR, outcome.error);
+    if (outcome.kind === 'lost_control') {
+        logActionFailure('sendHeartbeat', 'heartbeat matched no row: control was taken over')
+        return { success: false, error: LOST_CONTROL_ERROR, conflict: true, code: 'lost_control' }
+    }
 
     return { success: true };
 }

@@ -12,7 +12,7 @@ import { CLAIM_DRAFT_FLUSH_TIMEOUT_MS, createClaimDraftQueue, type ClaimDraftQue
 import { createPollRunner } from '@/lib/poll-runner';
 import { describeWinnerTotal, winnerTotalPence } from '@/lib/money';
 import { Check, Coffee, Flag, Pause, TriangleAlert, Trophy, Undo2, X } from 'lucide-react';
-import { Button, Card, Badge, Kicker, Modal, Sheet, Input, fieldClass, fieldLabelClass } from '@anchor-nights/kit/ui';
+import { Button, Card, Badge, Kicker, Modal, Sheet, Input, HoldButton, fieldClass, fieldLabelClass } from '@anchor-nights/kit/ui';
 import { cn } from '@/lib/utils';
 import { BingoBall, NumberChip } from '@/components/ui/bingo-ball';
 import { useWakeLock, useConnectionHealth, ConnectionBanner } from '@anchor-nights/kit/tv';
@@ -298,22 +298,6 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
     const canTakeControl = !currentGameState.controlling_host_id ||
         (currentGameState.controller_last_seen_at && (new Date().getTime() - new Date(currentGameState.controller_last_seen_at).getTime() > 30000));
 
-    useEffect(() => {
-        let interval: NodeJS.Timeout;
-        if (isController) {
-            interval = setInterval(async () => {
-                // A dropped heartbeat is expected on pub wifi and recovers on the
-                // next tick, so swallow it. Without the catch every blip raised an
-                // unhandled promise rejection, ten seconds apart, all night.
-                try {
-                    await sendHeartbeat(gameId);
-                } catch (err) {
-                    logError('host-control', err);
-                }
-            }, 10000); // Send heartbeat every 10s
-        }
-        return () => clearInterval(interval);
-    }, [isController, gameId]);
 
     const handleTakeControl = async () => {
         if (isTakingControl) return;
@@ -750,6 +734,29 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         }, 3000);
         return () => clearInterval(interval);
     }, [pollGameState]);
+
+    // Controller heartbeat, every 10 seconds while this phone holds control
+    // (spec S4.3). A dropped heartbeat is expected on pub wifi and recovers on
+    // the next tick, so a network failure is only logged: without the catch
+    // every blip raised an unhandled promise rejection, ten seconds apart, all
+    // night. A heartbeat that matched no row is different: another host has
+    // taken over (code lost_control), so re-read the game at once, which turns
+    // this screen read-only, and say why (row C-6).
+    useEffect(() => {
+        if (!isController) return;
+        const interval = setInterval(async () => {
+            try {
+                const result = await sendHeartbeat(gameId);
+                if (!result.success && result.code === 'lost_control') {
+                    setActionError(result.error);
+                    void pollGameState();
+                }
+            } catch (err) {
+                logError('host-control', err);
+            }
+        }, 10000);
+        return () => clearInterval(interval);
+    }, [isController, gameId, pollGameState]);
 
     // Force-reconnect realtime + immediate poll when the tab becomes visible
     // again. Mobile browsers often kill background WebSockets silently.
@@ -1445,8 +1452,10 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
         setUndoError(null);
     };
 
-    const handleConfirmVoidLastNumber = async () => {
-        if (!isController || isVoiding) return;
+    // Hold-to-confirm (spec S4.2, row C-6): the HoldButton runs this once the
+    // hold is full, and shows done only when it returns true.
+    const handleConfirmVoidLastNumber = async (): Promise<boolean> => {
+        if (!isController || isVoiding) return false;
         setUndoError(null);
         setIsVoiding(true);
         try {
@@ -1459,16 +1468,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                     code: result?.code,
                 });
                 if (result && 'conflict' in result && result.conflict) void pollGameState();
-                return;
+                return false;
             }
             applyMutation(result, "Failed to undo the last call.");
             setShowUndoModal(false);
+            return true;
         } catch (err) {
             // Undo is NOT safe to repeat blindly: a second undo takes a second
             // ball off the board. The message says to reload and look, not to
             // tap again.
             logError('host-control', err);
             setUndoError({ message: "Could not reach the server. Reload the page and check the board before undoing again: undoing twice takes two balls off." });
+            return false;
         } finally {
             setIsVoiding(false);
         }
@@ -1491,8 +1502,8 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
      * endGame goes through finish_game, which also completes the session when
      * this was the last game to finish, and then settles the pot.
      */
-    const handleConfirmEndGame = async () => {
-        if (!isController || isEndingGame) return;
+    const handleConfirmEndGame = async (): Promise<boolean> => {
+        if (!isController || isEndingGame) return false;
         setEndGameError(null);
         setIsEndingGame(true);
         try {
@@ -1500,16 +1511,18 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
             if (!result?.success) {
                 setEndGameError(result?.error || 'Failed to end the game.');
                 if (result && 'conflict' in result && result.conflict) void pollGameState();
-                return;
+                return false;
             }
             applyMutation(result, 'Failed to end the game.');
             if (result.data?.snowballPotDidNotSettle) setPotNeedsSettling(true);
             setShowEndGameModal(false);
             setShowValidationModal(false);
             clearLocalClaim();
+            return true;
         } catch (err) {
             logError('host-control', err);
             setEndGameError('Could not reach the server to end the game. Check the connection and try again.');
+            return false;
         } finally {
             setIsEndingGame(false);
         }
@@ -2692,9 +2705,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <Button variant="ghost" size="sm" type="button" onClick={() => setShowEndGameModal(false)} disabled={isEndingGame}>
                             Keep playing
                         </Button>
-                        <Button variant="primary" size="sm" type="button" onClick={handleConfirmEndGame} disabled={isEndingGame}>
-                            {isEndingGame ? 'Ending…' : 'End game'}
-                        </Button>
+                        <HoldButton
+                            label="Hold to end the game"
+                            danger
+                            size={44}
+                            className="sm:w-auto sm:min-w-[220px]"
+                            onDone={handleConfirmEndGame}
+                            disabled={isEndingGame}
+                        />
                     </>
                 }
             >
@@ -2736,14 +2754,14 @@ export default function GameControl({ sessionId, gameId, game, initialGameState,
                         <Button variant="ghost" size="sm" onClick={handleCloseUndoModal} disabled={isVoiding}>
                             Cancel
                         </Button>
-                        <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={handleConfirmVoidLastNumber}
+                        <HoldButton
+                            label={`Hold to undo ball ${currentNumber ?? ''}`}
+                            danger
+                            size={44}
+                            className="sm:w-auto sm:min-w-[220px]"
+                            onDone={handleConfirmVoidLastNumber}
                             disabled={isVoiding || currentNumber === null}
-                        >
-                            {isVoiding ? 'Undoing…' : `Undo ball ${currentNumber ?? ''}`}
-                        </Button>
+                        />
                     </>
                 }
             >

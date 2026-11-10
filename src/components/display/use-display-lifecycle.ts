@@ -7,7 +7,8 @@
 //   - At night_over it stays on the end-of-night screen until 04:00 London time
 //     the next morning (from completed_at, or from when this screen first saw
 //     the night end if the row has no completed_at), or until a different
-//     session is running, and then goes back to /display to find the next one.
+//     session is running, and then goes back to /display to find the next one
+//     (a paired /tv re-renders /tv instead, which finds it by itself).
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
@@ -32,6 +33,8 @@ export interface UseDisplayLifecycleOptions {
   sessionId: string;
   /** Rehearsal mode (`?rehearsal=1`): test sessions count, and the TV returns to the rehearsal lobby. */
   rehearsal: boolean;
+  /** On the paired /tv (row C-6): leaving re-renders /tv rather than going to /display. */
+  tv?: boolean;
   /** Null while the screen is still loading. */
   nightPhase: NightPhase | null;
   completedAt: string | null;
@@ -46,6 +49,7 @@ export function useDisplayLifecycle({
   supabase,
   sessionId,
   rehearsal,
+  tv = false,
   nightPhase,
   completedAt,
   clockOffsetMs,
@@ -72,7 +76,10 @@ export function useDisplayLifecycle({
     const leave = () => {
       if (leavingRef.current) return;
       leavingRef.current = true;
-      router.replace(displayLobbyPath({ rehearsal }));
+      // /tv stays on /tv: the server picks the next session, or the idle loop,
+      // and the device check runs again on the way.
+      if (tv) router.refresh();
+      else router.replace(displayLobbyPath({ rehearsal }));
     };
 
     const check = async () => {
@@ -130,7 +137,7 @@ export function useDisplayLifecycle({
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [supabase, sessionId, rehearsal, isNightOver, completedAt, router, logScope]);
+  }, [supabase, sessionId, rehearsal, tv, isNightOver, completedAt, router, logScope]);
 
   return { isUniqueSession };
 }
