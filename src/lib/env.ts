@@ -6,7 +6,7 @@
 // `validateBuildEnv()` is called from next.config.ts, so it runs when the app
 // is built (and when `next dev` starts): a missing or malformed variable fails
 // the build with a message naming it, instead of shipping and failing on a pub
-// night. The kit checks the Supabase pair, NEXT_PUBLIC_SITE_URL and the
+// night. The kit checks the Supabase pair, the site addresses and the
 // management API key; the error sink rules below are this app's own, because
 // they tie three variables together and the kit's rules are one variable each.
 //
@@ -14,9 +14,13 @@
 // aliases and TypeScript-only runtime syntax (enums, namespaces). The kit's
 // env module is plain JavaScript with no imports, so importing it here is safe.
 //
-// Deliberately NOT required: NEXT_PUBLIC_SITE_URL (the QR origin falls back to
-// Vercel's own production or preview address, @anchor-nights/kit/qr). Once
-// ERROR_SINK_URL is set, the sink needs a token of its own.
+// NEXT_PUBLIC_SITE_URL (the app's public address, bingo.the-anchor.pub, spec
+// S2.4) is required on a Vercel production build, so production QR codes
+// never fall back to whatever address Vercel happens to report. Previews and
+// local builds may leave it out (the QR origin then falls back to the preview
+// or request address, @anchor-nights/kit/qr). The sister nights' addresses for
+// the front page's "Other nights" row are optional; when set they must be
+// bare origins. Once ERROR_SINK_URL is set, the sink needs a token of its own.
 //
 // The sign-in variables (the kit's AUTH_ENV: SUPABASE_SERVICE_ROLE_KEY,
 // NEXT_PUBLIC_APP_URL, the Turnstile pair and AUDIT_HMAC_KEY) are required on
@@ -45,6 +49,31 @@ export { getPublicSupabaseEnv, type PublicSupabaseEnv };
  * no-events loop (the feed reports `missing_config`).
  */
 export const EVENTS_FEED_REQUIRED = true;
+
+/**
+ * The sister nights' addresses, by the kit's night keys (@anchor-nights/kit/front),
+ * for the front page's "Other nights" row (src/lib/other-nights.ts). Never
+ * written into the code: each comes from the environment, and a night with no
+ * address is left out of the row.
+ */
+export const OTHER_NIGHT_URL_ENV = Object.freeze({
+  quiz: 'NEXT_PUBLIC_QUIZ_NIGHT_URL',
+  music: 'NEXT_PUBLIC_MUSIC_BINGO_URL',
+  tasting: 'NEXT_PUBLIC_TASTING_NIGHT_URL',
+} as const);
+
+/** NEXT_PUBLIC_SITE_URL, required on a Vercel production build (see the header). */
+const SITE_URL_RULES: EnvRule[] = SITE_URL_ENV.map((rule) => ({
+  ...rule,
+  required: 'production' as const,
+  why: 'for the QR codes and the address guests see',
+}));
+
+/** Optional, but a bare https origin when set (plain http only for localhost outside production). */
+const OTHER_NIGHT_URL_RULES: EnvRule[] = Object.values(OTHER_NIGHT_URL_ENV).map((name) => ({
+  name,
+  kind: 'site-origin' as const,
+}));
 
 /** The shortest ERROR_SINK_TOKEN accepted: long enough that guessing it is hopeless. */
 export const ERROR_SINK_TOKEN_MIN_LENGTH = 32;
@@ -78,7 +107,7 @@ function optional(rules: readonly EnvRule[]): EnvRule[] {
 function buildEnvRules(eventsFeedRequired: boolean): EnvRule[] {
   const anchorApi = eventsFeedRequired ? [...ANCHOR_API_ENV] : optional(ANCHOR_API_ENV);
   const auth = isAuthEnvRequired() ? [...AUTH_ENV] : optional(AUTH_ENV);
-  return [...SUPABASE_PUBLIC_ENV, ...SITE_URL_ENV, ...anchorApi, ...auth];
+  return [...SUPABASE_PUBLIC_ENV, ...SITE_URL_RULES, ...OTHER_NIGHT_URL_RULES, ...anchorApi, ...auth];
 }
 
 /**

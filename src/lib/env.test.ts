@@ -3,9 +3,11 @@
 // A missing Supabase variable used to surface as a confusing runtime failure
 // (a non-null assertion passing `undefined` to the client). validateBuildEnv
 // runs from next.config.ts, so the build itself fails with a clear message.
+// Row C-7 made NEXT_PUBLIC_SITE_URL required on a Vercel production build and
+// added the sister nights' addresses (optional, origins only).
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EVENTS_FEED_REQUIRED, getPublicSupabaseEnv, isAuthEnvRequired, validateBuildEnv } from './env';
+import { EVENTS_FEED_REQUIRED, getPublicSupabaseEnv, isAuthEnvRequired, OTHER_NIGHT_URL_ENV, validateBuildEnv } from './env';
 
 const KEYS = [
   'NEXT_PUBLIC_SUPABASE_URL',
@@ -21,6 +23,9 @@ const KEYS = [
   'NEXT_PUBLIC_TURNSTILE_SITE_KEY',
   'TURNSTILE_SECRET_KEY',
   'AUDIT_HMAC_KEY',
+  'NEXT_PUBLIC_QUIZ_NIGHT_URL',
+  'NEXT_PUBLIC_MUSIC_BINGO_URL',
+  'NEXT_PUBLIC_TASTING_NIGHT_URL',
 ] as const;
 
 // The sign-in variables (the kit's AUTH_ENV), all fake. Set in every test so
@@ -48,6 +53,9 @@ beforeEach(() => {
   }
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+  // Required on a Vercel production build (row C-7); set here so the older
+  // production cases keep testing what they were written for.
+  process.env.NEXT_PUBLIC_SITE_URL = 'https://bingo.example.test';
   Object.assign(process.env, AUTH_VALUES);
 });
 
@@ -95,9 +103,40 @@ test('the Supabase URL must be a URL', () => {
   assert.throws(() => validateBuildEnv(), /NEXT_PUBLIC_SUPABASE_URL/);
 });
 
-test('NEXT_PUBLIC_SITE_URL is optional', () => {
+test('NEXT_PUBLIC_SITE_URL is optional on local and preview builds', () => {
   process.env.NEXT_PUBLIC_SITE_URL = '';
   assert.doesNotThrow(() => validateBuildEnv());
+  process.env.VERCEL_ENV = 'preview';
+  assert.doesNotThrow(() => validateBuildEnv({ eventsFeedRequired: false }));
+});
+
+test('a Vercel production build without NEXT_PUBLIC_SITE_URL fails, naming it (row C-7)', () => {
+  process.env.VERCEL_ENV = 'production';
+  process.env.ANCHOR_API_KEY = VALID_KEY;
+  for (const empty of [undefined, '', '   ']) {
+    if (empty === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = empty;
+    assert.throws(() => validateBuildEnv(), /NEXT_PUBLIC_SITE_URL is not set, and production builds need it/, JSON.stringify(empty));
+  }
+  process.env.NEXT_PUBLIC_SITE_URL = 'https://bingo.example.test';
+  assert.doesNotThrow(() => validateBuildEnv());
+});
+
+test('the sister nights\' addresses are optional, but must be bare https origins when set', () => {
+  for (const key of Object.values(OTHER_NIGHT_URL_ENV)) {
+    process.env[key] = 'https://night.example.test';
+    assert.doesNotThrow(() => validateBuildEnv(), key);
+    for (const bad of ['http://night.example.test', 'https://night.example.test/host', 'night.example.test']) {
+      process.env[key] = bad;
+      assert.throws(() => validateBuildEnv(), new RegExp(key), `${key}=${bad}`);
+    }
+    delete process.env[key];
+  }
+  assert.deepEqual(Object.values(OTHER_NIGHT_URL_ENV), [
+    'NEXT_PUBLIC_QUIZ_NIGHT_URL',
+    'NEXT_PUBLIC_MUSIC_BINGO_URL',
+    'NEXT_PUBLIC_TASTING_NIGHT_URL',
+  ]);
 });
 
 test('NEXT_PUBLIC_SITE_URL must be an https origin when set', () => {
