@@ -2,7 +2,7 @@ import React from 'react';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/utils/supabase/server';
 import { getTodayIsoDateInLondon } from '@/lib/dates';
-import { getEventsProjection } from '@/lib/events-feed/projection';
+import { getEventsFeed } from '@/lib/events-feed';
 import {
   CANDIDATE_SESSION_STATUSES,
   RESOLVABLE_SESSION_COLUMNS,
@@ -29,7 +29,7 @@ export default async function DisplayIndexPage({ searchParams }: DisplayIndexPag
   const rehearsal = params.rehearsal === '1';
   // The idle loop's events (spec 5.5), read alongside the sessions. Cached,
   // and never throws.
-  const eventsPromise = getEventsProjection();
+  const eventsPromise = getEventsFeed();
   const supabase = await createClient();
 
   const { data, error } = await supabase

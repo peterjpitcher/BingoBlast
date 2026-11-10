@@ -4,8 +4,10 @@
 // server page redirects straight to a single qualifying session; this covers
 // the rest and keeps checking, so a TV left on /display joins the night by
 // itself:
-//   - none:  the idle loop (spec 5.5: "Bingo nights at The Anchor", the next
-//            bingo night and the upcoming events), re-checked every 60 seconds;
+//   - none:  the idle loop (Anchor Nights S7.4, from the shared kit: "Bingo
+//            nights at The Anchor" with the what's-on QR, the next bingo
+//            night and the upcoming events two at a time), re-checked every
+//            60 seconds;
 //   - many:  a list for staff to choose from, refreshed every 30 seconds;
 //   - error: a retrying screen, re-checked every 15 seconds.
 // A failed re-check keeps the last good screen rather than flashing an error.
@@ -25,16 +27,15 @@ import {
   type ResolvableSession,
 } from '@/lib/session-resolution';
 import { logError } from '@/lib/log-error';
-import { buildPlaylist, type EventsProjection, type Slide } from '@/lib/playlist';
+import { buildPlaylist, NEXT_BINGO_LABEL, type Slide } from '@/lib/playlist';
+import type { ScreenFeed } from '@anchor-nights/kit/events/shared';
+import { PromoSlide, SlideLoop, SlidePreload, useScreenFeed } from '@anchor-nights/kit/promo';
 import { useBuildCheck } from '@/hooks/use-build-check';
 import { useWakeLock } from '@anchor-nights/kit/tv';
 import { cn } from '@/lib/utils';
 import { Badge, Card, AnchorLogo, Grain } from '@anchor-nights/kit/ui';
-import { PromoSlide, SlidePreload } from './promo-slide';
 import { useMinuteClock } from './screen-hooks';
-import { SlideLoop } from './slide-loop';
 import { TV_KICKER_CLASS, TV_SIZE, tvText } from './tv-text';
-import { useEventsProjection } from './use-events-projection';
 
 export interface LobbySession extends ResolvableSession {
   name: string;
@@ -54,8 +55,13 @@ const RECHECK_MS: Record<LobbyState['kind'], number> = {
 interface DisplayLobbyProps {
   initial: LobbyState;
   rehearsal: boolean;
-  /** The upcoming events as the server page read them (getEventsProjection); refreshed here. */
-  initialEvents: EventsProjection | null;
+  /** The upcoming events as the server page read them (getEventsFeed); refreshed here. */
+  initialEvents: ScreenFeed | null;
+}
+
+/** A failed events refresh is logged, never shown; stable for useScreenFeed. */
+function logEventsError(err: unknown): void {
+  logError('display', err);
 }
 
 export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobbyProps) {
@@ -72,13 +78,18 @@ export function DisplayLobby({ initial, rehearsal, initialEvents }: DisplayLobby
   // The idle loop: refreshed every 10 minutes, never shown as an error. The
   // idle screen has no session of its own, so tonight's bingo night counts
   // as the next one until a session for it is ready.
-  const events = useEventsProjection(initialEvents, { refreshKey: 'idle', logScope: 'display' });
+  const events = useScreenFeed(initialEvents, { refreshKey: 'idle', onError: logEventsError });
   const minuteMs = useMinuteClock();
-  const idlePlaylist = useMemo(() => buildPlaylist('idle', events, new Date(minuteMs), null), [events, minuteMs]);
+  const idlePlaylist = useMemo(() => buildPlaylist('idle', events, minuteMs, null), [events, minuteMs]);
   const renderIdleSlide = (slide: Slide) => (
     <>
       <SlidePreload slide={slide} nowMs={minuteMs} />
-      <PromoSlide slide={slide} nowMs={minuteMs} />
+      <PromoSlide
+        slide={slide}
+        nowMs={minuteMs}
+        nextNightLabel={NEXT_BINGO_LABEL}
+        whatsOnHeadline="Bingo nights at The Anchor"
+      />
     </>
   );
 

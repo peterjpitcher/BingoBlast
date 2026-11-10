@@ -6,20 +6,6 @@
 
 import { useSyncExternalStore } from 'react';
 
-function subscribeVisibility(onChange: () => void): () => void {
-  document.addEventListener('visibilitychange', onChange);
-  return () => document.removeEventListener('visibilitychange', onChange);
-}
-
-/** True while the page is visible. The server render assumes visible. */
-export function useDocumentVisible(): boolean {
-  return useSyncExternalStore(
-    subscribeVisibility,
-    () => document.visibilityState === 'visible',
-    () => true
-  );
-}
-
 const MINUTE_MS = 60_000;
 
 function subscribeMinute(onChange: () => void): () => void {

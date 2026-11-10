@@ -29,7 +29,7 @@ Cross-references between tables, actions, callers, and integrations.
 | `/api/setup` | `auth.users`, `profiles` |
 | `/api/time` | none (the server clock) |
 | `/api/build` | none (the deployment id) |
-| `/api/screen/events` | none in this database; the management app's events feed through `src/lib/events-feed/projection.ts` |
+| `/api/screen/events` | none in this database; the management app's events feed through `src/lib/events-feed.ts` (the kit's `@anchor-nights/kit/events`) |
 
 ## Tables → Actions That Touch Them
 
@@ -63,7 +63,7 @@ Action files live alongside the page that consumes them, so the immediate caller
 | `@supabase/ssr` (cookie-based SSR) | `src/utils/supabase/client.ts`, `src/utils/supabase/server.ts`, `src/utils/supabase/middleware.ts` |
 | `@supabase/supabase-js` (service-role admin client + types) | `src/app/api/setup/route.ts` (the only service-role client), plus types in `src/app/admin/actions.ts`, `src/app/admin/sessions/[id]/actions.ts`, `src/app/admin/snowball/actions.ts`, `src/app/host/actions.ts`. The host actions use the cookie client only |
 | `qrcode.react` | `src/app/display/[sessionId]/display-ui.tsx`: the QR points at the public follow-along link (`/play`, which redirects to `/player/[sessionId]`), NOT a join-a-card flow |
-| `@anchor-nights/kit` (shared kit, git tag `v1.1.0`) | Tokens (`src/app/globals.css`), UI primitives, TV plumbing (`useWakeLock`, `useConnectionHealth`, `ConnectionBanner`, `useBuildCheck`, `useClockOffset`, `tvText`), QR origin, dates, env checks and the error reporter, across the host, display, player and admin screens |
+| `@anchor-nights/kit` (shared kit, git tag `v1.2.0`) | Tokens (`src/app/globals.css`), UI primitives, TV plumbing (`useWakeLock`, `useConnectionHealth`, `ConnectionBanner`, `useBuildCheck`, `useClockOffset`, `tvText`), QR origin, dates, env checks, the error reporter, the events feed and the idle and end-of-night slides (`events`, `promo`), across the host, display, player and admin screens |
 | `zod` | Form validation across server actions (declared in `package.json`) |
 
 ## Shared Helpers (`src/lib/`, `src/hooks/`, `src/components/`)
